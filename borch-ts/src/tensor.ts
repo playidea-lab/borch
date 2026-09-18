@@ -777,7 +777,7 @@ function absentDType(name: string, shown: string): never {
  * measurement are on `convForwardSplit`.
  */
 function convForwardRun(
-  s: ConvNDShape, key: string, x: GPUBuffer, w: GPUBuffer, bias: GPUBuffer | null, out: GPUBuffer,
+  s: ConvNDShape, key: string, x: GPUBuffer, w: BindSlot, bias: GPUBuffer | null, out: GPUBuffer,
   epilogue?: { relu: boolean; residual: GPUBuffer | null }, turned = false,
 ): void {
   const splits = convForwardSplit(s);
@@ -11360,7 +11360,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         throw new Error(`the residual must have the output's shape [${outShape}], got [${residual.shape}]`);
       }
       const out = dev().alloc(outShape.reduce((a, b) => a * b, 1));
-      convForwardRun(s, convNDKey(s), this.buffer, weight.buffer, bias ? bias.buffer : null, out,
+      convForwardRun(s, convNDKey(s), this.buffer, weight.weightBinding(), bias ? bias.buffer : null, out,
                      { relu, residual: residual ? residual.buffer : null });
       return new Tensor(out, outShape);
     });
@@ -11382,8 +11382,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // It uses the tiled version. The shader is longer than the simple one and costs one
     // more compilation, and it is cached by shape signature, so that happens once while
     // what runs every step is the kernel.
-    const buffers = bias ? [this.buffer, weight.buffer, bias.buffer, out]
-      : [this.buffer, weight.buffer, out];
+    const buffers = bias ? [this.buffer, weight.weightBinding(), bias.buffer, out]
+      : [this.buffer, weight.weightBinding(), out];
     // The subgroup forward reads the input padded; the weight gradient reads the same
     // copy, so it is kept for the backward.
     let paddedX: GPUBuffer | null = null;
@@ -11402,13 +11402,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       const turned = dev().alloc(wsize);
       dev().run1d(
         dev().pipeline(`tmw:${key}:${bias ? "b" : "n"}`, () => tapMajorWeights(s.O, s.C, kSpace, false, bias !== null)),
-        bias ? [weight.buffer, bias.buffer, turned] : [weight.buffer, turned], wsize);
+        bias ? [weight.weightBinding(), bias.buffer, turned] : [weight.weightBinding(), turned], wsize);
       dev().run(
         dev().pipeline(`cnf:${key}:${bias ? "b" : "n"}`, () => convForwardSubgroup(s, bias !== null)),
         bias ? [paddedX, turned, onesBlockBuffer(), out] : [paddedX, turned, out],
         sgfGrid(s));
     } else {
-      convForwardRun(s, key, this.buffer, weight.buffer, bias ? bias.buffer : null, out);
+      convForwardRun(s, key, this.buffer, weight.weightBinding(), bias ? bias.buffer : null, out);
     }
     const parents = bias ? [this, weight, bias] : [this, weight];
     // Like matmul: the input's gradient reads the weight, the weight's gradient reads the
@@ -11436,13 +11436,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
             };
             if (directFits(back)) {
               // The direct kernel turns the weights as it loads them — no pass to make a copy.
-              convForwardRun(back, convNDKey(back), g.buffer, weight.buffer, null, gi, undefined, true);
+              convForwardRun(back, convNDKey(back), g.buffer, weight.weightBinding(), null, gi, undefined, true);
             } else {
               const kSpace = s.kernel.reduce((a, b) => a * b, 1);
               const turned = dev().alloc(weight.size);
               dev().run1d(
                 dev().pipeline(`cturn:${s.O}:${s.C}:${kSpace}`, () => turnWeightsForGradInput(s.O, s.C, kSpace)),
-                [weight.buffer, turned], weight.size);
+                [weight.weightBinding(), turned], weight.size);
               convForwardRun(back, convNDKey(back), g.buffer, turned, null, gi);
             }
           } else {
@@ -11641,7 +11641,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         if (this.requiresGrad) {
           // The gradient on our input side is **an ordinary convolution's forward**.
           const gi = dev().alloc(this.size);
-          convForwardRun(s, key, g.buffer, weight.buffer, null, gi);
+          convForwardRun(s, key, g.buffer, weight.weightBinding(), null, gi);
           parts.push(new Tensor(gi, this.shape));
         } else parts.push(null);
         if (weight.requiresGrad) {

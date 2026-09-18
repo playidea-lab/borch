@@ -81,6 +81,24 @@
     say(`matmul windowed weight == normal (16x16x16, subgroup-eligible): ${sub.eqf ? "ok" : "WRONG"}`);
     say(`matmul windowed weight == normal (6x10x7, scalar tile): ${scl.eqf ? "ok" : "WRONG"}`);
 
+    // **A conv reads a windowed weight too.** Same check for the other weight funnel:
+    // x conv W with W windowed must equal W as an ordinary tensor. Two shapes to cover the
+    // direct kernel and the tiled one.
+    const convThroughWindow = async (N, C, H, O, kh, s) => {
+      const xd = seed(N * C * H * H, s), wd = seed(O * C * kh * kh, s + 5);
+      const x = Tensor.from(xd, [N, C, H, H]);
+      const ref = Array.from(await x.conv2d(Tensor.from(wd, [O, C, kh, kh]), null, 1, 1).toArray());
+      const cw = dev.window(1 << 20);
+      const wWin = await Tensor.inWindow(cw, wd, [O, C, kh, kh]);
+      const got = Array.from(await x.conv2d(wWin, null, 1, 1).toArray());
+      cw.free();
+      return ref.length === got.length && ref.every((v, i) => v === got[i]);
+    };
+    const convA = await convThroughWindow(1, 3, 8, 4, 3, 21);     // small — direct kernel
+    const convB = await convThroughWindow(1, 16, 16, 16, 3, 33);  // larger — tiled kernel
+    say(`conv2d windowed weight == normal (3->4, 8x8): ${convA ? "ok" : "WRONG"}`);
+    say(`conv2d windowed weight == normal (16->16, 16x16): ${convB ? "ok" : "WRONG"}`);
+
     // A windowed weight is a weight operand only — a generic op must refuse it, not read
     // the window from offset 0 (another slot's values).
     let refusedGeneric = false;
@@ -97,9 +115,9 @@
     win2.free();
     say(`faults: ${dev.faults.count}`);
     const ok = sameBuffer && offsetsOk && aOk && bOk && cOk && win.used === 2 * align
-      && sub.eqf && scl.eqf && refusedGeneric && dev.faults.count === 0;
+      && sub.eqf && scl.eqf && convA && convB && refusedGeneric && dev.faults.count === 0;
     say(ok ? "\nwindow: offset slices of one buffer fill and read back intact" : "\n**window: a check did not hold**");
-    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, refusedGeneric, used: win.used, faults: dev.faults.count };
+    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, convA, convB, refusedGeneric, used: win.used, faults: dev.faults.count };
   } catch (err) {
     window.__window = { error: String(err && err.stack || err), text: lines.join("\n") };
     say(`it could not be measured: ${err}`);

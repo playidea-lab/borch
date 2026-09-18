@@ -352,8 +352,15 @@ nightly on a real adapter (`refuse_if_software` holds).
   offset 0 would be another slot's values). `window_probe.py` extended: `x @ W` with W
   windowed is **bit-identical** to W as an ordinary tensor on both the subgroup path
   (16×16×16) and the scalar tile (6×10×7), a windowed weight refuses `.add`, faults 0 —
-  verified on apple/metal-3, golden 4057/0 unmoved. Next: the conv funnel
-  (`convForwardRun`, EfficientNet's weights), age-gated eviction, the bimm plan scheduler,
+  verified on apple/metal-3, golden 4057/0 unmoved.
+- **2026-09-18, conv funnel integrated.** `convForwardRun` takes `w: BindSlot` now, and
+  every conv path that reads the weight — the direct/tiled forward, the depthwise kernel,
+  the subgroup conv's `tapMajorWeights`, and the input-gradient turns — binds
+  `weight.weightBinding()`. So a windowed conv weight is read as its slice across all three
+  forward kernels (direct, tiled, subgroup) and the backward. `window_probe.py`: `conv2d`
+  with a windowed weight is bit-identical to a normal one on a small shape (3→4, direct)
+  and a larger one (16→16, tiled/subgroup) — apple/metal-3, faults 0, golden 4057/0. Next:
+  age-gated eviction, the bimm plan scheduler (block streaming, workbench feature pass),
   and the f16 raw weight.
 
 ### Step 4 — `shader-f16`: storage first, compute second  · size M+M · depends on 0; parallel to 2–3
