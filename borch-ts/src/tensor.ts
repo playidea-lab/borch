@@ -10,7 +10,7 @@
 import { traced } from "./onnx.js";
 import { backward as tapeBackward, flow as tapeFlow, gradMode, type Node }
   from "./autograd.js";
-import { Device, type DeviceKind, type InitOptions } from "./device.js";
+import { type BindSlot, bufOf, Device, type DeviceKind, type InitOptions, type Window } from "./device.js";
 import { type AxisPlan, isSlice, planAxis, type Slice } from "./indexing.js";
 import { gauss, refuseGenerator, uniform } from "./random.js";
 // **A cycle on purpose, and it holds because nothing is touched while loading.**
@@ -891,6 +891,15 @@ export class Tensor implements Node<Tensor> {
    */
   readonly dtype: DType;
   /**
+   * **Set when this tensor's values live in a slice of a frozen-weight window** rather
+   * than at the start of its own buffer (`docs/SCALE.md` Step 3). `gpu` points at the
+   * window buffer for lifetime, and this holds the `{buffer, offset, size}` a weight funnel
+   * binds. A windowed tensor is a weight operand only — every generic op refuses it at the
+   * `buffer` getter, because reading the window buffer from offset 0 would be another
+   * slot's values, quietly wrong.
+   */
+  private readonly windowSlot?: BindSlot;
+  /**
    * Upstream in the graph. **Only `detach_` changes this** — hence not
    * `readonly`. Edited anywhere else, the backward of an already-made node
    * changes quietly.
@@ -922,6 +931,7 @@ export class Tensor implements Node<Tensor> {
       backwardFn?: (grad: Tensor) => readonly (Tensor | null)[];
       gradName?: string;
       dtype?: DType;
+      windowSlot?: BindSlot;
     } = {},
   ) {
     // The two storages arrive through one slot. Forty-seven places inside pass a
@@ -937,6 +947,7 @@ export class Tensor implements Node<Tensor> {
     this.parents = options.parents ?? [];
     this.gradName = options.gradName ?? "";
     this.dtype = options.dtype ?? "float32";
+    if (options.windowSlot !== undefined) this.windowSlot = options.windowSlot;
     // If any parent carries a gradient, this does. Inside no_grad nobody does.
     const inherited =
       gradMode.enabled && this.parents.some((p) => p.requiresGrad);
@@ -1000,6 +1011,13 @@ export class Tensor implements Node<Tensor> {
     // refusal**, and somebody adding an operation who does nothing gets an operation
     // that does not accept complex — the other way round, an operation where nothing was
     // done eats complex quietly and wrongly.
+    if (this.windowSlot !== undefined) {
+      throw new RuntimeError(
+        "this tensor's values live in a slice of a frozen-weight window, not at the start " +
+          "of its buffer — a generic op reading it from offset 0 would get another slot's " +
+          "values. It is a weight operand only (matmul/conv); read it there.",
+      );
+    }
     if (isComplexDType(this.dtype)) {
       throw new RuntimeError(
         "this operation does not take complex64 yet — the storage is two f32 per slot " +
@@ -1061,6 +1079,21 @@ export class Tensor implements Node<Tensor> {
    */
   get floats(): number {
     return this.size * floatsPerElement(this.dtype);
+  }
+
+  /**
+   * What a weight funnel (matmul, conv) binds for this tensor: its window slice when it
+   * has one, else the whole buffer. **Only the two funnels call this** — they read the
+   * operand at a 0-based binding, so a `{buffer, offset, size}` slice reads the slot's
+   * values in place with no copy. Every other op takes `buffer`, which refuses a windowed
+   * tensor. `docs/SCALE.md` Step 3.
+   */
+  weightBinding(): BindSlot {
+    if (this.windowSlot !== undefined) {
+      this.refuseIfDead();
+      return this.windowSlot;
+    }
+    return this.raw;
   }
 
   /**
@@ -1263,6 +1296,19 @@ export class Tensor implements Node<Tensor> {
 
   static ones(shape: readonly number[]): Tensor {
     return Tensor.full(shape, 1);
+  }
+
+  /**
+   * **A frozen weight placed in a window** — `docs/SCALE.md` Step 3. The values fill the
+   * next window slot and the tensor binds that slice as a weight operand (matmul/conv);
+   * every other op refuses it. `requiresGrad` is false, because a windowed weight is
+   * frozen — a trainable parameter stays resident and scope-managed instead.
+   */
+  static async inWindow(
+    win: Window, data: Float32Array, shape: readonly number[], dtype: DType = "float32",
+  ): Promise<Tensor> {
+    const slot = await win.place(data);
+    return new Tensor(bufOf(slot), shape, { windowSlot: slot, dtype, requiresGrad: false });
   }
 
   /**
@@ -2116,7 +2162,7 @@ export class Tensor implements Node<Tensor> {
       const target = splits > 1 ? dev().alloc(M * N * splits) : out;
       dev().run(
         dev().pipeline(`mmsg:${M}:${K}:${N}:${flags}`, () => matmulSubgroup(M, K, N, transA, transB)),
-        [this.buffer, mat2.buffer, target],
+        [this.buffer, mat2.weightBinding(), target],
         [N / TN, M / TM, splits],
       );
       if (splits > 1) {
@@ -2129,7 +2175,7 @@ export class Tensor implements Node<Tensor> {
       const target = splits > 1 ? dev().alloc(M * N * splits) : out;
       dev().run(
         dev().pipeline(`mm:${M}:${K}:${N}:${flags}:${splits}`, () => matmul(M, K, N, transA, transB, splits)),
-        [this.buffer, mat2.buffer, target],
+        [this.buffer, mat2.weightBinding(), target],
         [Math.ceil(N / 64), Math.ceil(M / 64), splits],
       );
       if (splits > 1) {

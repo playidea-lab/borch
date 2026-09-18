@@ -17,7 +17,7 @@
   const lines = [];
   const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
   try {
-    const { init, device, Device } = await import("borch-ts");
+    const { init, device, Device, Tensor } = await import("borch-ts");
     const K = await import("/borch-ts/dist/src/kernels.js");
     await init();
     const dev = device();
@@ -60,12 +60,46 @@
     const cOk = eq(rc, [...c]);
     say(`fresh window slot read back: [${rc}] — ${cOk ? "ok" : "WRONG"}`);
 
+    // **A matmul reads a windowed weight as a slice.** The weight goes into a window and
+    // `x @ W` must equal the same product with W as an ordinary tensor — same kernel, same
+    // values, so bit-identical. Two shapes: one whole-eights (the subgroup path where the
+    // device has it) and one that is not (the scalar tile).
+    const seed = (n, s) => { const a = new Float32Array(n); let x = s >>> 0; for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = x / 4294967296 - 0.5; } return a; };
+    const matmulThroughWindow = async (M, Kd, N, s) => {
+      const xd = seed(M * Kd, s), wd = seed(Kd * N, s + 7);
+      const x = Tensor.from(xd, [M, Kd]);
+      const ref = Array.from(await x.matmul(Tensor.from(wd, [Kd, N])).toArray());
+      const w3 = dev.window(1 << 20);
+      const wWin = await Tensor.inWindow(w3, wd, [Kd, N]);
+      const got = Array.from(await x.matmul(wWin).toArray());
+      w3.free();
+      const eqf = ref.length === got.length && ref.every((v, i) => v === got[i]);
+      return { eqf, ref, got };
+    };
+    const sub = await matmulThroughWindow(16, 16, 16, 3);      // whole eights
+    const scl = await matmulThroughWindow(6, 10, 7, 9);        // not
+    say(`matmul windowed weight == normal (16x16x16, subgroup-eligible): ${sub.eqf ? "ok" : "WRONG"}`);
+    say(`matmul windowed weight == normal (6x10x7, scalar tile): ${scl.eqf ? "ok" : "WRONG"}`);
+
+    // A windowed weight is a weight operand only — a generic op must refuse it, not read
+    // the window from offset 0 (another slot's values).
+    let refusedGeneric = false;
+    {
+      const w4 = dev.window(1 << 20);
+      const ww = await Tensor.inWindow(w4, new Float32Array([1, 2, 3, 4]), [2, 2]);
+      try { await ww.add(Tensor.from(new Float32Array([1, 1, 1, 1]), [2, 2])).toArray(); }
+      catch (e) { refusedGeneric = /window|weight operand/.test(String(e)); }
+      w4.free();
+    }
+    say(`a windowed weight refuses a generic op: ${refusedGeneric ? "yes" : "NO"}`);
+
     win.free();
     win2.free();
     say(`faults: ${dev.faults.count}`);
-    const ok = sameBuffer && offsetsOk && aOk && bOk && cOk && win.used === 2 * align && dev.faults.count === 0;
+    const ok = sameBuffer && offsetsOk && aOk && bOk && cOk && win.used === 2 * align
+      && sub.eqf && scl.eqf && refusedGeneric && dev.faults.count === 0;
     say(ok ? "\nwindow: offset slices of one buffer fill and read back intact" : "\n**window: a check did not hold**");
-    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, used: win.used, faults: dev.faults.count };
+    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, refusedGeneric, used: win.used, faults: dev.faults.count };
   } catch (err) {
     window.__window = { error: String(err && err.stack || err), text: lines.join("\n") };
     say(`it could not be measured: ${err}`);

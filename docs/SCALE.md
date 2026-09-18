@@ -344,6 +344,17 @@ nightly on a real adapter (`refuse_if_software` holds).
   age-gated eviction, the bimm plan-walking scheduler, and the f16 raw-buffer weight (Step
   4 folded in). The staging path waits after each fill (one staging buffer); a ring is a
   later optimisation when a measured need appears.
+- **2026-09-18, weight funnel integrated.** A `Tensor` may carry a `windowSlot`;
+  `Tensor.inWindow(win, data, shape)` fills a slot and returns a frozen
+  (`requiresGrad=false`) tensor bound to it. The matmul funnel binds `mat2.weightBinding()`
+  (`windowSlot ?? raw`), so a windowed weight is read as its slice in place — and every
+  generic op refuses a windowed tensor at the `buffer` getter (reading the window from
+  offset 0 would be another slot's values). `window_probe.py` extended: `x @ W` with W
+  windowed is **bit-identical** to W as an ordinary tensor on both the subgroup path
+  (16×16×16) and the scalar tile (6×10×7), a windowed weight refuses `.add`, faults 0 —
+  verified on apple/metal-3, golden 4057/0 unmoved. Next: the conv funnel
+  (`convForwardRun`, EfficientNet's weights), age-gated eviction, the bimm plan scheduler,
+  and the f16 raw weight.
 
 ### Step 4 — `shader-f16`: storage first, compute second  · size M+M · depends on 0; parallel to 2–3
 

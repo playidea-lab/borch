@@ -47,7 +47,7 @@ def main(argv):
         print(f"\nwindow could not be measured: {got['error'][:400]}", file=sys.stderr)
         return 1
     if not got.get("ok"):
-        which = [k for k in ("sameBuffer", "offsetsOk", "aOk", "bOk", "cOk") if not got.get(k)]
+        which = [k for k in ("sameBuffer", "offsetsOk", "aOk", "bOk", "cOk", "subEq", "sclEq", "refusedGeneric") if not got.get(k)]
         if got.get("faults"):
             which.append(f"{got['faults']} fault(s)")
         print(f"\nwindow did not hold: {', '.join(which) or 'used=' + str(got.get('used'))}", file=sys.stderr)
