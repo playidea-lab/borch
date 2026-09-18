@@ -17,7 +17,7 @@
   const lines = [];
   const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
   try {
-    const { init, device, Device, Tensor } = await import("borch-ts");
+    const { init, device, Device, Tensor, f32ToF16Bits, f16BitsToF32 } = await import("borch-ts");
     const K = await import("/borch-ts/dist/src/kernels.js");
     await init();
     const dev = device();
@@ -156,14 +156,41 @@
       sw.free();
     }
 
+    // **A half-precision window weight — half the bytes, unpacked on use** (Step 3 ⑤). The
+    // stored values are f16-rounded (lossy, like .half()), so the reference is the same
+    // weight rounded to f16 on the host; feeding both the same f16-rounded f32 values to the
+    // matmul gives bit-identical results. And the f16 slot is half an f32 slot's bytes.
+    let f16Eq = false, f16Half = false;
+    {
+      const M = 8, Kd = 16, Nn = 16;
+      const wd = seed(Kd * Nn, 77);
+      const rounded = f16BitsToF32(f32ToF16Bits(wd));   // the exact values the window holds
+      const x = Tensor.from(seed(M * Kd, 78), [M, Kd]);
+      const ref = Array.from(await x.matmul(Tensor.from(rounded, [Kd, Nn])).toArray());
+      const fw = dev.window(1 << 20);
+      const { weight } = await Tensor.inWindowF16(fw, wd, [Kd, Nn]);
+      const got = Array.from(await x.matmul(weight).toArray());
+      const f16Live = fw.live;
+      fw.free();
+      // What the same weight would reserve as f32, for the halving comparison.
+      const gw = dev.window(1 << 20);
+      await Tensor.inWindow(gw, wd, [Kd, Nn]);
+      const f32Live = gw.live;
+      gw.free();
+      f16Eq = ref.length === got.length && ref.every((v, i) => v === got[i]);
+      f16Half = f16Live <= f32Live / 2;
+      say(`f16 window weight == host f16-rounded (matmul): ${f16Eq ? "ok" : "WRONG"}`);
+      say(`f16 slot is half an f32 slot: ${f16Live}B vs ${f32Live}B — ${f16Half ? "yes" : "NO"}`);
+    }
+
     win.free();
     win2.free();
     say(`faults: ${dev.faults.count}`);
     const ok = sameBuffer && offsetsOk && aOk && bOk && cOk && win.used === 2 * align
       && sub.eqf && scl.eqf && convA && convB && refusedGeneric && evictWorks && evictThrows
-      && streamOk && streamBounded && dev.faults.count === 0;
+      && streamOk && streamBounded && f16Eq && f16Half && dev.faults.count === 0;
     say(ok ? "\nwindow: offset slices of one buffer fill and read back intact" : "\n**window: a check did not hold**");
-    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, convA, convB, refusedGeneric, evictWorks, evictThrows, streamOk, streamBounded, used: win.used, faults: dev.faults.count };
+    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, convA, convB, refusedGeneric, evictWorks, evictThrows, streamOk, streamBounded, f16Eq, f16Half, used: win.used, faults: dev.faults.count };
   } catch (err) {
     window.__window = { error: String(err && err.stack || err), text: lines.join("\n") };
     say(`it could not be measured: ${err}`);

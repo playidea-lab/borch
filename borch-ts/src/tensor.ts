@@ -326,11 +326,13 @@ import {
   unaryWith,
   unpoolFromIndex,
   unpoolFromIndexBackward,
+  unpackHalf,
   upsampleNearest,
   upsampleNearestBackward,
   whereBackward,
   whereKernel,
 } from "./kernels.js";
+import { f32ToF16Bits } from "./half.js";
 
 /** The device is held **inside an object**. Same reason as `autograd.ts`'s `gradMode`. */
 const deviceHolder: { current: Device | null } = { current: null };
@@ -907,6 +909,13 @@ export class Tensor implements Node<Tensor> {
    */
   private readonly windowLive?: () => void;
   /**
+   * **Set when the window slot holds this weight as half-precision** (`docs/SCALE.md` Step
+   * 3 ⑤) — the number of f32 values. The bytes are IEEE f16 (half the storage); a weight
+   * funnel gets an f32 buffer by unpacking the slot with `unpackHalf` on use. Not a
+   * `float16` dtype — the window is outside the Tensor storage model.
+   */
+  private readonly windowF16Count?: number;
+  /**
    * Upstream in the graph. **Only `detach_` changes this** — hence not
    * `readonly`. Edited anywhere else, the backward of an already-made node
    * changes quietly.
@@ -940,6 +949,7 @@ export class Tensor implements Node<Tensor> {
       dtype?: DType;
       windowSlot?: BindSlot;
       windowLive?: () => void;
+      windowF16Count?: number;
     } = {},
   ) {
     // The two storages arrive through one slot. Forty-seven places inside pass a
@@ -957,6 +967,7 @@ export class Tensor implements Node<Tensor> {
     this.dtype = options.dtype ?? "float32";
     if (options.windowSlot !== undefined) this.windowSlot = options.windowSlot;
     if (options.windowLive !== undefined) this.windowLive = options.windowLive;
+    if (options.windowF16Count !== undefined) this.windowF16Count = options.windowF16Count;
     // If any parent carries a gradient, this does. Inside no_grad nobody does.
     const inherited =
       gradMode.enabled && this.parents.some((p) => p.requiresGrad);
@@ -1101,6 +1112,20 @@ export class Tensor implements Node<Tensor> {
     if (this.windowSlot !== undefined) {
       this.refuseIfDead();
       this.windowLive?.();   // throws if the slot was evicted — a loud stale read, not a silent one
+      if (this.windowF16Count !== undefined) {
+        // Half-precision weight: unpack the slot (2 bytes/value) to an f32 scratch the
+        // funnel reads. The scratch is a pooled buffer freed at the enclosing scope's
+        // close, so the window's residency stays halved and only one block's f32 copy is
+        // live at a time. `unpackHalf` uses core WGSL — no `shader-f16` needed.
+        const count = this.windowF16Count;
+        const scratch = dev().alloc(count);
+        dev().run1d(
+          dev().pipeline(`unpackf16:${count}`, () => unpackHalf(count)),
+          [this.windowSlot, scratch],
+          Math.ceil(count / 2),
+        );
+        return scratch;
+      }
       return this.windowSlot;
     }
     return this.raw;
@@ -1333,6 +1358,43 @@ export class Tensor implements Node<Tensor> {
       }
     };
     const weight = new Tensor(bufOf(slot), shape, { windowSlot: slot, windowLive, dtype, requiresGrad: false });
+    return { weight, evict: () => win.evict(slot) };
+  }
+
+  /**
+   * **A frozen weight placed in a window at half precision** — `docs/SCALE.md` Step 3 ⑤.
+   * The f32 values are packed to IEEE f16 on the host (`f32ToF16Bits`, half the bytes) and
+   * placed; a weight funnel gets an f32 buffer by unpacking the slot with `unpackHalf` on
+   * use, so the window's resident bytes are halved while the maths stays f32. The values
+   * are the f16-rounded ones — lossy, as `.half()` is. Same `{weight, evict}` shape as
+   * `inWindow`, and the weight is a matmul/conv operand only.
+   */
+  static async inWindowF16(
+    win: Window, data: Float32Array, shape: readonly number[],
+  ): Promise<{ weight: Tensor; evict: () => void }> {
+    const count = data.length;
+    const bits = f32ToF16Bits(data);
+    // Pad to an even count so the slot is a whole number of u32 words (the unpack reads it
+    // as `array<u32>`); the extra half is never read (the unpack is bounded by `count`).
+    const padded = bits.length % 2 === 0 ? bits : (() => {
+      const p = new Uint16Array(bits.length + 1);
+      p.set(bits);
+      return p;
+    })();
+    const slot = await win.place(padded);
+    const offset = typeof slot === "object" && "offset" in slot ? slot.offset : 0;
+    const gen = win.genOf(offset);
+    const windowLive = (): void => {
+      if (win.genOf(offset) !== gen) {
+        throw new RuntimeError(
+          "this windowed weight was evicted — its slot holds another weight now. " +
+            "Re-place it in the window before using it.",
+        );
+      }
+    };
+    const weight = new Tensor(bufOf(slot), shape, {
+      windowSlot: slot, windowLive, windowF16Count: count, requiresGrad: false,
+    });
     return { weight, evict: () => win.evict(slot) };
   }
 

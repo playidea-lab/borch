@@ -115,6 +115,9 @@ export { einsum } from "./einsum.js";
 // Gradient checkpointing — recompute a segment's intermediates in the backward rather
 // than hold them. `docs/SCALE.md` Step 6.
 export { checkpoint } from "./checkpoint.js";
+// Host IEEE f16 bit conversion — for a frozen weight stored in a window at half the bytes
+// (`docs/SCALE.md` Step 3 ⑤). Not a float16 dtype; raw window bytes.
+export { f16BitsToF32, f32ToF16Bits } from "./half.js";
 // The place brackets occupy. `x[1:3]` resolves to `x[slice(1, 3)]` in Python too, so it
 // is the same name.
 export { slice } from "./indexing.js";

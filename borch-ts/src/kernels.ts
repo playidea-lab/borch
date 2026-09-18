@@ -1231,6 +1231,29 @@ function perLane(inputs: readonly string[], expr: string, out = "res", scalars: 
     `  { ${inputs.map((v) => scalars.includes(v) ? `let ${v} = ${v}s;` : `let ${v} = ${v}v.${c};`).join(" ")} ${out}.${c} = ${expr}; }`).join("\n");
 }
 
+/**
+ * **Unpacks IEEE half-precision weights to f32** — a window holds a frozen weight packed
+ * (2 bytes each, `f32ToF16Bits` on the host); this reads it as `array<u32>` (two halves per
+ * word) and writes the f32 the weight funnels consume. `unpack2x16float` is core WGSL, so
+ * this needs no `shader-f16` feature — the storage win (half the resident bytes) is had on
+ * every device, and `Device.f16` only buys a later kernel that reads f16 directly with no
+ * unpack. `docs/SCALE.md` Step 3 ⑤. Grid over the packed words (⌈count/2⌉).
+ */
+export function unpackHalf(count: number): string {
+  const pairs = Math.ceil(count / 2);
+  return `
+@group(0) @binding(0) var<storage, read> A: array<u32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(pairs)}
+  let two = unpack2x16float(A[gid]);
+  let base = gid * 2u;
+  Out[base] = two.x;
+  if (base + 1u < ${count}u) { Out[base + 1u] = two.y; }
+}`;
+}
+
 export function unaryForward(name: string, n: number): string {
   const op = unarySpec(name);
   if (elementLanes(n, true) === 4) {
