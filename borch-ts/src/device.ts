@@ -1893,7 +1893,7 @@ export class Window {
    * a staging buffer (`MAP_WRITE`), so it is ordered against pending dispatches; the wait
    * afterwards is what lets the one staging buffer serve the next `place`.
    */
-  async place(data: Float32Array | Uint16Array): Promise<BindSlot> {
+  async place(data: Float32Array | Uint16Array | Uint32Array): Promise<BindSlot> {
     const bytes = data.byteLength;
     const align = this.dev.storageAlign;
     const need = Math.ceil(bytes / align) * align;   // aligned reservation

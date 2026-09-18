@@ -546,6 +546,20 @@ nightly on a real adapter (`refuse_if_software` holds).
   them at less than half the speed. It is taken only where a model still does not fit
   after Step 4 — and the ceiling this plan targets (a frozen vision backbone) may never
   need it.
+- **2026-09-18, the int8 matmul weight landed.** `src/quant.ts` (`quantizeInt8PerChannel`:
+  symmetric, one scale per output channel, four signed bytes per `u32`) + `Tensor.inWindowInt8`
+  (packs to the window, scales in a small resident buffer). The scalar matmul tile gains a
+  `weightInt8` mode (`kernels.ts`): `B: array<u32>`, a third `scale` binding, the byte read and
+  **sign-extended by hand** (a top-aligned left shift then an arithmetic right shift — no
+  `unpack4xI8`, which not every adapter has) then scaled. The matmul funnel routes a windowed
+  int8 weight there when read transposed (`transB` — the Linear/conv weight case, where the
+  scale's output channel is the matmul's `N`); every other consumer (a conv, a backward)
+  dequantises to f32 scratch (`dequantInt8`, also hand-unpacked). The subgroup matrix is bypassed
+  for the quantised operand. `window_probe`: **int8 window matmul == the host-reconstructed
+  weight, bit-identical, in a quarter of the f32 slot's bytes** — on apple/metal-3 **and**
+  google/swiftshader (the manual unpack has no feature gate). Remaining: the top-1 accuracy gate
+  on a real model, and the tiled conv int8 read (this is the matmul path only, which is the
+  ≥ 300 MB ViT's whole weight).
 
 ### Step 6 — Gradient checkpointing  · size M · depends on nothing; parallel to 2–5
 

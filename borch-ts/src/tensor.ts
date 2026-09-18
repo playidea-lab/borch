@@ -327,12 +327,14 @@ import {
   unpoolFromIndex,
   unpoolFromIndexBackward,
   unpackHalf,
+  dequantInt8,
   upsampleNearest,
   upsampleNearestBackward,
   whereBackward,
   whereKernel,
 } from "./kernels.js";
 import { f32ToF16Bits } from "./half.js";
+import { quantizeInt8PerChannel } from "./quant.js";
 
 /** The device is held **inside an object**. Same reason as `autograd.ts`'s `gradMode`. */
 const deviceHolder: { current: Device | null } = { current: null };
@@ -916,6 +918,16 @@ export class Tensor implements Node<Tensor> {
    */
   private readonly windowF16Count?: number;
   /**
+   * **Set when the window slot holds this weight as per-channel int8** (`docs/SCALE.md` Step 5)
+   * — the number of f32 values (`windowInt8Count`), the per-output-channel scales as a resident
+   * f32 buffer (`windowInt8Scale`), and the row length `inPer` (`windowInt8In`) that maps an
+   * element to its channel. Four signed bytes per `u32`, a quarter of the storage. Not a dtype —
+   * the window is outside the Tensor storage model (ADR-003 decision 5).
+   */
+  private readonly windowInt8Count?: number;
+  private readonly windowInt8Scale?: GPUBuffer;
+  private readonly windowInt8In?: number;
+  /**
    * Upstream in the graph. **Only `detach_` changes this** — hence not
    * `readonly`. Edited anywhere else, the backward of an already-made node
    * changes quietly.
@@ -950,6 +962,9 @@ export class Tensor implements Node<Tensor> {
       windowSlot?: BindSlot;
       windowLive?: () => void;
       windowF16Count?: number;
+      windowInt8Count?: number;
+      windowInt8Scale?: GPUBuffer;
+      windowInt8In?: number;
     } = {},
   ) {
     // The two storages arrive through one slot. Forty-seven places inside pass a
@@ -968,6 +983,9 @@ export class Tensor implements Node<Tensor> {
     if (options.windowSlot !== undefined) this.windowSlot = options.windowSlot;
     if (options.windowLive !== undefined) this.windowLive = options.windowLive;
     if (options.windowF16Count !== undefined) this.windowF16Count = options.windowF16Count;
+    if (options.windowInt8Count !== undefined) this.windowInt8Count = options.windowInt8Count;
+    if (options.windowInt8Scale !== undefined) this.windowInt8Scale = options.windowInt8Scale;
+    if (options.windowInt8In !== undefined) this.windowInt8In = options.windowInt8In;
     // If any parent carries a gradient, this does. Inside no_grad nobody does.
     const inherited =
       gradMode.enabled && this.parents.some((p) => p.requiresGrad);
@@ -1126,9 +1144,41 @@ export class Tensor implements Node<Tensor> {
         );
         return scratch;
       }
+      if (this.windowInt8Count !== undefined && this.windowInt8Scale !== undefined) {
+        // Int8 weight read by a consumer that is not the int8 matmul (a conv, a backward, a
+        // device without the direct path): dequantise the slot to an f32 scratch, pooled and
+        // freed at the enclosing scope, so residency stays a quarter and one block's f32 copy
+        // is live at a time. `dequantInt8` uses no `unpack4xI8`, so it runs on every adapter.
+        const count = this.windowInt8Count;
+        const inPer = this.windowInt8In ?? 1;
+        const scratch = dev().alloc(count);
+        dev().run1d(
+          dev().pipeline(`dequanti8:${count}:${inPer}`, () => dequantInt8(count, inPer)),
+          [this.windowSlot, this.windowInt8Scale, scratch],
+          count,
+        );
+        return scratch;
+      }
       return this.windowSlot;
     }
     return this.raw;
+  }
+
+  /**
+   * The int8 slot to read **directly** as a weight — the packed slot, its per-channel scales,
+   * and the number of output channels — or `null` to fall back to `weightBinding` (which
+   * dequantises). Returned only when the weight is int8 in a window; the caller is the scalar
+   * matmul tile, which reads `array<u32>` and applies the scale, no dequant pass. The subgroup
+   * matrix is bypassed for a quantised operand (its loader reads storage as its own type).
+   * `docs/SCALE.md` Step 5.
+   */
+  int8WeightBinding(): { slot: BindSlot; scale: GPUBuffer } | null {
+    if (this.windowInt8Count === undefined || this.windowInt8Scale === undefined || this.windowSlot === undefined) {
+      return null;
+    }
+    this.refuseIfDead();
+    this.windowLive?.();
+    return { slot: this.windowSlot, scale: this.windowInt8Scale };
   }
 
   /**
@@ -1410,6 +1460,40 @@ export class Tensor implements Node<Tensor> {
     };
     const weight = new Tensor(bufOf(slot), shape, {
       windowSlot: slot, windowLive, windowF16Count: count, requiresGrad: false,
+    });
+    return { weight, evict: () => win.evict(slot) };
+  }
+
+  /**
+   * **A frozen weight placed in a window as per-channel int8** — `docs/SCALE.md` Step 5. The
+   * f32 values are quantised on the host to symmetric int8 with one scale per output channel
+   * (`shape[0]`), four bytes per `u32`, a quarter of the storage; the scales ride in a small
+   * resident buffer. The int8 matmul reads the slot directly (`int8WeightBinding`); every other
+   * funnel dequantises to f32 scratch (`weightBinding`). The values are the int8-rounded ones —
+   * lossy, like `.half()` is more so. Same `{weight, evict}` shape as `inWindow`.
+   */
+  static async inWindowInt8(
+    win: Window, data: Float32Array, shape: readonly number[],
+  ): Promise<{ weight: Tensor; evict: () => void }> {
+    const count = data.length;
+    const outChannels = shape[0] ?? 1;
+    const inPer = outChannels > 0 ? count / outChannels : count;
+    const { packed, scales } = quantizeInt8PerChannel(data, outChannels);
+    const scaleBuf = dev().upload(scales);
+    const slot = await win.place(packed);
+    const offset = typeof slot === "object" && "offset" in slot ? slot.offset : 0;
+    const gen = win.genOf(offset);
+    const windowLive = (): void => {
+      if (win.genOf(offset) !== gen) {
+        throw new RuntimeError(
+          "this windowed weight was evicted — its slot holds another weight now. " +
+            "Re-place it in the window before using it.",
+        );
+      }
+    };
+    const weight = new Tensor(bufOf(slot), shape, {
+      windowSlot: slot, windowLive, windowInt8Count: count, windowInt8Scale: scaleBuf,
+      windowInt8In: inPer, requiresGrad: false,
     });
     return { weight, evict: () => win.evict(slot) };
   }
@@ -2260,8 +2344,25 @@ export class Tensor implements Node<Tensor> {
     // (whose 8×8×8 loader reads storage as its own type, with no place to narrow), trading
     // that path for the saved unpack; the fallback (no f16) unpacks and takes the normal
     // routes below. `docs/SCALE.md` Step 3 ⑤.
-    const f16Slot = mat2.f16WeightBinding();
-    if (f16Slot !== null) {
+    // **A per-channel int8 window weight read directly** — the scalar tile with `array<u32>`
+    // and a scale binding, no dequant pass. Only when the weight is read transposed (`transB`),
+    // where the output channel the scale is keyed by is the matmul's `N`; otherwise (a backward,
+    // an odd use) the dequant fallback in `weightBinding` gives the full f32 weight. The subgroup
+    // matrix is bypassed for a quantised operand. `docs/SCALE.md` Step 5.
+    const int8 = transB ? mat2.int8WeightBinding() : null;
+    const f16Slot = int8 === null ? mat2.f16WeightBinding() : null;
+    if (int8 !== null) {
+      const splits = scalarMatmulSplit(M, K, N);
+      const target = splits > 1 ? dev().alloc(M * N * splits) : out;
+      dev().run(
+        dev().pipeline(`mmi8:${M}:${K}:${N}:${flags}:${splits}`, () => matmul(M, K, N, transA, transB, splits, false, true)),
+        [this.buffer, int8.slot, int8.scale, target],
+        [Math.ceil(N / 64), Math.ceil(M / 64), splits],
+      );
+      if (splits > 1) {
+        dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
+      }
+    } else if (f16Slot !== null) {
       const splits = scalarMatmulSplit(M, K, N);
       const target = splits > 1 ? dev().alloc(M * N * splits) : out;
       dev().run(

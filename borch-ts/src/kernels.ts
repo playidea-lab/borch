@@ -1254,6 +1254,26 @@ ${flatId(pairs)}
 }`;
 }
 
+/**
+ * Dequantises a per-channel int8 window weight to an f32 scratch buffer — the fallback the
+ * weight funnel takes when a consumer is not the int8 matmul (a conv, a backward, a device
+ * without the direct path). Reads four signed bytes per `u32`, sign-extends each by hand, and
+ * scales by the element's output channel (`e / inPer`). `docs/SCALE.md` Step 5. Grid over
+ * `count` elements.
+ */
+export function dequantInt8(count: number, inPer: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> B: array<u32>;
+@group(0) @binding(1) var<storage, read> scale: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(count)}
+  let q = i32(B[gid / 4u] << (24u - (gid % 4u) * 8u)) >> 24u;
+  Out[gid] = f32(q) * scale[gid / ${inPer}u];
+}`;
+}
+
 export function unaryForward(name: string, n: number): string {
   const op = unarySpec(name);
   if (elementLanes(n, true) === 4) {
@@ -2016,7 +2036,7 @@ export function scalarMatmulSplit(M: number, K: number, N: number): number {
   return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
 }
 
-export function matmul(M: number, K: number, N: number, transA = false, transB = false, splits = 1, weightF16 = false): string {
+export function matmul(M: number, K: number, N: number, transA = false, transB = false, splits = 1, weightF16 = false, weightInt8 = false): string {
   const decl: string[] = [];
   const zero: string[] = [];
   const fma: string[] = [];
@@ -2050,11 +2070,20 @@ export function matmul(M: number, K: number, N: number, transA = false, transB =
   // no f32 scratch. Unpacking to f32 first is the fallback where f16 is absent. The
   // accumulation stays f32 either way (`Bs` is f32); only the storage read narrows.
   const bexpr = transB ? "bcol * K + brow" : "brow * N + bcol";
-  const bread = weightF16 ? `f32(B[${bexpr}])` : `B[${bexpr}]`;
+  // **The weight operand may be int8 in a window** (`docs/SCALE.md` Step 5): four signed bytes
+  // per `u32`, one f32 scale per output channel. The byte is read and sign-extended by hand (a
+  // top-bit-aligned left shift, then an arithmetic right shift — no `unpack4xI8`, which not
+  // every adapter has), then scaled. The accumulation stays f32. `scale` is a third binding, so
+  // `Out` moves to binding 3 in this variant.
+  const bread = weightInt8
+    ? `(f32(i32(B[(${bexpr}) / 4u] << (24u - ((${bexpr}) % 4u) * 8u)) >> 24u) * scale[bcol])`
+    : weightF16 ? `f32(B[${bexpr}])` : `B[${bexpr}]`;
   return `${weightF16 ? "enable f16;\n" : ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
-@group(0) @binding(1) var<storage, read> B: array<${weightF16 ? "f16" : "f32"}>;
-@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(1) var<storage, read> B: array<${weightInt8 ? "u32" : weightF16 ? "f16" : "f32"}>;
+${weightInt8
+  ? "@group(0) @binding(2) var<storage, read> scale: array<f32>;\n@group(0) @binding(3) var<storage, read_write> Out: array<f32>;"
+  : "@group(0) @binding(2) var<storage, read_write> Out: array<f32>;"}
 const M: u32 = ${M}u; const K: u32 = ${K}u; const N: u32 = ${N}u;
 var<workgroup> As: array<f32, 1024>;
 var<workgroup> Bs: array<f32, 1024>;

@@ -17,7 +17,7 @@
   const lines = [];
   const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
   try {
-    const { init, device, Device, Tensor, f32ToF16Bits, f16BitsToF32, streamSequential } = await import("borch-ts");
+    const { init, device, Device, Tensor, f32ToF16Bits, f16BitsToF32, dequantInt8PerChannel, streamSequential } = await import("borch-ts");
     const K = await import("/borch-ts/dist/src/kernels.js");
     await init();
     const dev = device();
@@ -190,6 +190,33 @@
       say(`f16 slot is half an f32 slot: ${f16Live}B vs ${f32Live}B — ${f16Half ? "yes" : "NO"}`);
     }
 
+    // **A per-channel int8 window weight — a quarter of the bytes** (Step 5). The stored
+    // values are int8-rounded (one scale per output channel); the reference is the same weight
+    // reconstructed on the host, so feeding both the same values through the scalar tile gives
+    // bit-identical results. And the int8 slot is a quarter of an f32 slot's bytes.
+    let i8Eq = false, i8Quarter = false;
+    {
+      const M = 8, Kd = 16, Nn = 16;
+      const wd = seed(Nn * Kd, 91);                    // weight [out=Nn, in=Kd], read transposed
+      const rounded = dequantInt8PerChannel(wd, Nn);   // the exact values the window holds
+      const x = Tensor.from(seed(M * Kd, 92), [M, Kd]);
+      // x @ Wᵀ with the reconstructed weight, the same funnel the int8 read uses (transB).
+      const ref = Array.from(await x.linear(Tensor.from(rounded, [Nn, Kd])).toArray());
+      const iw = dev.window(1 << 20);
+      const { weight } = await Tensor.inWindowInt8(iw, wd, [Nn, Kd]);
+      const got = Array.from(await x.linear(weight).toArray());
+      const i8Live = iw.live;
+      iw.free();
+      const gw = dev.window(1 << 20);
+      await Tensor.inWindow(gw, wd, [Nn, Kd]);
+      const f32Live = gw.live;
+      gw.free();
+      i8Eq = ref.length === got.length && ref.every((v, i) => v === got[i]);
+      i8Quarter = i8Live <= f32Live / 4;
+      say(`int8 window weight == host int8-rounded (linear): ${i8Eq ? "ok" : "WRONG"}`);
+      say(`int8 slot is a quarter of an f32 slot: ${i8Live}B vs ${f32Live}B — ${i8Quarter ? "yes" : "NO"}`);
+    }
+
     // **A whole sequential network streamed through the window** (Step 3 ④ scheduler). Ten
     // Linear+ReLU blocks: run resident, then stream through a window sized for three, and
     // the output must match — the model is larger than the window, yet the answer is the
@@ -223,9 +250,9 @@
     say(`faults: ${dev.faults.count}`);
     const ok = sameBuffer && offsetsOk && aOk && bOk && cOk && win.used === 2 * align
       && sub.eqf && scl.eqf && convA && convB && refusedGeneric && evictWorks && evictThrows
-      && streamOk && streamBounded && f16Eq && f16Half && netEq && netBounded && dev.faults.count === 0;
+      && streamOk && streamBounded && f16Eq && f16Half && i8Eq && i8Quarter && netEq && netBounded && dev.faults.count === 0;
     say(ok ? "\nwindow: offset slices of one buffer fill and read back intact" : "\n**window: a check did not hold**");
-    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, convA, convB, refusedGeneric, evictWorks, evictThrows, streamOk, streamBounded, f16Eq, f16Half, netEq, netBounded, used: win.used, faults: dev.faults.count };
+    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, convA, convB, refusedGeneric, evictWorks, evictThrows, streamOk, streamBounded, f16Eq, f16Half, i8Eq, i8Quarter, netEq, netBounded, used: win.used, faults: dev.faults.count };
   } catch (err) {
     window.__window = { error: String(err && err.stack || err), text: lines.join("\n") };
     say(`it could not be measured: ${err}`);
