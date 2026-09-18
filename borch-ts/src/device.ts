@@ -1856,6 +1856,18 @@ export class Window {
    */
   private readonly gens = new Map<number, number>();
   private tick = 0;
+  /**
+   * **Freed regions available for reuse**, each `{offset, size}` with `size` the aligned
+   * reservation. `evict` returns a slot's region here; `place` takes one (first fit) before
+   * growing the cursor. This is what bounds the window: streaming a hundred blocks through a
+   * window sized for three reuses the same bytes, so the buffer never grows past the few
+   * blocks resident at once. No coalescing — the streaming case is equal-sized blocks, and a
+   * freed region is taken whole. `docs/SCALE.md` Step 3 ④.
+   */
+  private readonly freed: { offset: number; size: number }[] = [];
+  /** The reserved (aligned) size of each live slot, by offset — what `evict` returns to the
+   *  free list. */
+  private readonly reserved = new Map<number, number>();
 
   constructor(
     private readonly dev: Device,
@@ -1863,9 +1875,17 @@ export class Window {
     readonly capacity: number,
   ) {}
 
-  /** How much of the window is used, in bytes. */
+  /** The high-water mark of the cursor, in bytes — the most the window ever grew to. With
+   *  eviction and reuse this stays near the resident set, not the total streamed. */
   get used(): number {
     return this.cursor;
+  }
+
+  /** Bytes currently placed and not evicted — the live resident set. */
+  get live(): number {
+    let n = 0;
+    for (const size of this.reserved.values()) n += size;
+    return n;
   }
 
   /**
@@ -1875,12 +1895,24 @@ export class Window {
    */
   async place(data: Float32Array): Promise<BindSlot> {
     const bytes = data.byteLength;
-    const offset = this.cursor;
-    if (offset + bytes > this.capacity) {
-      throw new Error(
-        `window is full: ${offset} + ${bytes} > ${this.capacity} bytes. ` +
-          "Evict a slot or size the window larger (up to the device's binding tier).",
-      );
+    const align = this.dev.storageAlign;
+    const need = Math.ceil(bytes / align) * align;   // aligned reservation
+    // Reuse a freed region first (first fit), so a stream of blocks does not grow the
+    // window past the few resident at once; only grow the cursor when nothing fits.
+    let offset: number;
+    const hit = this.freed.findIndex((r) => r.size >= need);
+    if (hit >= 0) {
+      offset = (this.freed[hit] as { offset: number }).offset;
+      this.freed.splice(hit, 1);
+    } else {
+      offset = this.cursor;
+      if (offset + need > this.capacity) {
+        throw new Error(
+          `window is full: ${offset} + ${need} > ${this.capacity} bytes, and no freed ` +
+            "region fits. Evict a slot, or size the window larger (up to the binding tier).",
+        );
+      }
+      this.cursor = offset + need;
     }
     if (this.staging === null || this.stagingBytes < bytes) {
       this.staging?.destroy();
@@ -1894,8 +1926,7 @@ export class Window {
     // The copy is encoded, not sent. Send and wait so the staging buffer is free to be
     // mapped again for the next slot — and so the slot's bytes are really in place.
     await this.dev.synchronize();
-    const align = this.dev.storageAlign;
-    this.cursor = Math.ceil((offset + bytes) / align) * align;
+    this.reserved.set(offset, need);
     this.tick += 1;
     this.gens.set(offset, this.tick);
     return { buffer: this.buffer, offset, size: bytes };
@@ -1911,13 +1942,19 @@ export class Window {
    * **Evicts a slot** — bumps its generation so any tensor still pointing at it throws on
    * next use (its `weightBinding` sees the generation moved), rather than reading whatever
    * is placed there next. This is the liveness gate ADR-003 decision 2 rests on: eviction
-   * is safe because a stale read is loud, not silent. The bytes stay until overwritten by a
-   * later `place`; a free list that reuses the region is the scheduler's to add (Step 3 ④).
+   * is safe because a stale read is loud, not silent. The region returns to the free list,
+   * so the next `place` reuses it — this is what keeps the window bounded while a stream of
+   * blocks passes through it.
    */
   evict(slot: BindSlot): void {
     if (slot instanceof GPUBuffer) return;
     this.tick += 1;
     this.gens.set(slot.offset, this.tick);
+    const size = this.reserved.get(slot.offset);
+    if (size !== undefined) {
+      this.reserved.delete(slot.offset);
+      this.freed.push({ offset: slot.offset, size });
+    }
   }
 
   /** Returns the window and its staging to the driver. The slots' bindings are dead after. */

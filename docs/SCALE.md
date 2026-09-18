@@ -367,7 +367,15 @@ nightly on a real adapter (`refuse_if_software` holds).
   `weightBinding` runs a `windowLive` check that throws when its slot's generation has moved
   — a stale read after eviction is loud, ADR-003 decision 2. `window_probe.py`: a windowed
   weight works, then `evict()`, then using it throws (`/evicted/`); apple/metal-3 and the
-  5080, faults 0. Next:
+  5080, faults 0.
+- **2026-09-18, bounded streaming landed — the window now reuses its bytes.** `evict`
+  returns a slot's aligned region to a free list; `place` takes a freed region (first fit)
+  before growing the cursor. So a stream of blocks — place k, run, evict, place k+1 into
+  the freed region — keeps the buffer at the resident set, not the total streamed.
+  `window_probe.py`: **24 blocks stream through a window sized for 3** (matmul each,
+  bit-identical to the normal weight), and `used` stays at one block's bytes (1 KB) against
+  a 3 KB cap — a model larger than the window fits. apple/metal-3, faults 0. This is the
+  bounded-memory mechanism Step 3 exists for. Next:
   age-gated eviction, the bimm plan scheduler (block streaming, workbench feature pass),
   and the f16 raw weight.
 
