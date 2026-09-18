@@ -765,9 +765,25 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   cannot bounds-check individual cells, so the input must be pre-padded (pad-on-the-fly would
   mean abandoning the matrix loader that runs at 11 TFLOP/s); **`cnxt` is a different shape** —
   the stride-2 downsample convs' dX is a transposed conv, which `sgfFits` rejects (stride ≠ 1)
-  and which needs a new strided-subgroup kernel, not a knob. The tractable Option-2 lever (the
-  unwired dX subgroup path) is spent; the next conv win is that stride-2 transposed kernel, a
-  project of its own, and is left for when a stride-2-heavy model makes its 7 % worth the risk.
+  and which needs a new strided-subgroup kernel, not a knob. Of these, `cnwg` and `pdw` stand;
+  **`cnxt` fell** — the next entry.
+- **2026-09-19, the strided/transposed conv moved onto subgroup matrices — `cnxt` fell**
+  (`kernels.ts` `convGradInputSubgroupStrided` + `pixelUnshuffleGradInput`, `sgiStridedFits`,
+  `sgiStridedGrid`). The ceiling entry above guessed `cnxt` was the stride-2 conv2d **backward**;
+  measuring the shapes showed it was two U-Net decoder **`convTranspose` forwards** (k=s=2, pad 0)
+  — the encoder down-samples with max-pool, so that conv2d backward never fires here. Both are the
+  same special case: a **non-overlapping** k=s conv has no kernel flip and no zero-filled dilation,
+  each output cell in one window and one tap, so the input gradient (and the transpose forward, the
+  same computation) is a **per-tap GEMM** `M=C, K=O` read straight from the buffer — `convForwardSubgroup`
+  turned around, the taps split across the grid instead of summed — its per-tap slabs scattered to the
+  strided grid by a cheap pixel-unshuffle. Wired both places (they share the kernel). Measured on
+  U-Net 96 px, batch 16, apple/metal-3: the two up-samples went `cnxt` 0.47 ms (261 + 209 µs) →
+  `cnis` 0.05 + `pus` 0.06 ≈ **0.11 ms, ~4×**, and `cnxt` is gone from the step; at 192 px the pair is
+  0.45 ms where `cnxt` was ≈ 1.9 ms. Correct two ways — golden 4057/0 (its `convTranspose` cases) and
+  `conv_dx_probe` (three k=s=2 shapes bit-identical to the GEMM reference, faults 0). The scatter
+  (`pus`) is the larger half now and is memory-bound — a later lever if a model leans on it. With this
+  and the dX path, the U-Net's conv backward is entirely on subgroup matrices; what is left (`cnwg`,
+  `pdw`) is the floor the ceiling entry named.
 
 ### Step 8 — What this plan does not do
 

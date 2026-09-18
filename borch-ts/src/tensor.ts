@@ -225,6 +225,10 @@ import {
   convForwardSubgroup,
   sgfFits,
   sgfGrid,
+  sgiStridedFits,
+  sgiStridedGrid,
+  convGradInputSubgroupStrided,
+  pixelUnshuffleGradInput,
   tapMajorWeights,
   padForGradWeight,
   sgwGlobalFits,
@@ -11679,6 +11683,22 @@ fn gelu_tanh_grad(x: f32) -> f32 {
                 [weight.weightBinding(), turned], weight.size);
               convForwardRun(back, convNDKey(back), g.buffer, turned, null, gi);
             }
+          } else if (Device.subgroupMatrix && sgiStridedFits(s)) {
+            // A non-overlapping downsample's input gradient on subgroup matrices: a per-tap GEMM
+            // straight from the gradient, then a scatter to the input grid — no zero-filled
+            // dilation the general transposed conv pays. `convGradInputSubgroupStrided`.
+            const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+            const turnedW = dev().alloc(kSpace * s.C * s.O);
+            dev().run1d(
+              dev().pipeline(`tmwt:${key}`, () => tapMajorWeights(s.O, s.C, kSpace, true, false)),
+              [weight.weightBinding(), turnedW], kSpace * s.C * s.O);
+            const temp = dev().alloc(kSpace * s.N * s.C * s.outDims.reduce((a, b) => a * b, 1));
+            dev().run(
+              dev().pipeline(`cnis:${key}`, () => convGradInputSubgroupStrided(s)),
+              [g.buffer, turnedW, temp], sgiStridedGrid(s));
+            dev().run1d(
+              dev().pipeline(`pus:${key}`, () => pixelUnshuffleGradInput(s)),
+              [temp, gi], Math.ceil(this.size / 4));
           } else {
             dev().run(
               dev().pipeline(`cnxt:${key}`, () => convNDGradInputTiled(s)),
@@ -11861,11 +11881,30 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const key = convNDKey(s);
     const outShape = [s.N, Cout, ...outDims];
     const out = dev().alloc(outShape.reduce((a, b) => a * b, 1));
-    dev().run(
-      dev().pipeline(`cnxt:${key}`, () => convNDGradInputTiled(s)),
-      [this.buffer, weight.buffer, out],
-      convGradInputGrid(s),
-    );
+    if (Device.subgroupMatrix && sgiStridedFits(s)) {
+      // A non-overlapping upsample is the same computation as the strided input gradient — a
+      // per-tap GEMM (M = Cout, K = Cin) straight from the input, scattered to the wider grid.
+      // `convGradInputSubgroupStrided`; the transpose weight `(Cin, Cout, …)` is read as the
+      // `(O = Cin, C = Cout)` this `s` already names, so `tapMajorWeights` needs no change.
+      const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+      const turnedW = dev().alloc(kSpace * s.C * s.O);
+      dev().run1d(
+        dev().pipeline(`tmwt:${key}`, () => tapMajorWeights(s.O, s.C, kSpace, true, false)),
+        [weight.buffer, turnedW], kSpace * s.C * s.O);
+      const temp = dev().alloc(kSpace * s.N * s.C * s.outDims.reduce((a, b) => a * b, 1));
+      dev().run(
+        dev().pipeline(`cnis:${key}`, () => convGradInputSubgroupStrided(s)),
+        [this.buffer, turnedW, temp], sgiStridedGrid(s));
+      dev().run1d(
+        dev().pipeline(`pus:${key}`, () => pixelUnshuffleGradInput(s)),
+        [temp, out], Math.ceil(outShape.reduce((a, b) => a * b, 1) / 4));
+    } else {
+      dev().run(
+        dev().pipeline(`cnxt:${key}`, () => convNDGradInputTiled(s)),
+        [this.buffer, weight.buffer, out],
+        convGradInputGrid(s),
+      );
+    }
     let result = Tensor.make(
       out,
       outShape,

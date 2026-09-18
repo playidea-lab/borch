@@ -23,30 +23,34 @@
     if (!Device.subgroupMatrix) { say("no subgroup matrices here — the dX subgroup path never fires; nothing to compare."); window.__convDx = { text: lines.join("\n"), ok: true, skipped: true }; }
     else {
       const seed = (n, s) => { const a = new Float32Array(n); let x = s >>> 0; for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * 0.5; } return a; };
-      // (N, C, H, W, O, K, pad) — same-padding stride-1, 8-aligned, kernel 1 and 3.
+      // (N, C, H, W, O, K, pad, stride) — first four same-padding stride-1 (the cnft path),
+      // then non-overlapping k=s=2 downsamples (the strided cnis+scatter path), 8-aligned.
       const shapes = [
-        [4, 16, 32, 32, 16, 3, 1],
-        [2, 32, 16, 16, 64, 3, 1],
-        [4, 8, 24, 24, 8, 3, 1],
-        [2, 16, 16, 16, 32, 1, 0],
+        [4, 16, 32, 32, 16, 3, 1, 1],
+        [2, 32, 16, 16, 64, 3, 1, 1],
+        [4, 8, 24, 24, 8, 3, 1, 1],
+        [2, 16, 16, 16, 32, 1, 0, 1],
+        [4, 16, 32, 32, 32, 2, 0, 2],
+        [2, 32, 16, 16, 64, 2, 0, 2],
+        [4, 8, 48, 48, 16, 2, 0, 2],
       ];
       let worst = 0, allOk = true;
-      for (const [N, C, H, W, O, K, P] of shapes) {
+      for (const [N, C, H, W, O, K, P, S] of shapes) {
         const xd = seed(N * C * H * W, 11), wd = seed(O * C * K * K, 22);
         const dxFor = (useSub) => {
           Device.subgroupMatrix = useSub;
           const x = Tensor.from(xd, [N, C, H, W]); x.requiresGrad = true;
           const w = Tensor.from(wd, [O, C, K, K]);
-          x.conv2d(w, null, 1, P).sum().backward();
+          x.conv2d(w, null, S, P).sum().backward();
           return Array.from(x.grad.toArray());
         };
-        const ref = dxFor(false);          // direct kernel — the reference
+        const ref = dxFor(false);          // direct / GEMM kernel — the reference
         const got = dxFor(true);           // subgroup path
         Device.subgroupMatrix = true;
         let m = 0; for (let i = 0; i < ref.length; i++) m = Math.max(m, Math.abs((ref[i] ?? 0) - (got[i] ?? 0)));
         const ok = ref.length === got.length && m <= 1e-4;
         worst = Math.max(worst, m); allOk = allOk && ok;
-        say(`dX ${C}->${O} ${H}x${W} k${K}: max |Δ| ${m.toExponential(2)} — ${ok ? "ok" : "WRONG"}`);
+        say(`dX ${C}->${O} ${H}x${W} k${K} s${S}: max |Δ| ${m.toExponential(2)} — ${ok ? "ok" : "WRONG"}`);
       }
       say(`faults: ${bt.device().faults.count}`);
       const ok = allOk && bt.device().faults.count === 0;

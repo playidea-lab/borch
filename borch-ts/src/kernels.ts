@@ -4379,6 +4379,129 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 }`;
 }
 
+/**
+ * Whether a convolution's input gradient takes the strided subgroup path: a **non-overlapping**
+ * downsample (kernel equal to stride, no padding), so each input pixel falls in exactly one
+ * output window and one tap — no flip, no zero-filled dilation the general transposed conv pays.
+ * Two spatial dims, groups one, dilation one, both channel counts and the output row in whole
+ * eights (the subgroup GEMM reads blocks of eight straight from the gradient and weights). The
+ * caller checks `Device.subgroupMatrix`.
+ */
+export function sgiStridedFits(s: ConvNDShape): boolean {
+  const [, OW = 1] = s.outDims;
+  return s.inDims.length === 2 && (s.groups ?? 1) === 1
+    && (s.dilation ?? s.kernel.map(() => 1)).every((v) => v === 1)
+    && s.kernel.every((k, i) => k === s.stride[i]) && s.pad.every((p) => p === 0)
+    && s.O % 8 === 0 && s.C % 8 === 0 && OW % 8 === 0;
+}
+
+/** The grid: tiles of an output row, input-channel blocks (the turned M = C), one tap each. */
+export function sgiStridedGrid(s: ConvNDShape): [number, number, number] {
+  const [OH = 1, OW = 1] = s.outDims;
+  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+  return [s.N * OH * (OW / sgwGlobalTile(OW)), Math.ceil(s.C / SGF_CB), kSpace];
+}
+
+/**
+ * The input gradient of a non-overlapping downsample, on subgroup matrices. `convForwardSubgroup`
+ * turned around, but with the taps split across the grid instead of summed: for a tile of output
+ * pixels, a block of sixteen input channels, and **one tap** (`wid.z`), the GEMM `dX_tap = Wtᵀ · G`
+ * (M = C, K = O) runs straight from the gradient (no padding — stride equals kernel, so nothing is
+ * read outside a window) and the turned tap-major weights. Each tap's result is a contiguous
+ * `(N, C, OH, OW)` slab of `Temp`; `pixelUnshuffleGradInput` then scatters the slabs to the input
+ * grid at their tap offsets. The weights are laid out by `tapMajorWeights(turned)`, whose slab `t`
+ * holds kernel tap `kSpace − 1 − t`, so this stores to slab `κ = kSpace − 1 − t` — `Temp` is then
+ * indexed by the real kernel tap and the scatter needs no reversal.
+ */
+export function convGradInputSubgroupStrided(s: ConvNDShape): string {
+  const [OH = 1, OW = 1] = s.outDims;
+  const Mp = s.C, Kp = s.O; // gated to whole eights, so no padding
+  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+  const plane = OH * OW;
+  const TW = sgwGlobalTile(OW);
+  const perRow = OW / TW;
+  const mb = SGF_CB / 8, nb = TW / 8;
+  const slab = s.N * s.C * plane;
+  const acc: string[] = [];
+  for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) acc.push(`  var c${i}${j}: subgroup_matrix_result<f32, 8, 8>;`);
+  const body: string[] = [];
+  for (let i = 0; i < mb; i++) body.push(`    let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&Wt, wBase + ${i * 8 * Kp}u, false, ${Kp}u);`);
+  for (let j = 0; j < nb; j++) {
+    body.push(`    { let b = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&G, gBase + ${j * 8}u, false, ${plane}u);`);
+    for (let i = 0; i < mb; i++) body.push(`      c${i}${j} = subgroupMatrixMultiplyAccumulate(a${i}, b, c${i}${j});`);
+    body.push("    }");
+  }
+  const store: string[] = [];
+  for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) {
+    store.push(`  if (co0 + ${i * 8}u < ${s.C}u) { subgroupMatrixStore(&Temp, oBase + ${i * 8 * plane + j * 8}u, c${i}${j}, false, ${plane}u); }`);
+  }
+  return `enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read> Wt: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Temp: array<f32>;
+@compute @workgroup_size(32)
+fn main(@builtin(workgroup_id) wid: vec3<u32>) {
+  let tile = wid.x;
+  let co0 = wid.y * ${SGF_CB}u;
+  let t = wid.z;
+  let kappa = ${kSpace - 1}u - t;
+  let n = tile / ${OH * perRow}u;
+  let rest = tile - n * ${OH * perRow}u;
+  let oh = rest / ${perRow}u;
+  let tw0 = (rest - oh * ${perRow}u) * ${TW}u;
+${acc.join("\n")}
+  for (var ci0 = 0u; ci0 < ${Kp}u; ci0 = ci0 + 8u) {
+    let wBase = (t * ${Mp}u + co0) * ${Kp}u + ci0;
+    let gBase = ((n * ${Kp}u + ci0) * ${OH}u + oh) * ${OW}u + tw0;
+${body.join("\n")}
+  }
+  let oBase = kappa * ${slab}u + ((n * ${s.C}u + co0) * ${OH}u + oh) * ${OW}u + tw0;
+${store.join("\n")}
+}`;
+}
+
+/**
+ * Scatters the per-tap gradient slabs of `convGradInputSubgroupStrided` to the input grid: each
+ * `Temp[κ, n, c, oh, ow]` lands at `dX[n, c, oh·SH + kh, ow·SW + kw]`, where `κ = kh·KW + kw`.
+ * A non-overlapping downsample tiles the input exactly, so every input cell is written once —
+ * **four cells a thread**, like `padForGradWeight`.
+ */
+export function pixelUnshuffleGradInput(s: ConvNDShape): string {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [OH = 1, OW = 1] = s.outDims;
+  const [KH = 1, KW = 1] = s.kernel;
+  const [SH = 1, SW = 1] = s.stride;
+  const plane = OH * OW;
+  const slab = s.N * s.C * plane;
+  const n = s.N * s.C * IH * IW;
+  return `
+@group(0) @binding(0) var<storage, read> Temp: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(Math.ceil(n / 4))}
+  let first = gid * 4u;
+  for (var j = 0u; j < 4u; j = j + 1u) {
+    let i = first + j;
+    if (i >= ${n}u) { break; }
+    let iw = i % ${IW}u;
+    let ih = (i / ${IW}u) % ${IH}u;
+    let nc = i / ${IH * IW}u;
+    let kh = ih % ${SH}u;
+    let kw = iw % ${SW}u;
+    if (kh < ${KH}u && kw < ${KW}u) {
+      let kappa = kh * ${KW}u + kw;
+      let oh = ih / ${SH}u;
+      let ow = iw / ${SW}u;
+      Out[i] = Temp[kappa * ${slab}u + nc * ${plane}u + oh * ${OW}u + ow];
+    } else {
+      Out[i] = 0.0;
+    }
+  }
+}`;
+}
+
 /** Adds the subgroup weight gradient's tap-major, padded partial sums into the weight's
  *  (O, C, kh, kw) layout, in a fixed order. */
 export function sumSplitsTapped(s: ConvNDShape, pieces: number = sgwGlobalPieces(s)): string {
