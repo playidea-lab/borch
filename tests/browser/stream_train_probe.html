@@ -1,0 +1,119 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>training an adapter on a streamed frozen backbone</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **Step 7's residency rule, verified.** A chain of LoRA-adapted Linear blocks is trained one
+  // step two ways on the same parameters: once fully resident and taped, once with each block's
+  // frozen base streamed through a small window (forward keeps only boundaries; backward refills
+  // and recomputes). The adapter gradients must agree — a streaming path that recomputed wrongly
+  // would be a silently wrong gradient — and the window must hold at most a block or two of base
+  // weights, not the whole backbone. The frozen base never forms a gradient; only the adapters do.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const ATOL = 1e-4, RTOL = 1e-4;   // the golden tolerance; a recompute uses the same kernels
+  try {
+    const bt = await import("borch-ts");
+    const { init, device, scope, peft, Tensor, keepAlive, streamTrainStep, Device } = bt;
+    await init();
+    say(`adapter: ${device().constructor.name} · ${Device.adapterInfo}`);
+
+    const D = 32, BLOCKS = 4, R = 4, BATCH = 8;
+    const seedFill = (shape, s, scale = 0.5) => {
+      const n = shape.reduce((a, b) => a * b, 1);
+      const a = new Float32Array(n);
+      let x = s >>> 0;
+      for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * scale; }
+      return Tensor.from(a, shape);
+    };
+
+    // One set of LoRA-adapted blocks, kept alive so both runs see the same weights and adapters.
+    const blocks = [];
+    for (let i = 0; i < BLOCKS; i++) {
+      const lin = peft.LoRALinear.fromLinear(
+        Object.assign(new (bt.nn.Linear)(D, D), {}), { r: R, alpha: 8 });
+      // Deterministic base and a non-zero adapter (so A's gradient does not vanish through B=0).
+      keepAlive(lin.weight); keepAlive(lin.bias);
+      const w = lin;  // fields are runtime-mutable
+      w.weight = keepAlive(seedFill([D, D], 1000 + i)); w.weight.requiresGrad = false; lin.registerBuffer("weight", w.weight);
+      w.bias = keepAlive(seedFill([D], 5000 + i)); w.bias.requiresGrad = false; lin.registerBuffer("bias", w.bias);
+      w.loraA = keepAlive(seedFill([R, D], 2000 + i, 0.3)); w.loraA.requiresGrad = true;
+      w.loraB = keepAlive(seedFill([D, R], 3000 + i, 0.3)); w.loraB.requiresGrad = true;
+      blocks.push(lin);
+    }
+    const x0 = keepAlive(seedFill([BATCH, D], 42));
+
+    const zeroGrads = () => { for (const b of blocks) { b.loraA.grad = null; b.loraB.grad = null; } };
+    const snap = async () => {
+      const g = [];
+      for (const b of blocks) g.push([Array.from(await b.loraA.grad.toArray()), Array.from(await b.loraB.grad.toArray())]);
+      return g;
+    };
+
+    // ── Resident reference: full tape, one backward. ──
+    let refLoss;
+    const refGrads = await scope(async () => {
+      zeroGrads();
+      let h = x0;
+      for (const b of blocks) h = b.forward(h);
+      const loss = h.sum();
+      refLoss = (await loss.toArray())[0];
+      loss.backward();
+      return snap();
+    });
+
+    // ── Streaming: each block's frozen base streamed through a window sized for ~2 bases. ──
+    zeroGrads();
+    const baseBytes = D * D * 4;
+    const align = device().storageAlign;
+    const slot = Math.ceil(baseBytes / align) * align;
+    const win = device().window(2 * slot);
+    const trainBlocks = [];
+    for (const b of blocks) {
+      const baseData = await b.weight.toArray();
+      trainBlocks.push({
+        weights: [baseData], shapes: [[D, D]], params: [b.loraA, b.loraB],
+        run: (h, wnd) => { const saved = b.weight; b.weight = wnd[0]; const y = b.forward(h); b.weight = saved; return y; },
+      });
+    }
+    const lossT = await streamTrainStep(win, x0, trainBlocks, (o) => o.sum());
+    const streamLoss = (await lossT.toArray())[0];
+    const winUsed = win.used;
+    win.free();
+    const streamGrads = await snap();
+
+    // ── Compare. ──
+    const worstAbs = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+    const within = (a, b) => { for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > ATOL + RTOL * Math.abs(b[i])) return false; return true; };
+    let worstA = 0, worstB = 0, allWithin = true;
+    for (let i = 0; i < BLOCKS; i++) {
+      worstA = Math.max(worstA, worstAbs(streamGrads[i][0], refGrads[i][0]));
+      worstB = Math.max(worstB, worstAbs(streamGrads[i][1], refGrads[i][1]));
+      allWithin = allWithin && within(streamGrads[i][0], refGrads[i][0]) && within(streamGrads[i][1], refGrads[i][1]);
+    }
+    const lossAgree = Math.abs(refLoss - streamLoss) <= ATOL + RTOL * Math.abs(refLoss);
+    const windowBounded = winUsed <= 2 * slot;
+
+    say(`loss: resident ${refLoss.toFixed(6)} · streamed ${streamLoss.toFixed(6)} — ${lossAgree ? "agree" : "DIFFER"}`);
+    say(`adapter grad max |Δ| vs resident: A ${worstA.toExponential(2)} · B ${worstB.toExponential(2)} — ${allWithin ? "within golden tolerance" : "OUT OF BAND"}`);
+    say(`window ${(2 * slot / 1024) | 0} KB (~2 bases) · used ${(winUsed / 1024) | 0} KB · backbone base bytes ${(BLOCKS * baseBytes / 1024) | 0} KB`);
+    say(`faults: ${device().faults.count}`);
+
+    const ok = allWithin && lossAgree && windowBounded && device().faults.count === 0;
+    say(ok ? "\nstreamed training: the adapter gradients match the resident run, weights bounded by the window"
+          : "\n**streamed training: a check did not hold**");
+    window.__streamTrain = {
+      text: lines.join("\n"), ok, allWithin, lossAgree, windowBounded,
+      worstA, worstB, winUsed, backboneBytes: BLOCKS * baseBytes, faults: device().faults.count,
+    };
+  } catch (err) {
+    window.__streamTrain = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>

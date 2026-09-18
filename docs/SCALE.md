@@ -622,9 +622,29 @@ nightly on a real adapter (`refuse_if_software` holds).
   throws rather than silently skipping it. `lora.ts` (nightly `lora`, adapter-independent)
   gains three checks: every `Linear` adapted with the forward unchanged and params reduced to
   adapters; a name target adapts only its match with a no-op second call; the Sequential-child
-  guard throws. All 11 LoRA checks pass on apple/metal-3. Remaining Step 7: `fromConv2d`/conv
-  targeting (needs the base conv's geometry exposed), the streamed forward+backward residency
-  rule, the Python mirror, and the `finetune.py` GPU gate.
+  guard throws. All 11 LoRA checks pass on apple/metal-3.
+- **2026-09-18, conv targeting landed** (borch-ts `peft.ts`). `LoRAConv2d.fromConv2d(conv)`
+  wraps a trained `Conv2d` as the frozen base, carrying its stride/padding/dilation/groups —
+  read through a narrow typed view because those are private (torch stores them as tuples, so
+  borch does not expose the single number as a public attribute) and are not recoverable from
+  the weight shape. `applyLora`'s default target set is now every adaptable leaf (`Linear` or
+  `Conv2d`), dispatching `fromLinear`/`fromConv2d` by type; the gate's Linear-only set is an
+  explicit `targets`. `lora.ts` gains a check: adapting a `Conv2d` with non-default geometry
+  (stride 2, padding 1) leaves the forward unchanged (a weights-only copy would not). All 12
+  LoRA checks pass.
+- **2026-09-18, the residency rule landed** (borch-ts `stream_train.ts`, `streamTrainStep`).
+  The frozen base is resident only while a block runs, in both passes: forward streams each
+  block through the window keeping only the boundary activation; backward walks the blocks in
+  reverse, refills each block's weights, recomputes its forward with the tape on from the saved
+  boundary, and flows the gradient into the resident adapters and the block input. It is **not**
+  `checkpoint()` — that recomputes synchronously, but refilling the window is `async` (a staging
+  map), so the reverse pass is written out and awaits each refill; the gradient arithmetic is the
+  same `flow`. `stream_train_probe` (nightly `stream-train`, adapter-independent): a 4-block
+  LoRA stack trained one step with the base streamed through a window sized for ~2 bases gives
+  adapter gradients **bit-identical** to the fully-resident run (max |Δ| 0.00 on A and B), loss
+  equal, window used a quarter of the backbone's base bytes, faults 0 — on apple/metal-3.
+  Remaining Step 7: the Python mirror (`borch_webgpu`), and the `finetune.py` GPU gate (≥ 300 MB
+  backbone in a ≤ 256 MB window, held-out accuracy ≥ the frozen-head baseline).
 
 ### Step 8 — What this plan does not do
 

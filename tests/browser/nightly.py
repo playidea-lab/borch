@@ -159,6 +159,10 @@ CHECKS = [
     # a small window — the resident layer output must come back bit-identical. Needs bimm-ts
     # from esm.sh, so it runs where the CDN is reachable (not offline CI).
     ("stream-model", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/stream_model_probe.py"]),
+    # docs/SCALE.md Step 7: a LoRA adapter trained one step on a streamed frozen backbone —
+    # the adapter gradients must equal the fully-resident run's, with the frozen weights bounded
+    # by the window. Imports only borch-ts (no CDN), so adapter-independent and CI-runnable.
+    ("stream-train", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/stream_train_probe.py"]),
 ]
 
 
