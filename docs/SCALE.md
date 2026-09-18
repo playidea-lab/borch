@@ -359,7 +359,15 @@ nightly on a real adapter (`refuse_if_software` holds).
   `weight.weightBinding()`. So a windowed conv weight is read as its slice across all three
   forward kernels (direct, tiled, subgroup) and the backward. `window_probe.py`: `conv2d`
   with a windowed weight is bit-identical to a normal one on a small shape (3→4, direct)
-  and a larger one (16→16, tiled/subgroup) — apple/metal-3, faults 0, golden 4057/0. Next:
+  and a larger one (16→16, tiled/subgroup) — apple/metal-3, faults 0, golden 4057/0.
+- **2026-09-18, eviction gate landed.** The window is one buffer with many slots, so the
+  whole-buffer age guard is too coarse (evicting one block would kill every windowed
+  tensor); instead each slot offset carries a generation (`Window.gens`), bumped on `place`
+  and on `evict(slot)`. `Tensor.inWindow` returns `{weight, evict}`, and the weight's
+  `weightBinding` runs a `windowLive` check that throws when its slot's generation has moved
+  — a stale read after eviction is loud, ADR-003 decision 2. `window_probe.py`: a windowed
+  weight works, then `evict()`, then using it throws (`/evicted/`); apple/metal-3 and the
+  5080, faults 0. Next:
   age-gated eviction, the bimm plan scheduler (block streaming, workbench feature pass),
   and the f16 raw weight.
 
