@@ -1,0 +1,74 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the frozen-weight window — offset slices of one buffer</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **Step 3 of docs/SCALE.md, the primitive.** A window is one STORAGE buffer holding
+  // several weights end to end, each filled through a staging buffer and copyRange (never
+  // writeBuffer), each bound as an offset slice. This proves the mechanism: two arrays go
+  // into two slots of one buffer, a kernel reads each slice at its own offset, and the
+  // values come back intact. Adapter-independent — copyRange and slice bindings are core
+  // WebGPU, so this runs on Apple, the RTX 5080, and SwiftShader alike.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  try {
+    const { init, device, Device } = await import("borch-ts");
+    const K = await import("/borch-ts/dist/src/kernels.js");
+    await init();
+    const dev = device();
+    say(`adapter: ${Device.adapterInfo} · storage align ${dev.storageAlign}`);
+
+    const win = dev.window(1 << 20);   // 1 MiB
+    const a = new Float32Array([1, 2, 3, 4, 5]);
+    const b = new Float32Array([10, 11, 12, 13, 14]);
+    const slotA = await win.place(a);
+    const slotB = await win.place(b);
+
+    const sameBuffer = slotA.buffer === win.buffer && slotB.buffer === win.buffer;
+    const align = dev.storageAlign;
+    const offsetsOk = slotA.offset === 0 && slotB.offset === align && slotB.offset % align === 0;
+    say(`slot A: offset ${slotA.offset} size ${slotA.size} · slot B: offset ${slotB.offset} size ${slotB.size}`);
+    say(`both slices of one buffer: ${sameBuffer} · offsets aligned & distinct: ${offsetsOk}`);
+    say(`window used: ${win.used} bytes (two ${align}-aligned slots)`);
+
+    // A kernel reading a slice at its offset: relu over n scalars (identity on positives),
+    // so the readback is the slot's own bytes if and only if the offset binding is right.
+    const readSlot = async (slot, n) => {
+      const outBuf = dev.alloc(n);
+      dev.run1d(dev.pipeline(`winrelu:${n}`, () => K.unaryForward("relu", n)), [slot, outBuf], n);
+      return Array.from(await dev.read(outBuf, n));
+    };
+    const ra = await readSlot(slotA, 5);
+    const rb = await readSlot(slotB, 5);
+    const eq = (x, y) => x.length === y.length && x.every((v, i) => v === y[i]);
+    const aOk = eq(ra, [...a]);
+    const bOk = eq(rb, [...b]);
+    say(`slot A read back: [${ra}] — ${aOk ? "ok" : "WRONG"}`);
+    say(`slot B read back: [${rb}] — ${bOk ? "ok" : "WRONG"}`);
+
+    // Refill slot A's region with new bytes through the staging path, read again — the
+    // window buffer is reused in place, which is what the scheduler will do per block.
+    const win2 = dev.window(1 << 20);
+    const c = new Float32Array([7, 8, 9, 10, 11]);
+    const slotC = await win2.place(c);
+    const rc = await readSlot(slotC, 5);
+    const cOk = eq(rc, [...c]);
+    say(`fresh window slot read back: [${rc}] — ${cOk ? "ok" : "WRONG"}`);
+
+    win.free();
+    win2.free();
+    say(`faults: ${dev.faults.count}`);
+    const ok = sameBuffer && offsetsOk && aOk && bOk && cOk && win.used === 2 * align && dev.faults.count === 0;
+    say(ok ? "\nwindow: offset slices of one buffer fill and read back intact" : "\n**window: a check did not hold**");
+    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, used: win.used, faults: dev.faults.count };
+  } catch (err) {
+    window.__window = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>

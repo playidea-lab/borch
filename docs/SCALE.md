@@ -333,6 +333,17 @@ nightly on a real adapter (`refuse_if_software` holds).
   freezes dispatches, submits and "buffers held" — held must not grow with block count.
 - **Why**: this is the step that changes what fits. Everything after it makes the window
   cheaper (4, 5) or lets a backward cross it (6, 7).
+- **2026-09-18, primitive landed** (borch-ts `device.ts` `Device.window` + `Window`): one
+  STORAGE buffer outside the pool, `keep`-ed; `place(data)` fills the next 256-aligned slot
+  through a `MAP_WRITE` staging buffer and `copyRange` (never `writeBuffer`) and returns a
+  `{buffer, offset, size}` BindSlot; `free()` returns it. `window_probe.py` (adapter-
+  independent, in CI and nightly): two arrays land in two slots of one buffer at offsets 0
+  and 256, a kernel reads each slice at its offset and the values return intact, a fresh
+  window too, faults 0 — verified on apple/metal-3. Still to come on top of this primitive:
+  the frozen-Tensor window storage with a cached BindSlot through the two weight funnels,
+  age-gated eviction, the bimm plan-walking scheduler, and the f16 raw-buffer weight (Step
+  4 folded in). The staging path waits after each fill (one staging buffer); a ring is a
+  later optimisation when a measured need appears.
 
 ### Step 4 — `shader-f16`: storage first, compute second  · size M+M · depends on 0; parallel to 2–3
 

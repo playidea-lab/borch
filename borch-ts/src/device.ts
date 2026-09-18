@@ -1797,4 +1797,103 @@ export class Device {
    * guard rail sets this from that number.
    */
   static budget = 0;
+
+  /** The storage-binding offset alignment (256 on the cards here). A window's slots must
+   *  start on a multiple of it, or `bindGroupFor` refuses the sub-range. */
+  get storageAlign(): number {
+    return this.limits.minStorageBufferOffsetAlignment;
+  }
+
+  /** A host-writable staging buffer (`MAP_WRITE | COPY_SRC`), for filling a window through
+   *  `copyRange` rather than `writeBuffer`. Not pooled — the window owns and destroys it. */
+  stagingBuffer(bytes: number): GPUBuffer {
+    return this.device.createBuffer({
+      size: bytes,
+      usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC,
+    });
+  }
+
+  /**
+   * **A frozen-weight window** — `docs/SCALE.md` Step 3, ADR-003. One large STORAGE buffer
+   * that holds many weights end to end, each bound as an offset slice; filled through a
+   * host-writable staging buffer and `copyRange` (never `writeBuffer`, which jumps the
+   * queue and would overwrite a slot a pending dispatch still reads). The window lives
+   * outside the pool and is `keep`-ed, so a scope close does not reclaim it; `free()`
+   * returns it. `bytes` is capped at the device's binding tier — a window sized to one
+   * adapter's tier (Apple's 4 GiB) would fail to bind on another (the RTX 5080's 2 GiB),
+   * so a caller reads the tier per device.
+   */
+  window(bytes: number): Window {
+    const cap = Math.min(bytes, this.limits.maxStorageBufferBindingSize);
+    const buffer = this.device.createBuffer({
+      size: cap,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    this.keep(buffer);
+    return new Window(this, buffer, cap);
+  }
+}
+
+/**
+ * A window's fill cursor and staging. Kept small on purpose — the scheduling (which block
+ * is resident, prefetch, eviction) is the caller's; this only owns the buffer, lays slots
+ * end to end on the alignment, and fills them correctly-ordered.
+ */
+export class Window {
+  /** Next free byte offset, always a multiple of the storage alignment. */
+  private cursor = 0;
+  /** One host-writable staging buffer, grown to the largest slot seen. `place` maps it,
+   *  copies through it, and waits — a ring would let fills overlap, which the scheduler can
+   *  add when a measured need appears. */
+  private staging: GPUBuffer | null = null;
+  private stagingBytes = 0;
+
+  constructor(
+    private readonly dev: Device,
+    readonly buffer: GPUBuffer,
+    readonly capacity: number,
+  ) {}
+
+  /** How much of the window is used, in bytes. */
+  get used(): number {
+    return this.cursor;
+  }
+
+  /**
+   * Places `data` at the next aligned slot and returns the binding for it. The copy rides
+   * a staging buffer (`MAP_WRITE`), so it is ordered against pending dispatches; the wait
+   * afterwards is what lets the one staging buffer serve the next `place`.
+   */
+  async place(data: Float32Array): Promise<BindSlot> {
+    const bytes = data.byteLength;
+    const offset = this.cursor;
+    if (offset + bytes > this.capacity) {
+      throw new Error(
+        `window is full: ${offset} + ${bytes} > ${this.capacity} bytes. ` +
+          "Evict a slot or size the window larger (up to the device's binding tier).",
+      );
+    }
+    if (this.staging === null || this.stagingBytes < bytes) {
+      this.staging?.destroy();
+      this.staging = this.dev.stagingBuffer(bytes);
+      this.stagingBytes = bytes;
+    }
+    await this.staging.mapAsync(GPUMapMode.WRITE);
+    new Float32Array(this.staging.getMappedRange(0, bytes)).set(data);
+    this.staging.unmap();
+    this.dev.copyRange(this.buffer, offset, this.staging, 0, bytes);
+    // The copy is encoded, not sent. Send and wait so the staging buffer is free to be
+    // mapped again for the next slot — and so the slot's bytes are really in place.
+    await this.dev.synchronize();
+    const align = this.dev.storageAlign;
+    this.cursor = Math.ceil((offset + bytes) / align) * align;
+    return { buffer: this.buffer, offset, size: bytes };
+  }
+
+  /** Returns the window and its staging to the driver. The slots' bindings are dead after. */
+  free(): void {
+    this.staging?.destroy();
+    this.staging = null;
+    this.dev.unkeep(this.buffer);
+  }
 }

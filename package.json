@@ -70,6 +70,7 @@
     "envelope2:py": "uv run --with playwright python tests/browser/envelope2.py",
     "ceiling:py": "uv run --with playwright python tests/browser/ceiling.py",
     "checkpoint:py": "uv run --with playwright python tests/browser/checkpoint_probe.py",
+    "window:py": "uv run --with playwright python tests/browser/window_probe.py",
     "folder:py": "uv run --with playwright python tests/browser/folder5k.py --make=5000",
     "hub:py": "uv run --with playwright python tests/browser/hub_py.py --build",
     "offline:py": "uv run --with playwright python tests/browser/marimo_probe.py --bundle",

@@ -151,6 +151,10 @@ CHECKS = [
     # held after the forward must fall. Adapter-independent (values + counts), so it runs in
     # CI on SwiftShader too.
     ("checkpoint",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/checkpoint_probe.py"]),
+    # docs/SCALE.md Step 3: the frozen-weight window primitive — two arrays into two offset
+    # slices of one STORAGE buffer, filled through staging + copyRange, read back at each
+    # offset. Adapter-independent (copyRange, slice bindings are core), so it runs in CI too.
+    ("window",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/window_probe.py"]),
 ]
 
 
