@@ -109,18 +109,42 @@
     const lossAgree = Math.abs(refLoss - streamLoss) <= ATOL + RTOL * Math.abs(refLoss);
     const windowBounded = winUsed <= 2 * slot;
 
+    // ── lossParams: a resident head trained *through the loss* must get the same gradient as a
+    //    resident run — the path the ViT fine-tune's new classifier head takes. ──
+    const head = new (bt.nn.Linear)(D, 3);
+    const labels = Tensor.from(Array.from({ length: BATCH }, (_, i) => i % 3), [BATCH]);
+    const ce = new (bt.nn.CrossEntropyLoss)();
+    const headLoss = (o) => ce.forward(head.forward(o), labels);
+    zeroGrads(); head.weight.grad = null; head.bias.grad = null;
+    let hh = x0; for (const b of blocks) hh = b.forward(hh);
+    ce.forward(head.forward(hh), labels).backward();
+    const refHeadW = Array.from(await head.weight.grad.toArray());
+    const refHeadAdapters = await snap();
+    zeroGrads(); head.weight.grad = null; head.bias.grad = null;
+    const win3 = device().window(2 * slot);
+    await streamTrainSequence(win3, x0, blocks, headLoss, { lossParams: [head.weight, head.bias] });
+    win3.free();
+    const streamHeadW = Array.from(await head.weight.grad.toArray());
+    const streamHeadAdapters = await snap();
+    let headWithin = within(streamHeadW, refHeadW);
+    let worstHead = worstAbs(streamHeadW, refHeadW);
+    for (let i = 0; i < BLOCKS; i++) {
+      headWithin = headWithin && within(streamHeadAdapters[i][0], refHeadAdapters[i][0]) && within(streamHeadAdapters[i][1], refHeadAdapters[i][1]);
+    }
+
     say(`loss: resident ${refLoss.toFixed(6)} · streamed ${streamLoss.toFixed(6)} — ${lossAgree ? "agree" : "DIFFER"}`);
     say(`adapter grad max |Δ| vs resident: A ${worstA.toExponential(2)} · B ${worstB.toExponential(2)} — ${allWithin ? "within golden tolerance" : "OUT OF BAND"}`);
     say(`via streamTrainSequence adapter: max |Δ| ${worstAdapter.toExponential(2)} — ${adapterWithin ? "within golden tolerance" : "OUT OF BAND"}`);
+    say(`lossParams (a head trained through the loss): head grad max |Δ| ${worstHead.toExponential(2)} — ${headWithin ? "within golden tolerance" : "OUT OF BAND"}`);
     say(`window ${(2 * slot / 1024) | 0} KB (~2 bases) · used ${(winUsed / 1024) | 0} KB · backbone base bytes ${(BLOCKS * baseBytes / 1024) | 0} KB`);
     say(`faults: ${device().faults.count}`);
 
-    const ok = allWithin && adapterWithin && lossAgree && windowBounded && device().faults.count === 0;
+    const ok = allWithin && adapterWithin && headWithin && lossAgree && windowBounded && device().faults.count === 0;
     say(ok ? "\nstreamed training: the adapter gradients match the resident run (hand-built and via the adapter), weights bounded by the window"
           : "\n**streamed training: a check did not hold**");
     window.__streamTrain = {
-      text: lines.join("\n"), ok, allWithin, adapterWithin, lossAgree, windowBounded,
-      worstA, worstB, worstAdapter, winUsed, backboneBytes: BLOCKS * baseBytes, faults: device().faults.count,
+      text: lines.join("\n"), ok, allWithin, adapterWithin, headWithin, lossAgree, windowBounded,
+      worstA, worstB, worstAdapter, worstHead, winUsed, backboneBytes: BLOCKS * baseBytes, faults: device().faults.count,
     };
   } catch (err) {
     window.__streamTrain = { error: String(err && err.stack || err), text: lines.join("\n") };

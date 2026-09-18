@@ -68,13 +68,16 @@ async function placeBlock(win: Window, blk: TrainBlock): Promise<{ weights: Tens
  * then steps its optimiser over the adapters.
  *
  * `loss` must return a scalar (a `[]`-shaped tensor). The frozen weights are streamed, so the
- * window holds at most one block's worth at a time in either pass.
+ * window holds at most one block's worth at a time in either pass. `opts.lossParams` are
+ * resident trainable tensors used **inside `loss`** rather than in a streamed block — a new
+ * classification head, say — whose gradients are harvested from the loss's own backward.
  */
 export async function streamTrainStep(
   win: Window,
   input: Tensor,
   blocks: readonly TrainBlock[],
   loss: (output: Tensor) => Tensor,
+  opts: { lossParams?: readonly Tensor[] } = {},
 ): Promise<Tensor> {
   // ── Forward: stream, keeping only the boundary activation between blocks. ──
   // boundaries[k] is the input to block k; boundaries[n] is the final output.
@@ -106,6 +109,12 @@ export async function streamTrainStep(
     const seed = Tensor.full(l.shape, 1);
     const grads = flow([l], [seed], (a, b) => a.add(b));
     g = s.keep(grads.get(hLeaf) ?? Tensor.zeros(hLeaf.shape));
+    // Resident trainable params used inside the loss (a new head) get their gradient here — the
+    // loss's backward already computed it; extract and accumulate it before the scope closes.
+    for (const p of opts.lossParams ?? []) {
+      const gp = grads.get(p);
+      if (gp !== undefined) p.grad = p.grad === null ? s.keep(gp) : s.keep(p.grad.add(gp));
+    }
     lossVal = s.keep(l);
   }
 
@@ -200,8 +209,9 @@ export async function streamTrainSequence(
   input: Tensor,
   modules: readonly Module[],
   loss: (output: Tensor) => Tensor,
-  opts: { select?: BufferSelect } = {},
+  opts: { select?: BufferSelect; lossParams?: readonly Tensor[] } = {},
 ): Promise<Tensor> {
-  const blocks = await Promise.all(modules.map((m) => trainBlock(m, opts)));
-  return streamTrainStep(win, input, blocks, loss);
+  const selectOpt = opts.select ? { select: opts.select } : {};
+  const blocks = await Promise.all(modules.map((m) => trainBlock(m, selectOpt)));
+  return streamTrainStep(win, input, blocks, loss, opts.lossParams ? { lossParams: opts.lossParams } : {});
 }
