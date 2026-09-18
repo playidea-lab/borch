@@ -112,6 +112,10 @@ CHECKS = [
     # a backbone with LoRA (a folder of colour classes), scores it, and exports a model — the
     # fine-tune path the workbench page says tissue needs. Network (hub fetches a ViT-Tiny) + GPU.
     ("workbench-lora:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/workbench_lora_py.py", "--build"]),
+    # docs/SCALE.md conv perf: the conv input-gradient (dX) on subgroup matrices vs the direct
+    # reference — bit-identical, on shapes the golden is too small to reach. Skips where there
+    # are no subgroup matrices.
+    ("conv-dx", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/conv_dx_probe.py"]),
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),

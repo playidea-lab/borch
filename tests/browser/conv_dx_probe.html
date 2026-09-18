@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>conv input-gradient on subgroup matrices vs the direct reference</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **The dX subgroup path is new and the golden's conv cases are too small to reach it**
+  // (it needs 8-aligned channels/width). So this checks it directly: a conv's input gradient
+  // computed with the subgroup matrices (`convForwardSubgroup` turned) must equal the direct
+  // kernel's, which is the reference when `Device.subgroupMatrix` is turned off. Several
+  // qualifying shapes — same-padding, stride 1, kernels 1×1 and 3×3, 8-aligned.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  try {
+    const bt = await import("borch-ts");
+    const { init, Device, Tensor, nn } = bt;
+    await init();
+    say(`adapter: ${Device.adapterInfo} · subgroupMatrix ${Device.subgroupMatrix}`);
+    if (!Device.subgroupMatrix) { say("no subgroup matrices here — the dX subgroup path never fires; nothing to compare."); window.__convDx = { text: lines.join("\n"), ok: true, skipped: true }; }
+    else {
+      const seed = (n, s) => { const a = new Float32Array(n); let x = s >>> 0; for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * 0.5; } return a; };
+      // (N, C, H, W, O, K, pad) — same-padding stride-1, 8-aligned, kernel 1 and 3.
+      const shapes = [
+        [4, 16, 32, 32, 16, 3, 1],
+        [2, 32, 16, 16, 64, 3, 1],
+        [4, 8, 24, 24, 8, 3, 1],
+        [2, 16, 16, 16, 32, 1, 0],
+      ];
+      let worst = 0, allOk = true;
+      for (const [N, C, H, W, O, K, P] of shapes) {
+        const xd = seed(N * C * H * W, 11), wd = seed(O * C * K * K, 22);
+        const dxFor = (useSub) => {
+          Device.subgroupMatrix = useSub;
+          const x = Tensor.from(xd, [N, C, H, W]); x.requiresGrad = true;
+          const w = Tensor.from(wd, [O, C, K, K]);
+          x.conv2d(w, null, 1, P).sum().backward();
+          return Array.from(x.grad.toArray());
+        };
+        const ref = dxFor(false);          // direct kernel — the reference
+        const got = dxFor(true);           // subgroup path
+        Device.subgroupMatrix = true;
+        let m = 0; for (let i = 0; i < ref.length; i++) m = Math.max(m, Math.abs((ref[i] ?? 0) - (got[i] ?? 0)));
+        const ok = ref.length === got.length && m <= 1e-4;
+        worst = Math.max(worst, m); allOk = allOk && ok;
+        say(`dX ${C}->${O} ${H}x${W} k${K}: max |Δ| ${m.toExponential(2)} — ${ok ? "ok" : "WRONG"}`);
+      }
+      say(`faults: ${bt.device().faults.count}`);
+      const ok = allOk && bt.device().faults.count === 0;
+      say(ok ? "\ndX subgroup == direct reference across shapes" : "\n**dX subgroup diverges from the reference**");
+      window.__convDx = { text: lines.join("\n"), ok, worst, faults: bt.device().faults.count };
+    }
+  } catch (err) {
+    window.__convDx = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>

@@ -11652,7 +11652,23 @@ fn gelu_tanh_grad(x: f32) -> f32 {
               pad: s.kernel.map((kd, d) => kd - 1 - (s.pad[d] ?? 0)), outDims: s.inDims,
               ...(s.dilation ? { dilation: s.dilation } : {}),
             };
-            if (directFits(back)) {
+            const samePad = s.inDims.every((d, i) => d === (s.outDims[i] ?? d));
+            if (Device.subgroupMatrix && sgfFits(s) && samePad) {
+              // The input gradient on subgroup matrices — `convForwardSubgroup`'s turned path,
+              // the gradient padded like the forward's input (same-padding here) and the weights
+              // laid out turned. This is the direct kernel's biggest cost (dX); the subgroup GEMM
+              // runs it near the forward's speed instead of the scalar tile's. `docs/SCALE.md`.
+              const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+              const Mp = Math.ceil(s.C / 8) * 8, Kp = Math.ceil(s.O / 8) * 8;
+              const turnedW = dev().alloc(kSpace * Mp * Kp);
+              dev().run1d(
+                dev().pipeline(`tmwt:${key}`, () => tapMajorWeights(s.O, s.C, kSpace, true, false)),
+                [weight.weightBinding(), turnedW], kSpace * Mp * Kp);
+              const paddedG = padForSubgroup(s, `${key}:dx`, g.buffer);
+              dev().run(
+                dev().pipeline(`cnft:${key}`, () => convForwardSubgroup(s, false, true)),
+                [paddedG, turnedW, gi], sgfGrid(s, true));
+            } else if (directFits(back)) {
               // The direct kernel turns the weights as it loads them — no pass to make a copy.
               convForwardRun(back, convNDKey(back), g.buffer, weight.weightBinding(), null, gi, undefined, true);
             } else {
