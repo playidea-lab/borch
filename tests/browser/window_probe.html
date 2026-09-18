@@ -17,7 +17,7 @@
   const lines = [];
   const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
   try {
-    const { init, device, Device, Tensor, f32ToF16Bits, f16BitsToF32 } = await import("borch-ts");
+    const { init, device, Device, Tensor, f32ToF16Bits, f16BitsToF32, streamSequential } = await import("borch-ts");
     const K = await import("/borch-ts/dist/src/kernels.js");
     await init();
     const dev = device();
@@ -183,14 +183,42 @@
       say(`f16 slot is half an f32 slot: ${f16Live}B vs ${f32Live}B — ${f16Half ? "yes" : "NO"}`);
     }
 
+    // **A whole sequential network streamed through the window** (Step 3 ④ scheduler). Ten
+    // Linear+ReLU blocks: run resident, then stream through a window sized for three, and
+    // the output must match — the model is larger than the window, yet the answer is the
+    // same, with residency bounded. This is what the scheduler delivers.
+    let netEq = false, netBounded = false;
+    {
+      const D = 16, NB = 10;
+      const need = Math.ceil(D * D * 4 / align) * align;
+      const Ws = [];
+      for (let i = 0; i < NB; i++) Ws.push(seed(D * D, 200 + i));
+      const x0 = Tensor.from(seed(4 * D, 199), [4, D]);
+      let hr = x0;
+      for (const w of Ws) hr = hr.matmul(Tensor.from(w, [D, D])).relu();
+      const ref = Array.from(await hr.toArray());
+      const nw = dev.window(3 * need);   // room for three blocks, not ten
+      const blocks = Ws.map((w) => ({
+        weights: [w], shapes: [[D, D]],
+        run: (h, ws) => h.matmul(ws[0]).relu(),
+      }));
+      const hs = await streamSequential(nw, x0, blocks);
+      const got = Array.from(await hs.toArray());
+      netBounded = nw.used <= 3 * need;
+      nw.free();
+      netEq = ref.length === got.length && ref.every((v, i) => v === got[i]);
+      say(`10-block net streamed through a 3-block window == resident: ${netEq ? "ok" : "WRONG"} `
+        + `(used <= 3 blocks: ${netBounded})`);
+    }
+
     win.free();
     win2.free();
     say(`faults: ${dev.faults.count}`);
     const ok = sameBuffer && offsetsOk && aOk && bOk && cOk && win.used === 2 * align
       && sub.eqf && scl.eqf && convA && convB && refusedGeneric && evictWorks && evictThrows
-      && streamOk && streamBounded && f16Eq && f16Half && dev.faults.count === 0;
+      && streamOk && streamBounded && f16Eq && f16Half && netEq && netBounded && dev.faults.count === 0;
     say(ok ? "\nwindow: offset slices of one buffer fill and read back intact" : "\n**window: a check did not hold**");
-    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, convA, convB, refusedGeneric, evictWorks, evictThrows, streamOk, streamBounded, f16Eq, f16Half, used: win.used, faults: dev.faults.count };
+    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, convA, convB, refusedGeneric, evictWorks, evictThrows, streamOk, streamBounded, f16Eq, f16Half, netEq, netBounded, used: win.used, faults: dev.faults.count };
   } catch (err) {
     window.__window = { error: String(err && err.stack || err), text: lines.join("\n") };
     say(`it could not be measured: ${err}`);

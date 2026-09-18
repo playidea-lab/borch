@@ -118,6 +118,10 @@ export { checkpoint } from "./checkpoint.js";
 // Host IEEE f16 bit conversion — for a frozen weight stored in a window at half the bytes
 // (`docs/SCALE.md` Step 3 ⑤). Not a float16 dtype; raw window bytes.
 export { f16BitsToF32, f32ToF16Bits } from "./half.js";
+// Streaming a sequential stack through a frozen-weight window — the scheduler that lets a
+// model larger than the window fit. `docs/SCALE.md` Step 3 ④.
+export { streamSequential } from "./stream.js";
+export type { StreamBlock } from "./stream.js";
 // The place brackets occupy. `x[1:3]` resolves to `x[slice(1, 3)]` in Python too, so it
 // is the same name.
 export { slice } from "./indexing.js";

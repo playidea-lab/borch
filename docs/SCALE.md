@@ -384,8 +384,17 @@ nightly on a real adapter (`refuse_if_software` holds).
   bytes halve. `window_probe.py`: a matmul with an f16 window weight is bit-identical to the
   same weight rounded to f16 on the host, and the f16 slot is 512 B against the f32 slot's
   1024 B — apple/metal-3 and the 5080, faults 0, golden 4057/0. Step 4's storage win reached
-  through the window as a raw buffer, not a `float16` dtype (ADR-003 decision 5). Next:
-  age-gated eviction, the bimm plan scheduler (block streaming, workbench feature pass),
+  through the window as a raw buffer, not a `float16` dtype (ADR-003 decision 5).
+- **2026-09-18, the scheduler landed (Step 3 ④, the abstraction).** `streamSequential(win,
+  input, blocks)` (`src/stream.ts`) runs a stack block by block: place a block's weights in
+  the window, run it in a scope that keeps only the output, evict, next — so only a few
+  blocks are resident and a model larger than the window fits. `f16: true` stores the
+  weights half-precision. `window_probe.py`: a **10-block Linear+ReLU network streamed
+  through a window sized for 3 is bit-identical to the resident run**, residency bounded —
+  apple/metal-3 and the 5080, faults 0, golden 4057/0. Prefetch-one-ahead is a later speed
+  lever (needs the staging ring); this establishes correctness and bounded memory. Next:
+  the bimm adapter — turn a real EfficientNet/ViT into `StreamBlock`s (needs the upstream
+  `bimm-ts` plan-table re-export) and land it on the workbench feature pass;
   and the f16 raw weight.
 
 ### Step 4 — `shader-f16`: storage first, compute second  · size M+M · depends on 0; parallel to 2–3
