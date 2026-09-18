@@ -405,8 +405,22 @@ nightly on a real adapter (`refuse_if_software` holds).
   This closes the abstraction against a real backbone: not a hand-built Linear stack but a
   shipped model's own blocks. Wired into the census (fifty-one entry points), nightly, and
   `stream-model:py`; needs `bimm-ts@0.12.0` from esm.sh, so it runs where the CDN is
-  reachable. Remaining ④: the reusable bimm adapter (this probe hand-builds the blocks) and
-  a memory-window variant that frees the resident kernels instead of restoring them.
+  reachable.
+- **2026-09-18, the adapter landed (Step 3 ④).** `streamSequence(win, input, modules)` and
+  `streamBlock(module)` (`src/stream_module.ts`, exported) turn a real `Module` into
+  `StreamBlock`s so a caller streams a shipped model without hand-building blocks: it
+  snapshots the module's frozen weights, and the forward swaps the windowed tensors into the
+  module's own parameter fields, runs the genuine `module.forward`, and restores them
+  (non-consuming, so the model stays runnable). **A window slot is a weight operand only** —
+  bound as an offset slice, as matmul's `mat2` and conv's kernel are read, and *not* how a
+  generic op reads offset 0. The first draft streamed **every** parameter and batch-norm
+  read its scale from a slot at offset 0 and threw; the fix is the default `select` — 4-D
+  conv kernels stream, biases and BN affine stay resident (what a frozen eval wants anyway),
+  and a caller streaming Linear `weight`s passes a `select` that admits 2-D `mat2` operands.
+  `stream_model_probe` now checks **both** paths — hand-built blocks and the adapter — against
+  the resident ResNet-18 `layer1`: bit-identical on apple/metal-3, faults 0. Remaining ④: a
+  memory-window variant that frees the resident kernels instead of restoring them, for a model
+  that will not fit resident at all.
 - **2026-09-18, speed lever — direct f16 read (Step 4).** The scalar matmul tile gains a
   `weightF16` variant (`enable f16;`, `B: array<f16>`, `f32(B[…])`), and the matmul funnel
   takes it (`mat2.f16WeightBinding()`) where the weight is an f16 window weight **and** the

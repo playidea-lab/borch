@@ -122,6 +122,10 @@ export { f16BitsToF32, f32ToF16Bits } from "./half.js";
 // model larger than the window fit. `docs/SCALE.md` Step 3 ④.
 export { streamSequential } from "./stream.js";
 export type { StreamBlock } from "./stream.js";
+// The adapter: a real `Module` (a bimm block, a stage) turned into a `StreamBlock`, so a
+// shipped model streams through the window without the caller hand-building blocks.
+export { streamBlock, streamSequence } from "./stream_module.js";
+export type { ParamSelect, StreamBlockOptions } from "./stream_module.js";
 // The place brackets occupy. `x[1:3]` resolves to `x[slice(1, 3)]` in Python too, so it
 // is the same name.
 export { slice } from "./indexing.js";

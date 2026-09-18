@@ -22,7 +22,7 @@
   const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
   try {
     const bt = await import("borch-ts");
-    const { init, device, Device, Tensor, noGrad, streamSequential } = bt;
+    const { init, device, Device, Tensor, noGrad, streamSequential, streamSequence } = bt;
     const bimm = await import("bimm-ts");
     await init();
     say(`adapter: ${Device.adapterInfo}`);
@@ -79,12 +79,25 @@
     let maxAbs = 0;
     for (let i = 0; i < ref.length; i++) maxAbs = Math.max(maxAbs, Math.abs((ref[i] ?? 0) - (streamed[i] ?? 0)));
     say(`layer1 (${blockMods.length} blocks) streamed vs resident: ${eq ? "bit-identical" : "DIFFER"} (max |Δ| ${maxAbs.toExponential(2)})`);
+
+    // The same layer, streamed by the **adapter** rather than hand-built blocks: `streamSequence`
+    // turns each real BasicBlock into a StreamBlock itself (all its frozen params, not just the
+    // conv kernels the loop above picked). Non-consuming — it restores the resident params — so
+    // it must land on the same resident answer.
+    const win2 = device().window(4 * need);
+    const adapterT = await streamSequence(win2, h0, blockMods);
+    const adapter = Array.from(await adapterT.toArray());
+    win2.free();
+    const eqAdapter = ref.length === adapter.length && ref.every((v, i) => v === adapter[i]);
+    let maxAbsA = 0;
+    for (let i = 0; i < ref.length; i++) maxAbsA = Math.max(maxAbsA, Math.abs((ref[i] ?? 0) - (adapter[i] ?? 0)));
+    say(`layer1 via streamSequence adapter vs resident: ${eqAdapter ? "bit-identical" : "DIFFER"} (max |Δ| ${maxAbsA.toExponential(2)})`);
     say(`window ${(4 * need / 1024) | 0} KB (~4 kernels) · used ${(winUsed / 1024) | 0} KB · layer1 conv bytes ${(streamBlocks.reduce((a, b) => a + b.shapes.reduce((x, s) => x + s.reduce((p, v) => p * v, 1) * 4, 0), 0) / 1024) | 0} KB`);
     say(`faults: ${device().faults.count}`);
-    const ok = eq && device().faults.count === 0;
-    say(ok ? "\nreal model: a layer's blocks stream through the window with the resident answer"
+    const ok = eq && eqAdapter && device().faults.count === 0;
+    say(ok ? "\nreal model: a layer's blocks stream through the window — hand-built and via the adapter — with the resident answer"
           : "\n**real model: the streamed layer did not match**");
-    window.__streamModel = { text: lines.join("\n"), ok, eq, maxAbs, blocks: blockMods.length, faults: device().faults.count };
+    window.__streamModel = { text: lines.join("\n"), ok, eq, eqAdapter, maxAbs, maxAbsA, blocks: blockMods.length, faults: device().faults.count };
   } catch (err) {
     window.__streamModel = { error: String(err && err.stack || err), text: lines.join("\n") };
     say(`it could not be measured: ${err}`);

@@ -3,10 +3,10 @@
     uv run --with playwright python tests/browser/stream_model_probe.py [--headed] [--headless]
 
 Builds a bimm ResNet-18, takes layer1 (a Sequential of BasicBlocks — the real conv/BN/
-ReLU/residual mix), streams each block's conv kernels through a small window, and checks
-the layer's output matches the resident one. The resident kernels are zeroed after the
-reference so a failure to use the windowed weights would show. Needs bimm-ts@0.12.0 (the
-plan-table export release) from esm.sh, so it runs where the CDN is reachable.
+ReLU/residual mix), and streams it through a small window two ways: hand-built StreamBlocks
+(conv kernels only), and the `streamSequence` adapter (each real block's frozen params).
+Both must match the resident layer output bit for bit. Needs bimm-ts@0.12.0 (the plan-table
+export release) from esm.sh, so it runs where the CDN is reachable.
 """
 import os
 import sys
@@ -47,7 +47,8 @@ def main(argv):
         print(f"\nstream-model could not be measured: {got['error'][:400]}", file=sys.stderr)
         return 1
     if not got.get("ok"):
-        print(f"\nstream-model did not hold: eq={got.get('eq')} faults={got.get('faults')}", file=sys.stderr)
+        print(f"\nstream-model did not hold: eq={got.get('eq')} eqAdapter={got.get('eqAdapter')} "
+              f"faults={got.get('faults')}", file=sys.stderr)
         return 1
     return 0
 
