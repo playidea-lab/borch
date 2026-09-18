@@ -900,6 +900,13 @@ export class Tensor implements Node<Tensor> {
    */
   private readonly windowSlot?: BindSlot;
   /**
+   * **Throws if this tensor's window slot was evicted** — the slot's generation moved, so
+   * it holds another weight now. `weightBinding` calls it before handing the slice to a
+   * funnel, so an evicted weight is a loud error, never a silent read of the wrong bytes.
+   * Set only for windowed tensors. `docs/SCALE.md` Step 3.
+   */
+  private readonly windowLive?: () => void;
+  /**
    * Upstream in the graph. **Only `detach_` changes this** — hence not
    * `readonly`. Edited anywhere else, the backward of an already-made node
    * changes quietly.
@@ -932,6 +939,7 @@ export class Tensor implements Node<Tensor> {
       gradName?: string;
       dtype?: DType;
       windowSlot?: BindSlot;
+      windowLive?: () => void;
     } = {},
   ) {
     // The two storages arrive through one slot. Forty-seven places inside pass a
@@ -948,6 +956,7 @@ export class Tensor implements Node<Tensor> {
     this.gradName = options.gradName ?? "";
     this.dtype = options.dtype ?? "float32";
     if (options.windowSlot !== undefined) this.windowSlot = options.windowSlot;
+    if (options.windowLive !== undefined) this.windowLive = options.windowLive;
     // If any parent carries a gradient, this does. Inside no_grad nobody does.
     const inherited =
       gradMode.enabled && this.parents.some((p) => p.requiresGrad);
@@ -1091,6 +1100,7 @@ export class Tensor implements Node<Tensor> {
   weightBinding(): BindSlot {
     if (this.windowSlot !== undefined) {
       this.refuseIfDead();
+      this.windowLive?.();   // throws if the slot was evicted — a loud stale read, not a silent one
       return this.windowSlot;
     }
     return this.raw;
@@ -1300,15 +1310,30 @@ export class Tensor implements Node<Tensor> {
 
   /**
    * **A frozen weight placed in a window** — `docs/SCALE.md` Step 3. The values fill the
-   * next window slot and the tensor binds that slice as a weight operand (matmul/conv);
-   * every other op refuses it. `requiresGrad` is false, because a windowed weight is
-   * frozen — a trainable parameter stays resident and scope-managed instead.
+   * next window slot and the returned tensor binds that slice as a weight operand
+   * (matmul/conv); every other op refuses it, and `requiresGrad` is false (a windowed
+   * weight is frozen; a trainable parameter stays resident and scope-managed instead).
+   *
+   * Returns the weight and an `evict()` — the scheduler places a block's weights, runs it,
+   * then evicts to free the slots for the next block. After `evict()` the weight throws on
+   * use (its slot generation moved), so a stale read is loud, not silent.
    */
   static async inWindow(
     win: Window, data: Float32Array, shape: readonly number[], dtype: DType = "float32",
-  ): Promise<Tensor> {
+  ): Promise<{ weight: Tensor; evict: () => void }> {
     const slot = await win.place(data);
-    return new Tensor(bufOf(slot), shape, { windowSlot: slot, dtype, requiresGrad: false });
+    const offset = typeof slot === "object" && "offset" in slot ? slot.offset : 0;
+    const gen = win.genOf(offset);
+    const windowLive = (): void => {
+      if (win.genOf(offset) !== gen) {
+        throw new RuntimeError(
+          "this windowed weight was evicted — its slot holds another weight now. " +
+            "Re-place it in the window before using it.",
+        );
+      }
+    };
+    const weight = new Tensor(bufOf(slot), shape, { windowSlot: slot, windowLive, dtype, requiresGrad: false });
+    return { weight, evict: () => win.evict(slot) };
   }
 
   /**

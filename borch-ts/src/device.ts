@@ -1847,6 +1847,15 @@ export class Window {
    *  add when a measured need appears. */
   private staging: GPUBuffer | null = null;
   private stagingBytes = 0;
+  /**
+   * **The generation of each slot offset.** Bumped every time an offset is (re)written, so
+   * a tensor that recorded the generation it was placed at can tell whether its slot still
+   * holds its weight. The window is one buffer with many slots, so the whole-buffer age
+   * guard is too coarse — evicting one block would kill every windowed tensor; this is
+   * per-slot. `docs/SCALE.md` Step 3, ADR-003 decision 2 (eviction gates on liveness).
+   */
+  private readonly gens = new Map<number, number>();
+  private tick = 0;
 
   constructor(
     private readonly dev: Device,
@@ -1887,7 +1896,28 @@ export class Window {
     await this.dev.synchronize();
     const align = this.dev.storageAlign;
     this.cursor = Math.ceil((offset + bytes) / align) * align;
+    this.tick += 1;
+    this.gens.set(offset, this.tick);
     return { buffer: this.buffer, offset, size: bytes };
+  }
+
+  /** The current generation of the slot at `offset`, `-1` if nothing was ever placed there.
+   *  A windowed tensor records this at creation and compares on every use. */
+  genOf(offset: number): number {
+    return this.gens.get(offset) ?? -1;
+  }
+
+  /**
+   * **Evicts a slot** — bumps its generation so any tensor still pointing at it throws on
+   * next use (its `weightBinding` sees the generation moved), rather than reading whatever
+   * is placed there next. This is the liveness gate ADR-003 decision 2 rests on: eviction
+   * is safe because a stale read is loud, not silent. The bytes stay until overwritten by a
+   * later `place`; a free list that reuses the region is the scheduler's to add (Step 3 ④).
+   */
+  evict(slot: BindSlot): void {
+    if (slot instanceof GPUBuffer) return;
+    this.tick += 1;
+    this.gens.set(slot.offset, this.tick);
   }
 
   /** Returns the window and its staging to the driver. The slots' bindings are dead after. */
