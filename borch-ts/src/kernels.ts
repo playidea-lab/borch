@@ -6069,18 +6069,33 @@ export function batchNormStatsBackward(N: number, C: number, S: number, relu = f
   const per = Math.ceil((N * S) / pieces / lanes) * lanes;
   const T = lanes === 4 ? "vec4<f32>" : "f32";
   const zero = lanes === 4 ? "vec4(0.0)" : "0.0";
+  // The standardised value is **recomputed from the raw input** — `xĥ = (x − μ)·σ⁻¹` —
+  // rather than read from a stored copy: the forward would write that copy over the whole
+  // activation, and here the input is already loaded, so it is arithmetic on data in hand.
+  const bc = lanes === 4 ? "vec4<f32>(m)" : "m";
+  // The fused ReLU's mask is **recomputed too** — `y = relu(x̂·γ + β)`, so `y > 0 ⇔ x̂·γ + β > 0`,
+  // which the standardised value already in hand gives. Reading the stored output back for the
+  // mask was a full-activation read in each of the two backward passes; the scale and shift are
+  // C numbers.
+  const bcB = lanes === 4 ? "vec4<f32>(bb)" : "bb";
   return `
-@group(0) @binding(0) var<storage, read> Xh: array<${T}>;
+@group(0) @binding(0) var<storage, read> X: array<${T}>;
 @group(0) @binding(1) var<storage, read> G: array<${T}>;
-@group(0) @binding(2) var<storage, read_write> PartG: array<f32>;
-@group(0) @binding(3) var<storage, read_write> PartGXh: array<f32>;
-${relu ? `@group(0) @binding(4) var<storage, read> Y: array<${T}>;` : ""}
+@group(0) @binding(2) var<storage, read> Mean: array<f32>;
+@group(0) @binding(3) var<storage, read> InvStd: array<f32>;
+@group(0) @binding(4) var<storage, read_write> PartG: array<f32>;
+@group(0) @binding(5) var<storage, read_write> PartGXh: array<f32>;
+${relu ? `@group(0) @binding(6) var<storage, read> Wt: array<f32>;
+@group(0) @binding(7) var<storage, read> B: array<f32>;` : ""}
 var<workgroup> pg: array<f32, ${BN_GROUP}>;
 var<workgroup> px: array<f32, ${BN_GROUP}>;
 @compute @workgroup_size(${BN_GROUP})
 fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
   let c = w.x;
   let piece = w.y;
+  let m = Mean[c];
+  let inv = InvStd[c];
+  ${relu ? "let wc = Wt[c];\n  let bb = B[c];" : ""}
   let lo = piece * ${per}u;
   let hi = min(lo + ${per}u, ${N * S}u);
   var sg = ${zero};
@@ -6088,9 +6103,10 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: ve
   for (var i = lo + l.x * ${lanes}u; i < hi; i = i + ${BN_GROUP * lanes}u) {
     let n = i / ${S}u;
     let at = ((n * ${C}u + c) * ${S}u + (i - n * ${S}u)) / ${lanes}u;
-    ${relu ? `let gv = select(${zero}, G[at], Y[at] > ${zero});` : "let gv = G[at];"}
+    let xh = (X[at] - ${bc}) * inv;
+    ${relu ? `let gv = select(${zero}, G[at], xh * wc + ${bcB} > ${zero});` : "let gv = G[at];"}
     sg = sg + gv;
-    sgx = fma(gv, Xh[at], sgx);
+    sgx = fma(gv, xh, sgx);
   }
   pg[l.x] = ${lanes === 4 ? "sg.x + sg.y + sg.z + sg.w" : "sg"};
   px[l.x] = ${lanes === 4 ? "sgx.x + sgx.y + sgx.z + sgx.w" : "sgx"};
@@ -6140,21 +6156,26 @@ export function batchNormBackwardApply(
   const T = lanes === 4 ? "vec4<f32>" : "f32";
   const zero = lanes === 4 ? "vec4(0.0)" : "0.0";
   const count = (N * S).toFixed(1);
+  const bc = lanes === 4 ? "vec4<f32>(Mean[c])" : "Mean[c]";
+  const bcB = lanes === 4 ? "vec4<f32>(B[c])" : "B[c]";
   return `
-@group(0) @binding(0) var<storage, read> Xh: array<${T}>;
+@group(0) @binding(0) var<storage, read> X: array<${T}>;
 @group(0) @binding(1) var<storage, read> G: array<${T}>;
 @group(0) @binding(2) var<storage, read> SumG: array<f32>;
 @group(0) @binding(3) var<storage, read> SumGXh: array<f32>;
 @group(0) @binding(4) var<storage, read> Wt: array<f32>;
 @group(0) @binding(5) var<storage, read> InvStd: array<f32>;
-@group(0) @binding(6) var<storage, read_write> Out: array<${T}>;
-${relu ? `@group(0) @binding(7) var<storage, read> Y: array<${T}>;` : ""}
+@group(0) @binding(6) var<storage, read> Mean: array<f32>;
+@group(0) @binding(7) var<storage, read_write> Out: array<${T}>;
+${relu ? `@group(0) @binding(8) var<storage, read> B: array<f32>;` : ""}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
   let c = ((gid * ${lanes}u) / ${S}u) % ${C}u;
-  let xh = Xh[gid];
-  ${relu ? `let gv = select(${zero}, G[gid], Y[gid] > ${zero});` : "let gv = G[gid];"}
+  // Recomputed from the raw input, as batchNormStatsBackward does — no stored standardised copy.
+  let xh = (X[gid] - ${bc}) * InvStd[c];
+  // The fused ReLU's mask from the same recomputed value — y > 0 ⇔ x̂·γ + β > 0 — not a stored Y.
+  ${relu ? `let gv = select(${zero}, G[gid], xh * Wt[c] + ${bcB} > ${zero});` : "let gv = G[gid];"}
   Out[gid] = Wt[c] * InvStd[c] *
     (gv - SumG[c] / ${count} - xh * SumGXh[c] / ${count});
 }`;

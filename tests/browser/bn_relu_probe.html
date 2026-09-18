@@ -1,0 +1,63 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fused BatchNorm+ReLU against the unfused composition</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **The fused BatchNorm→ReLU backward recomputes the ReLU mask** from the scale and shift
+  // (`y > 0 ⇔ x̂·γ + β > 0`) instead of reading the stored output, and recomputes the
+  // standardised value from the input instead of a carried copy. The golden's op-level cases
+  // exercise `batchNormFused` with relu off (plain BatchNorm training), not the fused-relu path
+  // the U-Net uses — so this checks it directly: `batchNormFused(relu=true)` must equal, forward
+  // and in every gradient, `batchNormFused(relu=false)` followed by a separate `.relu()`, whose
+  // pieces the golden covers.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  try {
+    const bt = await import("borch-ts");
+    const { init, Device, Tensor } = bt;
+    await init();
+    say(`adapter: ${Device.adapterInfo} · subgroupMatrix ${Device.subgroupMatrix}`);
+    const seed = (n, s) => { const a = new Float32Array(n); let x = s >>> 0; for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * 2.0; } return a; };
+    // (N, C, H, W) — S a whole number of fours (the vec4 lane) and not (the scalar lane).
+    const shapes = [[4, 16, 12, 12], [2, 32, 7, 7], [3, 8, 16, 16]];
+    const eps = 1e-5;
+    let worst = 0, allOk = true;
+    for (const [N, C, H, W] of shapes) {
+      const xd = seed(N * C * H * W, 7), wd = seed(C, 13), bd = seed(C, 29);
+      // One side fused (relu inside the kernel), the other the same BatchNorm with a separate
+      // ReLU. Fresh leaves each time so the grads do not accumulate across the two.
+      const run = (fused) => {
+        const x = Tensor.from(xd, [N, C, H, W]); x.requiresGrad = true;
+        const w = Tensor.from(wd, [C]); w.requiresGrad = true;
+        const b = Tensor.from(bd, [C]); b.requiresGrad = true;
+        const bn = x.batchNormFused(w, b, eps, fused);
+        const y = fused ? bn.out : bn.out.relu();
+        // A non-uniform upstream gradient, so a wrong mask cannot hide behind ones.
+        const g = Tensor.from(seed(N * C * H * W, 91), [N, C, H, W]);
+        y.mul(g).sum().backward();
+        return { y: Array.from(y.toArray()), dx: Array.from(x.grad.toArray()),
+                 dw: Array.from(w.grad.toArray()), db: Array.from(b.grad.toArray()) };
+      };
+      const ref = run(false);  // BatchNorm(relu off) + separate ReLU — golden-covered pieces
+      const got = run(true);   // the fused-relu kernel
+      const cmp = (a, b2) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs((a[i] ?? 0) - (b2[i] ?? 0))); return m; };
+      const my = Math.max(cmp(ref.y, got.y), cmp(ref.dx, got.dx), cmp(ref.dw, got.dw), cmp(ref.db, got.db));
+      const ok = my <= 1e-4;
+      worst = Math.max(worst, my); allOk = allOk && ok;
+      say(`BN+ReLU ${N}x${C}x${H}x${W}: max |Δ| (y,dx,dw,db) ${my.toExponential(2)} — ${ok ? "ok" : "WRONG"}`);
+    }
+    say(`faults: ${bt.device().faults.count}`);
+    const ok = allOk && bt.device().faults.count === 0;
+    say(ok ? "\nfused BN+ReLU == unfused composition" : "\n**fused BN+ReLU diverges from the composition**");
+    window.__bnRelu = { text: lines.join("\n"), ok, worst, faults: bt.device().faults.count };
+  } catch (err) {
+    window.__bnRelu = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>

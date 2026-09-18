@@ -116,6 +116,10 @@ CHECKS = [
     # reference — bit-identical, on shapes the golden is too small to reach. Skips where there
     # are no subgroup matrices.
     ("conv-dx", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/conv_dx_probe.py"]),
+    # docs/SCALE.md BatchNorm perf: the fused BN->ReLU backward (the ReLU mask and the standardised
+    # value both recomputed, not stored) against BatchNorm + a separate ReLU — bit-identical, the
+    # path the golden's op-level cases do not reach.
+    ("bn-relu", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/bn_relu_probe.py"]),
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),

@@ -784,6 +784,24 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   (`pus`) is the larger half now and is memory-bound — a later lever if a model leans on it. With this
   and the dX path, the U-Net's conv backward is entirely on subgroup matrices; what is left (`cnwg`,
   `pdw`) is the floor the ceiling entry named.
+- **2026-09-19, BatchNorm stopped storing what it can recompute** (`kernels.ts` `batchNormApply`,
+  `batchNormStatsBackward`, `batchNormBackwardApply`; `bn_relu_probe.{html,py}`). With conv off the
+  scalar tiles, the BatchNorm passes were the next-largest block (≈17 % of a 96 px step, more at
+  192 px), and they are **memory-bound** — the lever is fewer full-activation touches, not faster
+  arithmetic. Two were carried that need not be. **(1)** The forward wrote the standardised value
+  `x̂` out as a second full tensor for the backward to read; the backward now recomputes it from the
+  saved input (`x̂ = (x−μ)·σ⁻¹`, the input already loaded), so the forward writes one tensor, not two,
+  and one full allocation per layer is gone. **(2)** The fused BN→ReLU backward read the stored output
+  back over the whole activation, in *both* backward passes, only to test the ReLU mask; since
+  `y > 0 ⇔ x̂·γ + β > 0` and `x̂` is now in hand, the mask is recomputed from the C-sized scale and
+  shift and the full read dropped from each pass. Measured on U-Net batch 16, apple/metal-3: at 96 px
+  the BatchNorm block went ≈ 1.27 → 0.98 ms (`bnsb` 74 → 51 µs a call, its reads cut a third exactly),
+  step ≈ 10.1 → 9.5 ms; at 192 px ≈ 6.03 → 4.55 ms, step 24.7 → 23.5 ms. Correct two ways — golden
+  4057/0 (the relu-off BatchNorm backward) and `bn_relu_probe`, which holds the **fused-relu** path the
+  golden's op-level cases never reach: `batchNormFused(relu=true)` bit-identical (0.00e+0) to
+  BatchNorm + a separate `.relu()` in `y`, `dx`, `dw`, `db`, on both the vec4 and scalar lanes, faults 0.
+  It is the fifty-eighth browser entry point. The saved input is now version-guarded (`saved:[this]`),
+  so an in-place edit of a BatchNorm input before backward is refused rather than silently recomputed wrong.
 
 ### Step 8 — What this plan does not do
 

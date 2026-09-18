@@ -12585,19 +12585,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       C,
     );
     const out = dev().alloc(this.size);
-    // The backward uses the standardised values again. They come out of the same pass as
-    // the output and are carried — building them afterwards was two more full passes.
-    const xh = dev().alloc(this.size);
+    // The backward needs the standardised values again, but it **recomputes** them from the
+    // saved input (`(x − μ)·σ⁻¹`) rather than reading a stored copy — carrying that copy meant
+    // a whole extra full-activation write here every layer. See `batchNormStatsBackward`.
     const r = relu ? ":r" : "";
     dev().run1d(
-      dev().pipeline(`bna:${key}:${eps}:xh${r}`, () => batchNormApply(N, C, S, eps, true, relu)),
-      [this.buffer, mean, variance, weight.buffer, bias.buffer, out, xh],
+      dev().pipeline(`bna:${key}:${eps}${r}`, () => batchNormApply(N, C, S, eps, false, relu)),
+      [this.buffer, mean, variance, weight.buffer, bias.buffer, out],
       this.size / lanesOf(S),
     );
     const meanT = new Tensor(mean, [C]);
     const varT = new Tensor(variance, [C]);
     const invStd = new Tensor(invStdBuf, [C]);       // from the finish pass
-    const xhat = new Tensor(xh, this.shape);
     const self = this;
     const result = Tensor.make(
       out,
@@ -12608,11 +12607,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         const sumGXh = dev().alloc(C);
         const partG = dev().alloc(C * pieces);
         const partGXh = dev().alloc(C * pieces);
-        // With the ReLU folded in, both backward kernels mask the gradient by the output.
-        const mask = relu ? [out] : [];
+        // With the ReLU folded in, both backward kernels recompute its mask from the scale and
+        // shift (`y > 0 ⇔ x̂·γ + β > 0`) rather than reading the stored output back.
+        const affine = relu ? [weight.buffer, bias.buffer] : [];
         dev().run(
           dev().pipeline(`bnsb:${key}${r}`, () => batchNormStatsBackward(N, C, S, relu)),
-          [xhat.buffer, g.buffer, partG, partGXh, ...mask],
+          [self.buffer, g.buffer, mean, invStdBuf, partG, partGXh, ...affine],
           [C, pieces, 1],
         );
         dev().run1d(
@@ -12625,7 +12625,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
           const gi = dev().alloc(self.size);
           dev().run1d(
             dev().pipeline(`bnba:${key}${r}`, () => batchNormBackwardApply(N, C, S, relu)),
-            [xhat.buffer, g.buffer, sumG, sumGXh, weight.buffer, invStd.buffer, gi, ...mask],
+            [self.buffer, g.buffer, sumG, sumGXh, weight.buffer, invStd.buffer, mean, gi,
+              ...(relu ? [bias.buffer] : [])],
             self.size / lanesOf(S),
           );
           parts.push(new Tensor(gi, self.shape));
@@ -12637,6 +12638,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         return parts;
       },
       "NativeBatchNormBackward0",
+      "float32",
+      [this],
     );
     return { out: result, mean: meanT, variance: varT };
   }
