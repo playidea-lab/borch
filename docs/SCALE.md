@@ -557,9 +557,14 @@ nightly on a real adapter (`refuse_if_software` holds).
   dequantises to f32 scratch (`dequantInt8`, also hand-unpacked). The subgroup matrix is bypassed
   for the quantised operand. `window_probe`: **int8 window matmul == the host-reconstructed
   weight, bit-identical, in a quarter of the f32 slot's bytes** — on apple/metal-3 **and**
-  google/swiftshader (the manual unpack has no feature gate). Remaining: the top-1 accuracy gate
-  on a real model, and the tiled conv int8 read (this is the matmul path only, which is the
-  ≥ 300 MB ViT's whole weight).
+  google/swiftshader (the manual unpack has no feature gate). This is the matmul path — the
+  ≥ 300 MB ViT's whole weight.
+- **2026-09-18, the int8 accuracy gate passed** (`finetune.html`, `streamSequential({int8:true})`).
+  The same ViT-Base fine-tune, its frozen blocks then streamed **as int8** for the held-out
+  evaluation: **top-1 100 % = the f32 backbone's, within 1.0 pt**, on a window a quarter of the
+  f32 bytes, apple/metal-3. So Step 5 holds for the matmul path. What is left is the tiled **conv**
+  int8 read (for a CNN like EfficientNet-B0); the ≥ 300 MB model the plan targets is the ViT, and
+  it is done.
 
 ### Step 6 — Gradient checkpointing  · size M · depends on nothing; parallel to 2–5
 

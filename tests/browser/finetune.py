@@ -51,7 +51,7 @@ def main(argv):
     if refuse_if_software(got.get("adapter"), "the fine-tune gate"):
         return 1
     if not got.get("ok"):
-        print(f"\ngate did not hold: beatsBaseline={got.get('beatsBaseline')} "
+        print(f"\ngate did not hold: beatsBaseline={got.get('beatsBaseline')} int8Close={got.get('int8Close')} "
               f"windowBounded={got.get('windowBounded')} peakUnderBackbone={got.get('peakUnderBackbone')} "
               f"adapterSmall={got.get('adapterSmall')} faults={got.get('faults')}", file=sys.stderr)
         return 1

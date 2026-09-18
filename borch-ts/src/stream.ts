@@ -37,7 +37,7 @@ export async function streamSequential(
   win: Window,
   input: Tensor,
   blocks: readonly StreamBlock[],
-  opts: { f16?: boolean } = {},
+  opts: { f16?: boolean; int8?: boolean } = {},
 ): Promise<Tensor> {
   let h = input;
   for (const blk of blocks) {
@@ -47,9 +47,11 @@ export async function streamSequential(
       const data = blk.weights[i];
       const shape = blk.shapes[i];
       if (data === undefined || shape === undefined) continue;
-      placed.push(opts.f16
-        ? await Tensor.inWindowF16(win, data, shape)
-        : await Tensor.inWindow(win, data, shape));
+      placed.push(opts.int8
+        ? await Tensor.inWindowInt8(win, data, shape)
+        : opts.f16
+          ? await Tensor.inWindowF16(win, data, shape)
+          : await Tensor.inWindow(win, data, shape));
     }
     // Run the block in its own scope, keeping only the output — the block's intermediates
     // go back to the pool at once, so residency stays at one block's activations.

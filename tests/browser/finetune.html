@@ -192,25 +192,42 @@
       });
       for (const v of chunk) loraLogits.push(v);
     }
-    evalWin.free(); win.free();
     let ok = 0; for (let i = 0; i < held.labs.length; i++) if (loraLogits[i] === held.labs[i]) ok++;
     const loraAcc = ok / held.labs.length;
 
+    // ── Held-out top-1 with the frozen blocks read as int8 (Step 5) — a quarter of the window
+    //    bytes; must land within 1.0 pt of the f32 backbone. ──
+    const int8Preds = [];
+    for (let i = 0; i < held.imgs.length; i += BATCH) {
+      // eslint-disable-next-line no-await-in-loop
+      const chunk = await scope(async () => {
+        const h0 = stem(batchTensor(held.imgs, i, BATCH));
+        const out = await streamSequential(evalWin, h0, trainBlocks, { int8: true });
+        return noGrad(() => head.forward(clsFeature(out)).argmax(1)).toArray();
+      });
+      for (const v of chunk) int8Preds.push(v);
+    }
+    let ok8 = 0; for (let i = 0; i < held.labs.length; i++) if (int8Preds[i] === held.labs[i]) ok8++;
+    const int8Acc = ok8 / held.labs.length;
+    evalWin.free(); win.free();
+
     const adapterBytes = adapters.reduce((s, p) => s + p.shape.reduce((a, v) => a * v, 1) * 4, 0);
     say(`LoRA fine-tune: held-out accuracy ${(100 * loraAcc).toFixed(1)}% · ${trainSec.toFixed(1)} s (${(trainSec / EPOCHS).toFixed(1)} s/epoch)`);
+    say(`int8 backbone (Step 5): held-out accuracy ${(100 * int8Acc).toFixed(1)}% — within 1.0 pt of f32: ${int8Acc >= loraAcc - 0.01 ? "yes" : "NO"} · window a quarter`);
     say(`adapter ${(adapterBytes / 1e6).toFixed(2)} MB · training gpu peak ${(gpuPeak / 1e6).toFixed(0)} MB (backbone ${bytesMB.toFixed(0)} MB) · window ${(2 * blockBytes / 1e6).toFixed(0)} MB`);
     say(`faults: ${dev.faults.count}`);
 
     const beatsBaseline = loraAcc >= baseAcc - 1e-9;
+    const int8Close = int8Acc >= loraAcc - 0.01;          // top-1 within 1.0 pt of the f32 backbone
     const windowBounded = 2 * blockBytes <= 256e6;
     const peakUnderBackbone = gpuPeak < entry.bytes;      // the model is never fully resident while training
     const adapterSmall = adapterBytes <= 8e6;   // r=8 on ViT-Base's 48 Linears is ~4.7 MB; the plan's 2 MB is a smaller target set
-    const okAll = beatsBaseline && windowBounded && peakUnderBackbone && adapterSmall && dev.faults.count === 0;
-    say(okAll ? "\nStep 7 gate: a 300 MB backbone fine-tuned in a bounded window, no worse than the frozen-head baseline"
-             : "\n**Step 7 gate: a check did not hold**");
+    const okAll = beatsBaseline && int8Close && windowBounded && peakUnderBackbone && adapterSmall && dev.faults.count === 0;
+    say(okAll ? "\nSteps 5+7 gate: a 300 MB backbone fine-tuned in a bounded window (no worse than the frozen-head baseline), and read as int8 within 1.0 pt of f32"
+             : "\n**gate: a check did not hold**");
     window.__finetune = {
-      text: lines.join("\n"), ok: okAll, beatsBaseline, windowBounded, peakUnderBackbone, adapterSmall,
-      baseAcc, loraAcc, gpuPeakMB: gpuPeak / 1e6, backboneMB: bytesMB, windowMB: 2 * blockBytes / 1e6,
+      text: lines.join("\n"), ok: okAll, beatsBaseline, int8Close, windowBounded, peakUnderBackbone, adapterSmall,
+      baseAcc, loraAcc, int8Acc, gpuPeakMB: gpuPeak / 1e6, backboneMB: bytesMB, windowMB: 2 * blockBytes / 1e6,
       adapterMB: adapterBytes / 1e6, trainSec, faults: dev.faults.count, adapter: Device.adapterInfo,
     };
   } catch (err) {
