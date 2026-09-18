@@ -4,7 +4,7 @@
  "korean": {
   "done": 791,
   "stale": 0,
-  "missing": 519
+  "missing": 520
  },
  "modules": [
   {
@@ -15006,6 +15006,12 @@
        "doc": ""
       },
       {
+       "name": "fromConv2d",
+       "signature": "static fromConv2d(conv: Conv2d, options?: LoRAOptions): LoRAConv2d",
+       "doc": "Wrap an existing (trained) `Conv2d`: its kernel/bias become the frozen base. The base's\n stride/padding/dilation/groups are read from the layer — they are private (torch stores\n them as tuples, so borch does not expose the single number as a public attribute), so\n this reads the runtime fields through a narrow typed view rather than a public getter.",
+       "torch": "from_conv2d"
+      },
+      {
        "name": "adapterState",
        "signature": "adapterState(): Record<string, Tensor>",
        "doc": "",
@@ -15059,12 +15065,12 @@
      "kind": "function",
      "name": "applyLora",
      "signature": "export declare function applyLora(model: Module, options?: ApplyLoraOptions): string[]",
-     "doc": "**Adapt a whole model in place** — the apply-to-model helper (`docs/SCALE.md` Step 7). Walks\n`namedModules()` and swaps every matched `Linear` for a {@link LoRALinear} wrapping it: the\nbase weight/bias become frozen buffers, and a trainable low-rank pair is added, so after this\n`model.parameters()` returns only the adapters and an optimiser touches only them. Returns the\ndotted names swapped (empty is suspicious — usually the `targets` matched nothing).\n\nThe base stays numerically identical: `B` starts at zero, so the adapted model's forward\nequals the original's until the adapter trains. Idempotent — a `LoRALinear` is not a `Linear`,\nso a second call adapts nothing.",
+     "doc": "**Adapt a whole model in place** — the apply-to-model helper (`docs/SCALE.md` Step 7). Walks\n`namedModules()` and swaps every matched `Linear` for a {@link LoRALinear} and every matched\n`Conv2d` for a {@link LoRAConv2d} wrapping it: the base weight/bias become frozen buffers, and\na trainable low-rank adapter is added, so after this `model.parameters()` returns only the\nadapters and an optimiser touches only them. Returns the dotted names swapped (empty is\nsuspicious — usually the `targets` matched nothing).\n\nThe base stays numerically identical: the second adapter factor starts at zero, so the adapted\nmodel's forward equals the original's until the adapter trains. Idempotent — a `LoRALinear` is\nnot a `Linear` (nor `LoRAConv2d` a `Conv2d`), so a second call adapts nothing.",
      "members": [],
      "torch": "apply_lora"
     }
    ],
-   "count": 47
+   "count": 48
   },
   {
    "name": "data",
@@ -24006,5 +24012,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3277
+ "total": 3278
 }

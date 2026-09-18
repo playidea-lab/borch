@@ -27,6 +27,14 @@ class TinyNet extends Module {
   }
 }
 
+/** A tiny conv model — a `Conv2d` field with non-default geometry (stride 2, padding 1), so
+ *  a forward-unchanged check after adaptation proves `fromConv2d` carried the geometry, not
+ *  just the weights. */
+class TinyConvNet extends Module {
+  conv = new Conv2d(4, 6, 3, 2, 1);   // stride 2, padding 1
+  override forward(x: Tensor): Tensor { return this.conv.forward(x); }
+}
+
 function maxAbsDiff(a: ArrayLike<number>, b: ArrayLike<number>): number {
   if (a.length !== b.length) return Infinity;
   let worst = 0;
@@ -209,6 +217,24 @@ export async function report(): Promise<{ text: string; checks: Check[] }> {
     checks.push({ name: "applyLora throws on a Sequential-indexed Linear, not a silent skip",
       ok: loud, note: threw ? `threw: ${msg.slice(0, 80)}` : "did not throw" });
     lines.push(`applyLora guard: threw=${threw}`);
+  }
+
+  // 12) applyLora adapts a Conv2d too: fromConv2d carries the base geometry (stride 2,
+  //     padding 1), so the forward is unchanged (up=0) — a weights-only copy would change it.
+  {
+    const net = new TinyConvNet();
+    const img4 = Tensor.from(pixels(B * 4 * HW * HW, 51), [B, 4, HW, HW]);
+    const before = await net.forward(img4).toArray();
+    const swapped = applyLora(net, { r: 4, alpha: 8 });
+    const after = await net.forward(img4).toArray();
+    const gap = maxAbsDiff(before, after);
+    const isLoraConv = net.getSubmodule("conv") instanceof LoRAConv2d;
+    const params = Object.keys(net.namedParameters());
+    const adapterOnly = params.length === 2 && params.every((k) => k.endsWith("lora_down") || k.endsWith("lora_up"));
+    const ok = swapped.join(",") === "conv" && isLoraConv && gap <= GATE && adapterOnly;
+    checks.push({ name: "applyLora adapts a Conv2d via fromConv2d, geometry preserved, forward unchanged",
+      ok, note: `swapped=[${swapped}] · max |Δ| ${gap.toExponential(2)} · params=[${params}]` });
+    lines.push(`applyLora conv: swapped=[${swapped}] Δ=${gap.toExponential(2)}`);
   }
 
   const failed = checks.filter((c) => !c.ok);

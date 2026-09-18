@@ -170,6 +170,25 @@ export class LoRAConv2d extends Module {
     this.dilation = dilation; this.groups = groups;
   }
 
+  /** Wrap an existing (trained) `Conv2d`: its kernel/bias become the frozen base. The base's
+   *  stride/padding/dilation/groups are read from the layer — they are private (torch stores
+   *  them as tuples, so borch does not expose the single number as a public attribute), so
+   *  this reads the runtime fields through a narrow typed view rather than a public getter. */
+  static fromConv2d(conv: Conv2d, options: LoRAOptions = {}): LoRAConv2d {
+    const g = conv as unknown as { stride: number; padding: number; dilation: number; groups: number };
+    const out = conv.weight.shape[0] ?? 0;
+    const kernelSize = conv.weight.shape[2] ?? 0;
+    const inChannels = (conv.weight.shape[1] ?? 0) * g.groups;
+    const lora = new LoRAConv2d(inChannels, out, kernelSize, {
+      ...options, bias: conv.bias != null,
+      stride: g.stride, padding: g.padding, dilation: g.dilation, groups: g.groups,
+    });
+    const w = lora as { weight: Tensor; bias: Tensor | null };
+    w.weight = conv.weight; w.weight.requiresGrad = false; lora.registerBuffer("weight", w.weight);
+    if (conv.bias) { w.bias = conv.bias; w.bias.requiresGrad = false; lora.registerBuffer("bias", w.bias); }
+    return lora;
+  }
+
   adapterState(): Record<string, Tensor> {
     return { lora_down: this.down, lora_up: this.up };
   }
@@ -222,18 +241,19 @@ export type LoRATargets = ((name: string, module: Module) => boolean) | readonly
 /** Options for {@link applyLora}: the rank/scale of every adapter and which layers to adapt. */
 export interface ApplyLoraOptions extends LoRAOptions { targets?: LoRATargets; }
 
-/** Every `Linear` — the default target set, and the one Step 7's gate uses ("LoRA on all
- *  Linears"). A `LoRALinear` extends `Module`, not `Linear`, so an already-adapted layer is
- *  not re-matched and `applyLora` is safe to call twice. */
-function isPlainLinear(_name: string, m: Module): boolean {
-  return m instanceof Linear;
+/** Every adaptable leaf — a `Linear` or a `Conv2d`. This is the default target set; Step 7's
+ *  gate narrows it to `Linear`s with an explicit `targets`. A `LoRALinear`/`LoRAConv2d` extends
+ *  `Module`, not `Linear`/`Conv2d`, so an already-adapted layer is not re-matched and
+ *  `applyLora` is safe to call twice. */
+function isAdaptable(_name: string, m: Module): boolean {
+  return m instanceof Linear || m instanceof Conv2d;
 }
 
 function makeMatcher(targets: LoRATargets | undefined): (name: string, m: Module) => boolean {
-  if (targets === undefined) return isPlainLinear;
-  if (typeof targets === "function") return (n, m) => isPlainLinear(n, m) && targets(n, m);
+  if (targets === undefined) return isAdaptable;
+  if (typeof targets === "function") return (n, m) => isAdaptable(n, m) && targets(n, m);
   const names = targets;
-  return (n, m) => isPlainLinear(n, m)
+  return (n, m) => isAdaptable(n, m)
     && names.some((t) => n === t || n.endsWith(`.${t}`) || n.split(".").includes(t));
 }
 
@@ -256,30 +276,33 @@ function replaceSubmodule(root: Module, dotted: string, replacement: Module): vo
 
 /**
  * **Adapt a whole model in place** — the apply-to-model helper (`docs/SCALE.md` Step 7). Walks
- * `namedModules()` and swaps every matched `Linear` for a {@link LoRALinear} wrapping it: the
- * base weight/bias become frozen buffers, and a trainable low-rank pair is added, so after this
- * `model.parameters()` returns only the adapters and an optimiser touches only them. Returns the
- * dotted names swapped (empty is suspicious — usually the `targets` matched nothing).
+ * `namedModules()` and swaps every matched `Linear` for a {@link LoRALinear} and every matched
+ * `Conv2d` for a {@link LoRAConv2d} wrapping it: the base weight/bias become frozen buffers, and
+ * a trainable low-rank adapter is added, so after this `model.parameters()` returns only the
+ * adapters and an optimiser touches only them. Returns the dotted names swapped (empty is
+ * suspicious — usually the `targets` matched nothing).
  *
- * The base stays numerically identical: `B` starts at zero, so the adapted model's forward
- * equals the original's until the adapter trains. Idempotent — a `LoRALinear` is not a `Linear`,
- * so a second call adapts nothing.
+ * The base stays numerically identical: the second adapter factor starts at zero, so the adapted
+ * model's forward equals the original's until the adapter trains. Idempotent — a `LoRALinear` is
+ * not a `Linear` (nor `LoRAConv2d` a `Conv2d`), so a second call adapts nothing.
  */
 export function applyLora(model: Module, options: ApplyLoraOptions = {}): string[] {
   const { targets, r, alpha } = options;
   const match = makeMatcher(targets);
   // Collect first, then swap: replacing a parent's field while still walking would have the
   // walk meet a mix of old and new, and the matched layers are leaves so nothing nests.
-  const hits: [string, Linear][] = [];
+  const hits: [string, Module][] = [];
   for (const [name, module] of model.namedModules()) {
-    if (name && match(name, module) && module instanceof Linear) hits.push([name, module]);
+    if (name && match(name, module)) hits.push([name, module]);
   }
+  const opts: LoRAOptions = {};
+  if (r !== undefined) opts.r = r;
+  if (alpha !== undefined) opts.alpha = alpha;
   const swapped: string[] = [];
-  for (const [name, linear] of hits) {
-    const opts: LoRAOptions = {};
-    if (r !== undefined) opts.r = r;
-    if (alpha !== undefined) opts.alpha = alpha;
-    replaceSubmodule(model, name, LoRALinear.fromLinear(linear, opts));
+  for (const [name, module] of hits) {
+    const adapter = module instanceof Linear ? LoRALinear.fromLinear(module, opts)
+      : LoRAConv2d.fromConv2d(module as Conv2d, opts);
+    replaceSubmodule(model, name, adapter);
     swapped.push(name);
   }
   return swapped;
