@@ -375,7 +375,16 @@ nightly on a real adapter (`refuse_if_software` holds).
   `window_probe.py`: **24 blocks stream through a window sized for 3** (matmul each,
   bit-identical to the normal weight), and `used` stays at one block's bytes (1 KB) against
   a 3 KB cap — a model larger than the window fits. apple/metal-3, faults 0. This is the
-  bounded-memory mechanism Step 3 exists for. Next:
+  bounded-memory mechanism Step 3 exists for.
+- **2026-09-18, f16 raw weight landed (Step 3 ⑤).** `Tensor.inWindowF16(win, data, shape)`
+  packs the f32 values to IEEE f16 on the host (`f32ToF16Bits`, `src/half.ts`) and places
+  the bytes; on use, `weightBinding` unpacks the slot to an f32 scratch with `unpackHalf`
+  (core WGSL `unpack2x16float` — **no `shader-f16` needed**, so the storage win is on every
+  device; `Device.f16` only buys a later direct-f16 read). The maths stays f32, the resident
+  bytes halve. `window_probe.py`: a matmul with an f16 window weight is bit-identical to the
+  same weight rounded to f16 on the host, and the f16 slot is 512 B against the f32 slot's
+  1024 B — apple/metal-3 and the 5080, faults 0, golden 4057/0. Step 4's storage win reached
+  through the window as a raw buffer, not a `float16` dtype (ADR-003 decision 5). Next:
   age-gated eviction, the bimm plan scheduler (block streaming, workbench feature pass),
   and the f16 raw weight.
 

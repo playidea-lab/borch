@@ -1893,7 +1893,7 @@ export class Window {
    * a staging buffer (`MAP_WRITE`), so it is ordered against pending dispatches; the wait
    * afterwards is what lets the one staging buffer serve the next `place`.
    */
-  async place(data: Float32Array): Promise<BindSlot> {
+  async place(data: Float32Array | Uint16Array): Promise<BindSlot> {
     const bytes = data.byteLength;
     const align = this.dev.storageAlign;
     const need = Math.ceil(bytes / align) * align;   // aligned reservation
@@ -1920,7 +1920,10 @@ export class Window {
       this.stagingBytes = bytes;
     }
     await this.staging.mapAsync(GPUMapMode.WRITE);
-    new Float32Array(this.staging.getMappedRange(0, bytes)).set(data);
+    // Copy raw bytes, so an f32 weight and a half-precision (Uint16Array) one take the
+    // same path — the window does not care which, only how many bytes.
+    new Uint8Array(this.staging.getMappedRange(0, bytes)).set(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
     this.staging.unmap();
     this.dev.copyRange(this.buffer, offset, this.staging, 0, bytes);
     // The copy is encoded, not sent. Send and wait so the staging buffer is free to be
