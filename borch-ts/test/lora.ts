@@ -9,12 +9,23 @@
  * `merge()` reproduces the forward; `parameters()` is the adapter alone while the base
  * stays in `stateDict()`; and a backward reaches A and B but not the frozen base.
  */
-import { Conv2d, Linear } from "../src/nn.js";
-import { LoRAConv2d, LoRALinear } from "../src/peft.js";
+import { Conv2d, Linear, Module, ReLU, Sequential } from "../src/nn.js";
+import { applyLora, LoRAConv2d, LoRALinear } from "../src/peft.js";
 import { SGD } from "../src/optim.js";
 import { Tensor } from "../src/tensor.js";
 
 export interface Check { name: string; ok: boolean; note: string }
+
+/** A tiny model whose `Linear`s are named fields — `applyLora`'s field-swap target. `qkv`
+ *  stands in for an attention projection, so a name-target can pick it out. */
+class TinyNet extends Module {
+  fc1 = new Linear(12, 8);
+  qkv = new Linear(8, 8);
+  head = new Linear(8, 6);
+  override forward(x: Tensor): Tensor {
+    return this.head.forward(this.qkv.forward(this.fc1.forward(x)));
+  }
+}
 
 function maxAbsDiff(a: ArrayLike<number>, b: ArrayLike<number>): number {
   if (a.length !== b.length) return Infinity;
@@ -148,6 +159,56 @@ export async function report(): Promise<{ text: string; checks: Check[] }> {
     checks.push({ name: "LoRAConv2d: adapter-only params, base frozen, grads reach down/up", ok: okSurface && dOk && uOk && frozen,
       note: `params=[${params}] · down≠0=${dOk} up≠0=${uOk} base-frozen=${frozen}` });
     lines.push(`conv surface+grad: params=[${params}] down≠0=${dOk} up≠0=${uOk}`);
+  }
+
+  // ── applyLora — the apply-to-model helper (Step 7) ──
+  const xt = Tensor.from(pixels(B * 12, 33), [B, 12]);
+
+  // 9) default targets adapt every Linear, the forward is unchanged (B=0), and after it
+  //    parameters() is adapters only — no plain Linear weight trains.
+  {
+    const net = new TinyNet();
+    const before = await net.forward(xt).toArray();
+    const swapped = applyLora(net, { r: 4, alpha: 8 });
+    const after = await net.forward(xt).toArray();
+    const gap = maxAbsDiff(before, after);
+    const swappedAll = swapped.slice().sort().join(",") === "fc1,head,qkv";
+    const eachLora = ["fc1", "qkv", "head"].every((n) => net.getSubmodule(n) instanceof LoRALinear);
+    const paramNames = Object.keys(net.namedParameters());
+    const adapterOnly = paramNames.length === 6 && paramNames.every((k) => k.endsWith("lora_A") || k.endsWith("lora_B"));
+    const trainable = net.parameters().every((p) => p.requiresGrad);
+    const ok = swappedAll && eachLora && gap <= GATE && adapterOnly && trainable;
+    checks.push({ name: "applyLora adapts every Linear, forward unchanged, params are adapters only",
+      ok, note: `swapped=[${swapped}] · max |Δ| ${gap.toExponential(2)} · params=${paramNames.length}` });
+    lines.push(`applyLora all: swapped=[${swapped}] Δ=${gap.toExponential(2)} params=${paramNames.length}`);
+  }
+
+  // 10) a name target adapts only the matched Linear; the rest stay plain — and a second
+  //     call is a no-op (a LoRALinear is not a Linear).
+  {
+    const net = new TinyNet();
+    const swapped = applyLora(net, { r: 4, targets: ["qkv"] });
+    const onlyQkv = swapped.join(",") === "qkv"
+      && net.getSubmodule("qkv") instanceof LoRALinear
+      && net.getSubmodule("fc1") instanceof Linear && !(net.getSubmodule("fc1") instanceof LoRALinear)
+      && net.getSubmodule("head") instanceof Linear;
+    const again = applyLora(net, { r: 4, targets: ["qkv"] });
+    checks.push({ name: "applyLora name-target adapts only the match; second call is a no-op",
+      ok: onlyQkv && again.length === 0, note: `swapped=[${swapped}] · again=[${again}]` });
+    lines.push(`applyLora target: swapped=[${swapped}] again=${again.length}`);
+  }
+
+  // 11) a Linear held as an indexed child of a Sequential cannot be swapped by field
+  //     assignment, and applyLora throws rather than silently skipping it.
+  {
+    const seq = new Sequential(new Linear(12, 8), new ReLU(), new Linear(8, 6));
+    let threw = false;
+    let msg = "";
+    try { applyLora(seq); } catch (e) { threw = true; msg = String((e as Error).message ?? e); }
+    const loud = threw && /indexed child|Sequential/.test(msg);
+    checks.push({ name: "applyLora throws on a Sequential-indexed Linear, not a silent skip",
+      ok: loud, note: threw ? `threw: ${msg.slice(0, 80)}` : "did not throw" });
+    lines.push(`applyLora guard: threw=${threw}`);
   }
 
   const failed = checks.filter((c) => !c.ok);

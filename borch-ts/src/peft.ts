@@ -16,7 +16,7 @@
  * plain layer for inference or ONNX export. torch.nn has no LoRA to match, so these are
  * checked by their invariants (borch-ts/test/lora.py), not a golden.
  */
-import { ValueError } from "./errors.js";
+import { RuntimeError, ValueError } from "./errors.js";
 import { Conv2d, Linear, Module } from "./nn.js";
 import { uniformArray } from "./random.js";
 import { noGrad, Tensor } from "./tensor.js";
@@ -212,4 +212,75 @@ export class LoRAConv2d extends Module {
     return `LoRAConv2d(${inC}, ${out}, kernel_size=${this.kernelSize}, r=${this.r}, `
       + `alpha=${this.alpha}, stride=${this.stride}, padding=${this.padding}, groups=${this.groups})`;
   }
+}
+
+/** Which modules `applyLora` adapts: a predicate on `(dottedName, module)`, or a list of
+ *  names — a name matches when it equals a target, ends with `.<target>`, or has the target
+ *  as one of its dotted segments (`"qkv"` catches every `blocks.k.attn.qkv`). */
+export type LoRATargets = ((name: string, module: Module) => boolean) | readonly string[];
+
+/** Options for {@link applyLora}: the rank/scale of every adapter and which layers to adapt. */
+export interface ApplyLoraOptions extends LoRAOptions { targets?: LoRATargets; }
+
+/** Every `Linear` — the default target set, and the one Step 7's gate uses ("LoRA on all
+ *  Linears"). A `LoRALinear` extends `Module`, not `Linear`, so an already-adapted layer is
+ *  not re-matched and `applyLora` is safe to call twice. */
+function isPlainLinear(_name: string, m: Module): boolean {
+  return m instanceof Linear;
+}
+
+function makeMatcher(targets: LoRATargets | undefined): (name: string, m: Module) => boolean {
+  if (targets === undefined) return isPlainLinear;
+  if (typeof targets === "function") return (n, m) => isPlainLinear(n, m) && targets(n, m);
+  const names = targets;
+  return (n, m) => isPlainLinear(n, m)
+    && names.some((t) => n === t || n.endsWith(`.${t}`) || n.split(".").includes(t));
+}
+
+/** Replace the submodule at `dotted` under `root`, then read it back to prove the swap took.
+ *  Field assignment does not reach a child held in a `Sequential`/`ModuleList` array (its
+ *  `namedChildren` reads the array, not fields), so without the read-back the swap would be a
+ *  silent no-op — this makes it a loud throw instead. */
+function replaceSubmodule(root: Module, dotted: string, replacement: Module): void {
+  const cut = dotted.lastIndexOf(".");
+  const parent = root.getSubmodule(cut < 0 ? "" : dotted.slice(0, cut));
+  const leaf = cut < 0 ? dotted : dotted.slice(cut + 1);
+  parent.addModule(leaf, replacement);
+  if (root.getSubmodule(dotted) !== replacement) {
+    throw new RuntimeError(
+      `applyLora could not replace \`${dotted}\`: it is an indexed child of a `
+      + `${parent.constructor.name} (field assignment does not reach a Sequential/ModuleList `
+      + "array). Target a module held as a named field, or wrap the container.");
+  }
+}
+
+/**
+ * **Adapt a whole model in place** — the apply-to-model helper (`docs/SCALE.md` Step 7). Walks
+ * `namedModules()` and swaps every matched `Linear` for a {@link LoRALinear} wrapping it: the
+ * base weight/bias become frozen buffers, and a trainable low-rank pair is added, so after this
+ * `model.parameters()` returns only the adapters and an optimiser touches only them. Returns the
+ * dotted names swapped (empty is suspicious — usually the `targets` matched nothing).
+ *
+ * The base stays numerically identical: `B` starts at zero, so the adapted model's forward
+ * equals the original's until the adapter trains. Idempotent — a `LoRALinear` is not a `Linear`,
+ * so a second call adapts nothing.
+ */
+export function applyLora(model: Module, options: ApplyLoraOptions = {}): string[] {
+  const { targets, r, alpha } = options;
+  const match = makeMatcher(targets);
+  // Collect first, then swap: replacing a parent's field while still walking would have the
+  // walk meet a mix of old and new, and the matched layers are leaves so nothing nests.
+  const hits: [string, Linear][] = [];
+  for (const [name, module] of model.namedModules()) {
+    if (name && match(name, module) && module instanceof Linear) hits.push([name, module]);
+  }
+  const swapped: string[] = [];
+  for (const [name, linear] of hits) {
+    const opts: LoRAOptions = {};
+    if (r !== undefined) opts.r = r;
+    if (alpha !== undefined) opts.alpha = alpha;
+    replaceSubmodule(model, name, LoRALinear.fromLinear(linear, opts));
+    swapped.push(name);
+  }
+  return swapped;
 }

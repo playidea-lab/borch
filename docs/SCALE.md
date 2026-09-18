@@ -610,6 +610,21 @@ nightly on a real adapter (`refuse_if_software` holds).
   adapter export ≤ 2 MB; `lora.ts` invariants hold on the streamed layers.
 - **Why last**: it is the payoff — fine-tuning a model that does not fit, in a tab, with
   a payload borch-fed can carry — and it needs every step before it.
+- **2026-09-18, the apply-to-model helper landed** (borch-ts `peft.ts`, `peft.applyLora`).
+  `applyLora(model, {targets, r, alpha})` walks `namedModules()` and swaps every matched
+  `Linear` for a `LoRALinear.fromLinear` wrapping it — the base weight/bias become frozen
+  buffers, so afterwards `parameters()` is the adapters alone and the optimiser touches only
+  them. `targets` is a predicate or a name list (`["qkv"]` catches every
+  `blocks.k.attn.qkv`); the default is every `Linear`, Step 7's gate set. `B` starts at zero,
+  so the adapted forward equals the original until training, and the call is idempotent (a
+  `LoRALinear` is not a `Linear`). **The swap is guarded**: field assignment does not reach a
+  child held in a `Sequential`/`ModuleList` array, so `applyLora` reads the submodule back and
+  throws rather than silently skipping it. `lora.ts` (nightly `lora`, adapter-independent)
+  gains three checks: every `Linear` adapted with the forward unchanged and params reduced to
+  adapters; a name target adapts only its match with a no-op second call; the Sequential-child
+  guard throws. All 11 LoRA checks pass on apple/metal-3. Remaining Step 7: `fromConv2d`/conv
+  targeting (needs the base conv's geometry exposed), the streamed forward+backward residency
+  rule, the Python mirror, and the `finetune.py` GPU gate.
 
 ### Step 8 — What this plan does not do
 
