@@ -28,6 +28,7 @@
  */
 
 import { enableGrad, flow } from "./autograd.js";
+import { Module } from "./nn.js";
 import { noGrad, scope, Tensor } from "./tensor.js";
 import type { Window } from "./device.js";
 
@@ -135,4 +136,72 @@ export async function streamTrainStep(
   }
 
   return lossVal as Tensor;
+}
+
+/** Set a field (a parameter or a buffer) by its dotted name — the owner's field assignment,
+ *  which is what `namedBuffers`/`namedParameters` read back. */
+function setField(root: Module, dotted: string, value: Tensor): void {
+  const cut = dotted.lastIndexOf(".");
+  const owner = root.getSubmodule(cut < 0 ? "" : dotted.slice(0, cut));
+  const leaf = cut < 0 ? dotted : dotted.slice(cut + 1);
+  (owner as unknown as Record<string, Tensor>)[leaf] = value;
+}
+
+/** Which of a block's frozen buffers stream — a window slot is a weight operand only, so the
+ *  default is buffers with rank ≥ 2 (conv kernels, linear weights). Batch-norm running stats
+ *  (rank 1) stay resident, as a frozen eval reads them generically. */
+export type BufferSelect = (shape: readonly number[]) => boolean;
+
+const isWeightOperandBuffer: BufferSelect = (shape) => shape.length >= 2;
+
+/**
+ * Turns a real (LoRA-adapted, frozen-base) `Module` into a {@link TrainBlock}: its frozen weight
+ * buffers stream, its trainable parameters (the adapters) are harvested for gradients, and the
+ * forward swaps the windowed buffers into the module's fields, runs `module.forward`, and
+ * restores. The bridge from `applyLora`'d modules to {@link streamTrainStep}.
+ */
+export async function trainBlock(module: Module, opts: { select?: BufferSelect } = {}): Promise<TrainBlock> {
+  const select = opts.select ?? isWeightOperandBuffer;
+  const buffers = module.namedBuffers();
+  const names = Object.keys(buffers).filter((n) => {
+    const b = buffers[n];
+    return b !== undefined && select(b.shape);
+  });
+  const weights: Float32Array[] = [];
+  const shapes: number[][] = [];
+  for (const name of names) {
+    const b = buffers[name] as Tensor;
+    // eslint-disable-next-line no-await-in-loop
+    weights.push(await b.toArray());
+    shapes.push([...b.shape]);
+  }
+  const params = module.parameters();
+  return {
+    weights,
+    shapes,
+    params,
+    run(h: Tensor, windowed: readonly Tensor[]): Tensor {
+      const saved = names.map((n) => module.getBuffer(n));
+      names.forEach((n, i) => setField(module, n, windowed[i] as Tensor));
+      const y = module.forward(h);
+      names.forEach((n, i) => setField(module, n, saved[i] as Tensor));
+      return y;
+    },
+  };
+}
+
+/**
+ * One training step over a sequence of real modules, streaming each module's frozen weight
+ * buffers through `win` — the model-facing form of {@link streamTrainStep}. The caller passes
+ * `applyLora`'d modules (frozen base + resident adapter); this fills each adapter's `.grad`.
+ */
+export async function streamTrainSequence(
+  win: Window,
+  input: Tensor,
+  modules: readonly Module[],
+  loss: (output: Tensor) => Tensor,
+  opts: { select?: BufferSelect } = {},
+): Promise<Tensor> {
+  const blocks = await Promise.all(modules.map((m) => trainBlock(m, opts)));
+  return streamTrainStep(win, input, blocks, loss);
 }

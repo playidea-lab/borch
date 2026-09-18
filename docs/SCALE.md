@@ -643,6 +643,15 @@ nightly on a real adapter (`refuse_if_software` holds).
   LoRA stack trained one step with the base streamed through a window sized for ~2 bases gives
   adapter gradients **bit-identical** to the fully-resident run (max |Δ| 0.00 on A and B), loss
   equal, window used a quarter of the backbone's base bytes, faults 0 — on apple/metal-3.
+- **2026-09-18, the streaming-train adapter landed** (borch-ts `stream_train.ts`,
+  `streamTrainSequence`/`trainBlock`). The model-facing form of `streamTrainStep`: `trainBlock`
+  turns a real `applyLora`'d module into a `TrainBlock`, streaming its frozen weight buffers
+  (rank ≥ 2 — conv kernels, linear weights; batch-norm stats stay resident) and harvesting its
+  trainable parameters (the adapters) for gradients; the forward swaps the windowed buffers into
+  the module's fields, runs `module.forward`, and restores. `streamTrainSequence(win, input,
+  modules, loss)` streams a sequence of them. `stream_train_probe` now checks this adapter path
+  beside the hand-built one: adapter gradients **bit-identical** to the resident run (max |Δ|
+  0.00) on apple/metal-3. This is the bridge `finetune.py` will call.
 - **2026-09-18, the Python mirror landed** (`borch_webgpu/_peft.py`, `torch.peft`). The
   individual layers bridge to `_ts.peft` (`LoRALinear`/`LoRAConv2d` are classes over there), but
   `apply_lora` cannot: the WebGPU binding composes models **Python-side** (its `nn.Sequential` is

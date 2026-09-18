@@ -128,8 +128,8 @@ export { streamBlock, streamSequence } from "./stream_module.js";
 export type { ParamSelect, StreamBlockOptions } from "./stream_module.js";
 // Training an adapter on a streamed frozen backbone — the frozen weights resident only while a
 // block runs, in both passes (forward keeps boundaries; backward refills and recomputes). Step 7.
-export { streamTrainStep } from "./stream_train.js";
-export type { TrainBlock } from "./stream_train.js";
+export { streamTrainStep, trainBlock, streamTrainSequence } from "./stream_train.js";
+export type { TrainBlock, BufferSelect } from "./stream_train.js";
 // The place brackets occupy. `x[1:3]` resolves to `x[slice(1, 3)]` in Python too, so it
 // is the same name.
 export { slice } from "./indexing.js";

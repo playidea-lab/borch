@@ -19,7 +19,7 @@
   const ATOL = 1e-4, RTOL = 1e-4;   // the golden tolerance; a recompute uses the same kernels
   try {
     const bt = await import("borch-ts");
-    const { init, device, scope, peft, Tensor, keepAlive, streamTrainStep, Device } = bt;
+    const { init, device, scope, peft, Tensor, keepAlive, streamTrainStep, streamTrainSequence, Device } = bt;
     await init();
     say(`adapter: ${device().constructor.name} · ${Device.adapterInfo}`);
 
@@ -87,29 +87,40 @@
     win.free();
     const streamGrads = await snap();
 
+    // ── The adapter: the same step via streamTrainSequence, which builds the train blocks from
+    //    the real LoRALinear modules itself (streaming their frozen base buffers). ──
+    zeroGrads();
+    const win2 = device().window(2 * slot);
+    await streamTrainSequence(win2, x0, blocks, (o) => o.sum());
+    win2.free();
+    const adapterGrads = await snap();
+
     // ── Compare. ──
     const worstAbs = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
     const within = (a, b) => { for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > ATOL + RTOL * Math.abs(b[i])) return false; return true; };
-    let worstA = 0, worstB = 0, allWithin = true;
+    let worstA = 0, worstB = 0, allWithin = true, worstAdapter = 0, adapterWithin = true;
     for (let i = 0; i < BLOCKS; i++) {
       worstA = Math.max(worstA, worstAbs(streamGrads[i][0], refGrads[i][0]));
       worstB = Math.max(worstB, worstAbs(streamGrads[i][1], refGrads[i][1]));
       allWithin = allWithin && within(streamGrads[i][0], refGrads[i][0]) && within(streamGrads[i][1], refGrads[i][1]);
+      worstAdapter = Math.max(worstAdapter, worstAbs(adapterGrads[i][0], refGrads[i][0]), worstAbs(adapterGrads[i][1], refGrads[i][1]));
+      adapterWithin = adapterWithin && within(adapterGrads[i][0], refGrads[i][0]) && within(adapterGrads[i][1], refGrads[i][1]);
     }
     const lossAgree = Math.abs(refLoss - streamLoss) <= ATOL + RTOL * Math.abs(refLoss);
     const windowBounded = winUsed <= 2 * slot;
 
     say(`loss: resident ${refLoss.toFixed(6)} · streamed ${streamLoss.toFixed(6)} — ${lossAgree ? "agree" : "DIFFER"}`);
     say(`adapter grad max |Δ| vs resident: A ${worstA.toExponential(2)} · B ${worstB.toExponential(2)} — ${allWithin ? "within golden tolerance" : "OUT OF BAND"}`);
+    say(`via streamTrainSequence adapter: max |Δ| ${worstAdapter.toExponential(2)} — ${adapterWithin ? "within golden tolerance" : "OUT OF BAND"}`);
     say(`window ${(2 * slot / 1024) | 0} KB (~2 bases) · used ${(winUsed / 1024) | 0} KB · backbone base bytes ${(BLOCKS * baseBytes / 1024) | 0} KB`);
     say(`faults: ${device().faults.count}`);
 
-    const ok = allWithin && lossAgree && windowBounded && device().faults.count === 0;
-    say(ok ? "\nstreamed training: the adapter gradients match the resident run, weights bounded by the window"
+    const ok = allWithin && adapterWithin && lossAgree && windowBounded && device().faults.count === 0;
+    say(ok ? "\nstreamed training: the adapter gradients match the resident run (hand-built and via the adapter), weights bounded by the window"
           : "\n**streamed training: a check did not hold**");
     window.__streamTrain = {
-      text: lines.join("\n"), ok, allWithin, lossAgree, windowBounded,
-      worstA, worstB, winUsed, backboneBytes: BLOCKS * baseBytes, faults: device().faults.count,
+      text: lines.join("\n"), ok, allWithin, adapterWithin, lossAgree, windowBounded,
+      worstA, worstB, worstAdapter, winUsed, backboneBytes: BLOCKS * baseBytes, faults: device().faults.count,
     };
   } catch (err) {
     window.__streamTrain = { error: String(err && err.stack || err), text: lines.join("\n") };
