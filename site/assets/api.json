@@ -14869,7 +14869,7 @@
       {
        "name": "fromLinear",
        "signature": "static fromLinear(linear: Linear, options?: LoRAOptions): LoRALinear",
-       "doc": "Wrap an existing (trained) `Linear`: its weight/bias become the frozen base.",
+       "doc": "Wrap an existing (trained) `Linear`: its weight/bias become the frozen base. The base the\n constructor allocated (a full-size random weight) is discarded here and its GPU buffer\n released — without that, adapting a whole model leaks the model's weight bytes twice over.",
        "torch": "from_linear"
       },
       {

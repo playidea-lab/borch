@@ -29,7 +29,7 @@
 
 import { enableGrad, flow } from "./autograd.js";
 import { Module } from "./nn.js";
-import { noGrad, scope, Tensor } from "./tensor.js";
+import { device, noGrad, scope, Tensor } from "./tensor.js";
 import type { Window } from "./device.js";
 
 /** One block of a streamed training stack: its frozen weight bytes (streamed through the
@@ -168,9 +168,19 @@ const isWeightOperandBuffer: BufferSelect = (shape) => shape.length >= 2;
  * buffers stream, its trainable parameters (the adapters) are harvested for gradients, and the
  * forward swaps the windowed buffers into the module's fields, runs `module.forward`, and
  * restores. The bridge from `applyLora`'d modules to {@link streamTrainStep}.
+ *
+ * `offload` frees the base buffers from the GPU after reading their bytes to host — so a model
+ * larger than the device budget does not sit resident while it streams. The block then exists
+ * only in host bytes plus the window: its `run` sets the module's fields to the windowed tensors
+ * and does not restore (there is nothing resident to restore to), so the module is usable **only**
+ * through streaming afterwards (`streamSequential` for a no-grad forward, this for training).
  */
-export async function trainBlock(module: Module, opts: { select?: BufferSelect } = {}): Promise<TrainBlock> {
+export async function trainBlock(
+  module: Module,
+  opts: { select?: BufferSelect; offload?: boolean } = {},
+): Promise<TrainBlock> {
   const select = opts.select ?? isWeightOperandBuffer;
+  const offload = opts.offload ?? false;
   const buffers = module.namedBuffers();
   const names = Object.keys(buffers).filter((n) => {
     const b = buffers[n];
@@ -185,15 +195,21 @@ export async function trainBlock(module: Module, opts: { select?: BufferSelect }
     shapes.push([...b.shape]);
   }
   const params = module.parameters();
+  if (offload) {
+    // The bytes are on the host now; release the resident GPU buffers so the base is not
+    // simultaneously resident and streamed. `unkeep` destroys a kept (parameter/buffer) buffer.
+    const dev = device();
+    for (const name of names) dev.unkeep(module.getBuffer(name).raw);
+  }
   return {
     weights,
     shapes,
     params,
     run(h: Tensor, windowed: readonly Tensor[]): Tensor {
-      const saved = names.map((n) => module.getBuffer(n));
+      const saved = offload ? null : names.map((n) => module.getBuffer(n));
       names.forEach((n, i) => setField(module, n, windowed[i] as Tensor));
       const y = module.forward(h);
-      names.forEach((n, i) => setField(module, n, saved[i] as Tensor));
+      if (saved) names.forEach((n, i) => setField(module, n, saved[i] as Tensor));
       return y;
     },
   };
@@ -209,9 +225,11 @@ export async function streamTrainSequence(
   input: Tensor,
   modules: readonly Module[],
   loss: (output: Tensor) => Tensor,
-  opts: { select?: BufferSelect; lossParams?: readonly Tensor[] } = {},
+  opts: { select?: BufferSelect; lossParams?: readonly Tensor[]; offload?: boolean } = {},
 ): Promise<Tensor> {
-  const selectOpt = opts.select ? { select: opts.select } : {};
-  const blocks = await Promise.all(modules.map((m) => trainBlock(m, selectOpt)));
+  const blockOpts: { select?: BufferSelect; offload?: boolean } = {};
+  if (opts.select) blockOpts.select = opts.select;
+  if (opts.offload) blockOpts.offload = opts.offload;
+  const blocks = await Promise.all(modules.map((m) => trainBlock(m, blockOpts)));
   return streamTrainStep(win, input, blocks, loss, opts.lossParams ? { lossParams: opts.lossParams } : {});
 }

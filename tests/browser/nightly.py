@@ -167,6 +167,11 @@ CHECKS = [
     # the adapter gradients must equal the fully-resident run's, with the frozen weights bounded
     # by the window. Imports only borch-ts (no CDN), so adapter-independent and CI-runnable.
     ("stream-train", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/stream_train_probe.py"]),
+    # docs/SCALE.md Step 7's gate: fine-tune a >=300 MB backbone (ViT-Base, 346 MB) with LoRA,
+    # the frozen blocks offloaded and streamed through a bounded window — no worse than a
+    # frozen-head baseline, the backbone never fully resident. Needs the network (hub + esm.sh)
+    # and a real GPU, so it lives in the nightly rather than offline CI.
+    ("finetune", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/finetune.py"]),
 ]
 
 

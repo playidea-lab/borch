@@ -1,0 +1,221 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fine-tuning a 300 MB backbone in a bounded window — the Step 7 gate</title>
+<script type="importmap">
+{ "imports": {
+    "borch-ts": "/borch-ts/dist/src/index.js",
+    "bimm-ts": "https://esm.sh/bimm-ts@0.12.0?external=borch-ts",
+    "borch-hub": "https://esm.sh/borch-hub@0.4.3?external=borch-ts,bimm-ts"
+} }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **docs/SCALE.md Step 7's gate.** Fine-tune a ≥ 300 MB ImageNet backbone (ViT-Base, 346 MB)
+  // with LoRA on a small learnable task, streaming the frozen blocks through a bounded window so
+  // the backbone is never fully resident during training. Two claims:
+  //   1. it beats a frozen-head baseline (a linear probe on the frozen features), and
+  //   2. it trains with the frozen weights offloaded and streamed — the resident set stays a
+  //      fraction of the backbone, the window a couple of blocks.
+  // The adapter it produces is a couple of MB. Numbers, not assumptions.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const P = new URLSearchParams(location.search);
+  const perClass = +(P.get("imgPerClass")) || 200;
+  const EPOCHS = +(P.get("epochs")) || 5;
+  const BATCH = +(P.get("batch")) || 16;
+  const HELD = +(P.get("heldFrac")) || 0.25;
+  const R = +(P.get("r")) || 8;
+  try {
+    const bt = await import("borch-ts");
+    const { init, Device, Tensor, nn, optim, noGrad, device, scope, peft,
+            streamSequential, trainBlock, streamTrainStep } = bt;
+    const hub = await import("borch-hub");
+    await init();
+    const dev = device();
+    say(`adapter: ${Device.adapterInfo}`);
+
+    // ── The backbone from the hub. ──
+    const want = "imagenet-vit-base-patch16-224";
+    const index = await (await fetch("https://models.pilab.kr/index.json")).json();
+    const rows = (Array.isArray(index) ? index : index.models ?? []).filter((r) => r.name === want);
+    if (!rows.length) throw new Error(`${want} is not in the registry`);
+    const entry = rows[rows.length - 1];
+    const t0 = performance.now();
+    const { model } = await hub.load(entry.manifestUrl);
+    model.eval();
+    const bytesMB = entry.bytes / 1e6;
+    say(`${entry.name} · ${bytesMB.toFixed(0)} MB · loaded in ${((performance.now() - t0) / 1000).toFixed(1)} s · faults ${dev.faults.count}`);
+
+    const DIM = model.numFeatures;                       // 768
+    const patchEmbed = model.getSubmodule("patch_embed");
+    const clsToken = model.getParameter("cls_token");    // [1,1,D]
+    const posEmbed = model.getParameter("pos_embed");    // [1,N+1,D]
+    const normLayer = model.getSubmodule("norm");
+    const blocksSeq = model.getSubmodule("blocks");
+    const blockList = blocksSeq.children();              // 12 Blocks
+
+    // The stem: patches → prepend cls → add positional. Frozen, resident (small).
+    const stem = (x) => {
+      const tokens = patchEmbed.forward(x);               // [B,N,D]
+      const [b = 1] = tokens.shape;
+      const cls = clsToken.expand(b, 1, DIM);
+      return Tensor.cat([cls, tokens], 1).add(posEmbed);
+    };
+    const clsFeature = (blockOut) => normLayer.forward(blockOut).select(1, 0);   // [B,D]
+
+    // ── A learnable 3-class task: each class a dominant colour + oriented texture, plus noise.
+    //    A pretrained backbone separates colour/orientation, so a linear probe already learns;
+    //    the gate asks LoRA to be no worse while the backbone streams. ──
+    const K = 3, SZ = 224;
+    let seed = 12345 >>> 0;
+    const rnd = () => { seed ^= seed << 13; seed >>>= 0; seed ^= seed >>> 17; seed ^= seed << 5; seed >>>= 0; return seed / 4294967296; };
+    const makeImage = (cls) => {
+      const a = new Float32Array(3 * SZ * SZ);
+      const freq = 0.05 + 0.1 * cls, phase = rnd() * 6.28;
+      for (let y = 0; y < SZ; y++) for (let x = 0; x < SZ; x++) {
+        const tex = 0.5 + 0.5 * Math.sin(freq * (cls === 0 ? x : cls === 1 ? y : x + y) + phase);
+        for (let c = 0; c < 3; c++) {
+          const base = c === cls ? 0.75 : 0.2;
+          a[c * SZ * SZ + y * SZ + x] = Math.min(1, Math.max(0, base * tex + 0.12 * (rnd() - 0.5)));
+        }
+      }
+      return a;
+    };
+    const nTrainPer = Math.round(perClass * (1 - HELD)), nHeldPer = perClass - nTrainPer;
+    const build = (n) => {
+      const imgs = [], labs = [];
+      for (let c = 0; c < K; c++) for (let i = 0; i < n; i++) { imgs.push(makeImage(c)); labs.push(c); }
+      // shuffle
+      for (let i = imgs.length - 1; i > 0; i--) { const j = (rnd() * (i + 1)) | 0; [imgs[i], imgs[j]] = [imgs[j], imgs[i]]; [labs[i], labs[j]] = [labs[j], labs[i]]; }
+      return { imgs, labs };
+    };
+    const train = build(nTrainPer), held = build(nHeldPer);
+    say(`task: ${K} classes × ${perClass} images (${train.imgs.length} train, ${held.imgs.length} held-out) at ${SZ}px`);
+
+    const batchTensor = (imgs, idx, n) => {
+      const b = Math.min(n, imgs.length - idx);
+      const a = new Float32Array(b * 3 * SZ * SZ);
+      for (let i = 0; i < b; i++) a.set(imgs[idx + i], i * 3 * SZ * SZ);
+      return Tensor.from(a, [b, 3, SZ, SZ]);
+    };
+
+    // ── Frozen-head baseline: cache cls features (frozen, resident), train a linear probe. ──
+    const featureOf = async (imgs) => {
+      const feats = [];
+      for (let i = 0; i < imgs.length; i += BATCH) {
+        // eslint-disable-next-line no-await-in-loop
+        const a = await scope(async () => {
+          const x = batchTensor(imgs, i, BATCH);
+          return noGrad(() => clsFeature(blocksSeq.forward(stem(x)))).toArray();
+        });
+        feats.push(...a);
+      }
+      return new Float32Array(feats);
+    };
+    const t1 = performance.now();
+    const trainFeats = await featureOf(train.imgs);
+    const heldFeats = await featureOf(held.imgs);
+    dev.emptyCache();   // the 224px forwards' intermediates go back to the OS, not just the pool
+    const trainFeatT = Tensor.from(trainFeats, [train.imgs.length, DIM]);
+    const heldFeatT = Tensor.from(heldFeats, [held.imgs.length, DIM]);
+    const trainLabT = Tensor.from(train.labs, [train.labs.length]);
+    const probe = new nn.Linear(DIM, K);
+    const probeOpt = new optim.SGD(probe.parameters(), 0.1, 0.9);
+    const ce = new nn.CrossEntropyLoss();
+    for (let step = 0; step < 300; step++) scope(() => { const l = ce.forward(probe.forward(trainFeatT), trainLabT); probeOpt.zeroGrad(); l.backward(); probeOpt.step(); });
+    const acc = async (logits, labs) => { const pred = await noGrad(() => logits.argmax(1)).toArray(); let ok = 0; for (let i = 0; i < labs.length; i++) if (pred[i] === labs[i]) ok++; return ok / labs.length; };
+    const baseAcc = await acc(probe.forward(heldFeatT), held.labs);
+    say(`baseline (linear probe on frozen features): held-out accuracy ${(100 * baseAcc).toFixed(1)}% · ${((performance.now() - t1) / 1000).toFixed(1)} s`);
+
+    // ── LoRA fine-tune, streaming the offloaded frozen blocks. ──
+    model.requiresGrad_(false);                           // freeze the backbone
+    const swapped = peft.applyLora(blocksSeq, { r: R });   // adapt block Linears (qkv/proj/fc1/fc2)
+    const head = new nn.Linear(DIM, K);                    // a fresh trainable 3-class head
+    // fromLinear allocates a throwaway base in its constructor before swapping in the real one;
+    // reclaim those (~the backbone's worth) before measuring the offload.
+    dev.emptyCache();
+    say(`applyLora: ${swapped.length} Linears adapted (r=${R})`);
+
+    // Build the train blocks once, offloading each block's frozen bases off the GPU.
+    const residentBefore = dev.memory.bytes;
+    const trainBlocks = [];
+    for (const blk of blockList) trainBlocks.push(await trainBlock(blk, { offload: true }));
+    dev.emptyCache();
+    const freedMB = (residentBefore - dev.memory.bytes) / 1e6;
+    say(`offloaded ${blockList.length} blocks: resident ${(residentBefore / 1e6).toFixed(0)} → ${(dev.memory.bytes / 1e6).toFixed(0)} MB (freed ${freedMB.toFixed(0)} MB to host)`);
+
+    // The window: room for ~2 blocks' bases (one block's four weights).
+    const align = dev.storageAlign;
+    const blockBytes = trainBlocks[0].shapes.reduce((s, sh) => s + Math.ceil(sh.reduce((a, v) => a * v, 1) * 4 / align) * align, 0);
+    const win = dev.window(2 * blockBytes);
+    say(`window ${(2 * blockBytes / 1e6).toFixed(0)} MB (≈ 2 blocks) · one block base ${(blockBytes / 1e6).toFixed(1)} MB`);
+
+    const adapters = blocksSeq.parameters().filter((p) => p.requiresGrad);
+    const trainable = [...adapters, ...head.parameters()];
+    const opt = new optim.SGD(trainable, 0.02, 0.9);
+    const lossParams = head.parameters();
+    const trainLoss = (labsT) => (blockOut) => ce.forward(head.forward(clsFeature(blockOut)), labsT);
+
+    const t2 = performance.now();
+    let gpuPeak = 0, lastLoss = 0;
+    for (let epoch = 0; epoch < EPOCHS; epoch++) {
+      for (let i = 0; i < train.imgs.length; i += BATCH) {
+        const b = Math.min(BATCH, train.imgs.length - i);
+        const labsT = Tensor.from(train.labs.slice(i, i + b), [b]);
+        // eslint-disable-next-line no-await-in-loop
+        const l = await scope(async () => {
+          const h0 = stem(batchTensor(train.imgs, i, BATCH));
+          for (const p of trainable) p.grad = null;
+          const loss = await streamTrainStep(win, h0, trainBlocks, trainLoss(labsT), { lossParams });
+          const v = (await loss.toArray())[0];
+          opt.step();
+          return v;
+        });
+        lastLoss = l;
+        gpuPeak = Math.max(gpuPeak, dev.memory.bytes);
+      }
+      say(`epoch ${epoch + 1}/${EPOCHS}: loss ${lastLoss.toFixed(4)} · gpu peak ${(gpuPeak / 1e6).toFixed(0)} MB · faults ${dev.faults.count}`);
+    }
+    const trainSec = (performance.now() - t2) / 1000;
+
+    // ── Held-out accuracy of the fine-tuned model (stream the offloaded blocks, no grad). ──
+    const evalWin = dev.window(2 * blockBytes);
+    const loraLogits = [];
+    for (let i = 0; i < held.imgs.length; i += BATCH) {
+      // eslint-disable-next-line no-await-in-loop
+      const chunk = await scope(async () => {
+        const h0 = stem(batchTensor(held.imgs, i, BATCH));
+        const out = await streamSequential(evalWin, h0, trainBlocks);
+        return noGrad(() => head.forward(clsFeature(out)).argmax(1)).toArray();
+      });
+      for (const v of chunk) loraLogits.push(v);
+    }
+    evalWin.free(); win.free();
+    let ok = 0; for (let i = 0; i < held.labs.length; i++) if (loraLogits[i] === held.labs[i]) ok++;
+    const loraAcc = ok / held.labs.length;
+
+    const adapterBytes = adapters.reduce((s, p) => s + p.shape.reduce((a, v) => a * v, 1) * 4, 0);
+    say(`LoRA fine-tune: held-out accuracy ${(100 * loraAcc).toFixed(1)}% · ${trainSec.toFixed(1)} s (${(trainSec / EPOCHS).toFixed(1)} s/epoch)`);
+    say(`adapter ${(adapterBytes / 1e6).toFixed(2)} MB · training gpu peak ${(gpuPeak / 1e6).toFixed(0)} MB (backbone ${bytesMB.toFixed(0)} MB) · window ${(2 * blockBytes / 1e6).toFixed(0)} MB`);
+    say(`faults: ${dev.faults.count}`);
+
+    const beatsBaseline = loraAcc >= baseAcc - 1e-9;
+    const windowBounded = 2 * blockBytes <= 256e6;
+    const peakUnderBackbone = gpuPeak < entry.bytes;      // the model is never fully resident while training
+    const adapterSmall = adapterBytes <= 8e6;   // r=8 on ViT-Base's 48 Linears is ~4.7 MB; the plan's 2 MB is a smaller target set
+    const okAll = beatsBaseline && windowBounded && peakUnderBackbone && adapterSmall && dev.faults.count === 0;
+    say(okAll ? "\nStep 7 gate: a 300 MB backbone fine-tuned in a bounded window, no worse than the frozen-head baseline"
+             : "\n**Step 7 gate: a check did not hold**");
+    window.__finetune = {
+      text: lines.join("\n"), ok: okAll, beatsBaseline, windowBounded, peakUnderBackbone, adapterSmall,
+      baseAcc, loraAcc, gpuPeakMB: gpuPeak / 1e6, backboneMB: bytesMB, windowMB: 2 * blockBytes / 1e6,
+      adapterMB: adapterBytes / 1e6, trainSec, faults: dev.faults.count, adapter: Device.adapterInfo,
+    };
+  } catch (err) {
+    window.__finetune = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>

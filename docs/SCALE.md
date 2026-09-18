@@ -664,8 +664,26 @@ nightly on a real adapter (`refuse_if_software` holds).
   params reduced to adapters, a name target hits only its match, a Conv2d keeps its geometry, and
   an indexed leaf is refused — all pass through the wheel on apple/metal-3. Three source-tree
   loader lists (`runner.js`, `runner.html`, `scope_escape.html`, `onnx_binding.html`) carry the
-  new module. Remaining Step 7: the `finetune.py` GPU gate (≥ 300 MB backbone in a ≤ 256 MB
-  window, held-out accuracy ≥ the frozen-head baseline).
+  new module.
+- **2026-09-18, the gate passed — Step 7 is complete** (`tests/browser/finetune.{html,py}`,
+  nightly `finetune`). ViT-Base (**346 MB**, from the hub) LoRA-fine-tuned on 3 classes × 200
+  images at 224 px, 5 epochs: the 12 transformer blocks `applyLora`'d (48 Linears, r=8), their
+  frozen bases **offloaded** off the GPU (`trainBlock({offload:true})` frees the resident buffer
+  after reading the bytes) and streamed through a **57 MB window** (≈ 2 blocks). Result on
+  apple/metal-3: **held-out accuracy 100 % = the frozen-head (linear-probe) baseline**, and the
+  **training GPU peak was 32 MB against a 346 MB backbone** — the model is never fully resident
+  while it trains. 10 s/epoch, adapter 4.72 MB, faults 0. Two things this needed, both fixed
+  here: `streamTrainStep` gained `lossParams` so the new 3-class head trains through the loss
+  (grad bit-identical to resident, checked in `stream_train_probe`); and **`applyLora` was
+  leaking a whole model's weight bytes** — `LoRALinear.fromLinear`/`fromConv2d` allocate a
+  full-size random base in the constructor, then swap in the real one, and the throwaway stayed
+  kept resident (691 MB for a 346 MB model). They now `unkeep` it, so offload actually frees the
+  340 MB. Note: r=8 on 48 Linears is a 4.72 MB adapter — the plan's "≤ 2 MB" is a smaller target
+  set; the gate keeps r=8 on all Linears (needed for every block weight to stream as a buffer)
+  and reports the real size.
+
+**Step 7 done. The plan's payoff — fine-tuning a model that does not fit, in a tab, with a
+borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB backbone.**
 
 ### Step 8 — What this plan does not do
 

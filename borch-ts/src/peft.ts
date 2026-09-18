@@ -19,7 +19,7 @@
 import { RuntimeError, ValueError } from "./errors.js";
 import { Conv2d, Linear, Module } from "./nn.js";
 import { uniformArray } from "./random.js";
-import { noGrad, Tensor } from "./tensor.js";
+import { device, noGrad, Tensor } from "./tensor.js";
 
 /** A uniform tensor in [-bound, bound] — the same init `nn` uses, kept local to peft. */
 function uniform(shape: readonly number[], bound: number): Tensor {
@@ -65,13 +65,17 @@ export class LoRALinear extends Module {
     this.r = r; this.alpha = alpha; this.scaling = alpha / r;
   }
 
-  /** Wrap an existing (trained) `Linear`: its weight/bias become the frozen base. */
+  /** Wrap an existing (trained) `Linear`: its weight/bias become the frozen base. The base the
+   *  constructor allocated (a full-size random weight) is discarded here and its GPU buffer
+   *  released — without that, adapting a whole model leaks the model's weight bytes twice over. */
   static fromLinear(linear: Linear, options: LoRAOptions = {}): LoRALinear {
     const [out, inF] = [linear.weight.shape[0] ?? 0, linear.weight.shape[1] ?? 0];
     const lora = new LoRALinear(inF, out, { ...options, bias: linear.bias != null });
     const w = lora as { weight: Tensor; bias: Tensor | null };
+    const throwaway = [w.weight, w.bias];
     w.weight = linear.weight; w.weight.requiresGrad = false; lora.registerBuffer("weight", w.weight);
     if (linear.bias) { w.bias = linear.bias; w.bias.requiresGrad = false; lora.registerBuffer("bias", w.bias); }
+    for (const t of throwaway) if (t) device().unkeep(t.raw);
     return lora;
   }
 
@@ -184,8 +188,10 @@ export class LoRAConv2d extends Module {
       stride: g.stride, padding: g.padding, dilation: g.dilation, groups: g.groups,
     });
     const w = lora as { weight: Tensor; bias: Tensor | null };
+    const throwaway = [w.weight, w.bias];
     w.weight = conv.weight; w.weight.requiresGrad = false; lora.registerBuffer("weight", w.weight);
     if (conv.bias) { w.bias = conv.bias; w.bias.requiresGrad = false; lora.registerBuffer("bias", w.bias); }
+    for (const t of throwaway) if (t) device().unkeep(t.raw);
     return lora;
   }
 
