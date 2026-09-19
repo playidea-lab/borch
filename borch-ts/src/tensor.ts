@@ -2378,7 +2378,7 @@ export class Tensor implements Node<Tensor> {
         dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
       }
     } else if (Device.subgroupMatrix && subgroupMatmulFits(M, K, N)) {
-      const { TM, TN } = subgroupMatmulTile(M, N);
+      const { TM, TN } = subgroupMatmulTile(M, N, K);   // K: the tile that avoids a split, if one does
       const splits = subgroupMatmulSplit(M, K, N);
       // Split, the pieces land in a slab each and are summed in a fixed order.
       const target = splits > 1 ? dev().alloc(M * N * splits) : out;

@@ -1644,10 +1644,46 @@ ${close.join("\n")}
  * 8/16/32/64 columns that divide the matrix, so no tile crosses an edge — a subgroup
  * matrix loads and stores whole 8 × 8 blocks and has no per-element guard.
  */
-export function subgroupMatmulTile(M: number, N: number): { TM: number; TN: number } {
-  const TM = [32, 16, 8].find((t) => M % t === 0) ?? 8;
-  const TN = [64, 32, 16, 8].find((t) => N % t === 0) ?? 8;
-  return { TM, TN };
+export function subgroupMatmulTile(M: number, N: number, K?: number): { TM: number; TN: number } {
+  const TMs = [32, 16, 8].filter((t) => M % t === 0);
+  const TNs = [64, 32, 16, 8].filter((t) => N % t === 0);
+  const largest = { TM: TMs[0] ?? 8, TN: TNs[0] ?? 8 };
+  if (K === undefined) return largest;
+  // **With `K` given — the path that may split its reduction — prefer a tile that avoids the
+  // split.** The largest tile halves the grid, and when that drops it under `sgWant` the
+  // reduction is split and the slabs summed: measured (`kernel_bench mm`, 2026-09-19), a
+  // 3200 × 768 × 192 on the 32 × 64 tile split in two ran 0.103 + 0.020 ms against 0.094 for
+  // the same work on the 16 × 64 tile unsplit — the split cost a third. So among the tiles
+  // with at least sixteen rows *and* sixteen columns, take the largest whose grid already
+  // reaches the want; only when none does fall back to the largest tile and let
+  // `subgroupMatmulSplit` split it. Two guards, both measured the same day:
+  // - **not for a long K.** A weight gradient (`192 × 3152 × 768`, K the tokens) can reach the
+  //   want unsplit only on a 32 × 8 tile, and that ran 0.180 ms against ~0.06 on 32 × 64 split
+  //   eight — for a long reduction the split *is* the right tool, so above `SG_AVOID_SPLIT_MAX_K`
+  //   the largest tile and the split stand.
+  // - **no eight-wide tiles.** An eight-row or eight-column tile reuses one operand block once
+  //   and is slow on its own; 32 × 16 unsplit still beat 32 × 64 split four on 512³ (0.032 vs
+  //   0.049), so sixteen is the floor, not eight.
+  if (K > SG_AVOID_SPLIT_MAX_K) return largest;
+  const want = sgWant();
+  let best: { TM: number; TN: number } | null = null;
+  for (const TM of TMs) for (const TN of TNs) {
+    if (TM < 16 || TN < 16) continue;
+    if ((M / TM) * (N / TN) < want) continue;
+    if (!best || TM * TN > best.TM * best.TN) best = { TM, TN };
+  }
+  return best ?? largest;
+}
+
+/** Above this K the subgroup GEMM keeps its largest tile and splits the reduction rather than
+ *  shrinking the tile to avoid the split — the long-K weight gradients measured 3× slower the
+ *  other way (see `subgroupMatmulTile`). */
+const SG_AVOID_SPLIT_MAX_K = 1024;
+
+/** The grid size the subgroup GEMM aims for before it splits its reduction — see
+ *  `subgroupMatmulSplit` for the sweep behind 512. Overridable for a bench sweep. */
+function sgWant(): number {
+  return Number((globalThis as { BORCH_SG_WANT?: number }).BORCH_SG_WANT ?? 512);
 }
 
 /** Whether `matmulSubgroup` can take a shape: every dimension a multiple of eight. */
@@ -1667,7 +1703,7 @@ export function subgroupMatmulFits(M: number, K: number, N: number): boolean {
  * split brings the grid to at least sixty-four. Each piece takes whole eights of K.
  */
 export function subgroupMatmulSplit(M: number, K: number, N: number): number {
-  const { TM, TN } = subgroupMatmulTile(M, N);
+  const { TM, TN } = subgroupMatmulTile(M, N, K);
   const tiles = (M / TM) * (N / TN);
   // 512, not the 64 of the conv split: a weight gradient of a transformer's linear —
   // 192 × 1576 × 768, 72 tiles of 32 × 64, K the tokens — ran at 2.2 TFLOP/s in the step
@@ -1675,7 +1711,7 @@ export function subgroupMatmulSplit(M: number, K: number, N: number): number {
   // sliver of the GPU. Swept on the bench (`--bench=mm ... :tn`): the four dW shapes of
   // ViT-tiny sum to 0.587 ms at 64, 0.244 at 256, 0.216 at 512, 0.214 at 1024, the
   // summing of the slabs counted. Pieces of at least 64 of K keep the slabs small.
-  const WANT = Number((globalThis as { BORCH_SG_WANT?: number }).BORCH_SG_WANT ?? 512);
+  const WANT = sgWant();
   if (tiles >= WANT) return 1;
   const MIN_PER_SPLIT = 64;
   return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
@@ -1695,7 +1731,7 @@ export function subgroupMatmulSplit(M: number, K: number, N: number): number {
  * compile time (measured) — which is why the workgroup is exactly one subgroup.
  */
 export function matmulSubgroup(M: number, K: number, N: number, transA = false, transB = false): string {
-  const { TM, TN } = subgroupMatmulTile(M, N);
+  const { TM, TN } = subgroupMatmulTile(M, N, K);
   const splits = subgroupMatmulSplit(M, K, N);
   // Whole eights per piece; the last piece is clipped to K.
   const perSplit = Math.ceil(K / 8 / splits) * 8;
@@ -1749,7 +1785,7 @@ ${store.join("\n")}
  * subgroup path. No split, no transpose — the shapes the bench feeds are whole eights. `docs/SCALE.md`.
  */
 export function matmulSubgroupF16(M: number, K: number, N: number): string {
-  const { TM, TN } = subgroupMatmulTile(M, N);
+  const { TM, TN } = subgroupMatmulTile(M, N, K);   // the bench's grid uses the same call
   const am = TM / 8, bn = TN / 8;
   const acc: string[] = [], mma: string[] = [], store: string[] = [];
   for (let i = 0; i < am; i++) for (let j = 0; j < bn; j++) {

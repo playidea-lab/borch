@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the ViT's aligned tokens against the unaligned ones</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js", "bimm-ts": "/node_modules/bimm-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **Padding the token row to a multiple of eight must change nothing a caller can see.**
+  // bimm's ViT pads 197 tokens to 200 on a subgroup-matrix device so attention's batched
+  // matmuls take the subgroup kernel; the padded keys are masked to weight zero and the padded
+  // rows cut before the features come out. This runs the same randomly-initialised ViT-tiny on
+  // the same input with the padding on (`alignTokens`, the default) and off, and compares the
+  // features, the logits, and a gradient (the loss's gradient into `pos_embed`), forward and
+  // backward. The two differ by kernel rounding only — the attention matmuls run on different
+  // kernels — so the gate is 1e-4 relative, far below what a masking mistake would show.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  try {
+    const bt = await import("borch-ts");
+    const bimm = await import("bimm-ts");
+    const { init, device, Device, Tensor, noGrad } = bt;
+    await init();
+    say(`adapter: ${Device.adapterInfo} · subgroupMatrix ${Device.subgroupMatrix}`);
+    if (!Device.subgroupMatrix) {
+      say("no subgroup matrices here — the alignment never fires; nothing to compare.");
+      window.__vitAlign = { text: lines.join("\n"), ok: true, skipped: true };
+    } else {
+      const seed = (n, s) => { const a = new Float32Array(n); let x = s >>> 0; for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * 0.1; } return a; };
+      const model = new bimm.VisionTransformer(1000);
+      // The alignment lives in bimm-ts. A `node_modules/bimm-ts` from before it (an `npm ci` of the
+      // published 0.11) has no `alignTokens`, and then both runs below would be the unaligned model
+      // and this would pass while checking nothing — so refuse loudly instead of skipping.
+      if (typeof model.alignTokens !== "boolean") {
+        throw new Error("this bimm-ts has no `alignTokens` — the token alignment is not in it; build ~/git/bimm (src/vit.ts) and copy its dist over node_modules/bimm-ts/dist, or install the bimm-ts release that carries it");
+      }
+      // Random parameters — the constructor's zeros would make any comparison vacuous.
+      let k = 1;
+      // In-place on leaves that require grad — under noGrad, as an optimizer writes them.
+      noGrad(() => { for (const p of model.parameters()) { p.copyFrom(Tensor.from(seed(p.size, k++), p.shape)); } });
+      const xd = seed(2 * 3 * 224 * 224, 77);
+      const run = async (align) => {
+        model.alignTokens = align;
+        for (const p of model.parameters()) if (p.grad) p.grad = null;
+        const x = Tensor.from(xd, [2, 3, 224, 224]);
+        const feats = model.forwardFeatures(x);
+        const logits = model.forwardHead(feats);
+        logits.sum().backward();
+        const pos = model.ownParameters().pos_embed;
+        return { shape: feats.shape.slice(), feats: Array.from(await feats.toArray()), logits: Array.from(await logits.toArray()), gpos: Array.from(await pos.grad.toArray()) };
+      };
+      const on = await run(true), off = await run(false);
+      model.alignTokens = true;
+      const rel = (a, b) => { let m = 0, s = 0; for (let i = 0; i < a.length; i++) { m = Math.max(m, Math.abs((a[i] ?? 0) - (b[i] ?? 0))); s = Math.max(s, Math.abs(b[i] ?? 0)); } return s > 0 ? m / s : m; };
+      const rf = rel(on.feats, off.feats), rl = rel(on.logits, off.logits), rg = rel(on.gpos, off.gpos);
+      say(`features shape: aligned [${on.shape}] · unaligned [${off.shape}]`);
+      say(`rel max |Δ|  features ${rf.toExponential(2)} · logits ${rl.toExponential(2)} · d(pos_embed) ${rg.toExponential(2)}`);
+      say(`faults: ${device().faults.count}`);
+      const sameShape = on.shape.join(",") === off.shape.join(",") && on.shape[1] === 197;
+      const ok = sameShape && rf <= 1e-4 && rl <= 1e-4 && rg <= 1e-4 && device().faults.count === 0;
+      say(ok ? "\naligned tokens == unaligned, forward and backward, shape kept at 197" : "\n**the alignment changed the answer (or the shape)**");
+      window.__vitAlign = { text: lines.join("\n"), ok, rf, rl, rg, faults: device().faults.count };
+    }
+  } catch (err) {
+    window.__vitAlign = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>

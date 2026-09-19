@@ -962,6 +962,37 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   dispatches re-issued from Python each step on a batch of a handful of images, the dispatch-bound regime
   where capture pays most. With this, **every workbench training path runs captured**; the probe now prints
   the fine-tune wall so a regression to eager shows as a number.
+- **2026-09-19, ViT's tokens aligned to eights, and the split-avoiding tile that it needed — ViT-tiny
+  −5 %** (bimm `src/vit.ts` 68b06f2; borch-ts `kernels.ts` `subgroupMatmulTile`; `vit_align_probe`).
+  The entry above closed the *per-call* padding of attention's matmuls as a loss; this is the model-level
+  path it pointed at, done once per forward: `VisionTransformer.forwardFeatures` pads the token row
+  197 → 200 right after `cls`+`pos_embed` (zero rows), hands every block's `Attention` a `[1, 1, 200]`
+  key mask (0 on real keys, `−inf` on the three padded, added to the scores before the softmax so they
+  weigh exactly zero), runs the twelve blocks on 200, and cuts back to 197 before the norm — so the
+  features keep their `[B, 197, D]` contract and nothing downstream changes. Gated on
+  `Device.subgroupMatrix` (a device without it runs the unpadded model bit for bit as before) with an
+  `alignTokens` handle to switch it off. `vit_align_probe`: aligned vs unaligned, same random weights,
+  features **3.1e-7**, logits 1.8e-7, `d(pos_embed)` 8.1e-8 relative, shape 197, faults 0 — the
+  padding changes nothing but which kernel runs. All 72 attention matmuls now take `bmmsg`
+  (7.28 → ~4.1 ms).
+  - **The first profile did not move (34.0 → 34.5 ms), and the reason was a second lever.** 200 tokens
+    make the linears' M = 3200, a multiple of 32 where 3152 was not, so `subgroupMatmulTile` picked the
+    32-row tile, the grid halved (591 → 300 tiles), fell under `subgroupMatmulSplit`'s want of 512, and
+    K = 768 got split in two — `sumsplits` 0.79 → 2.08 ms, `mmsg` +1.6 ms, eating the attention win.
+    Measured: `3200 × 768 × 192` on 32 × 64 split two 0.103 + 0.020 ms against 0.094 unsplit on 16 × 64.
+    So the tile chooser, given K, now takes the **largest tile with ≥ 16 rows and columns whose grid
+    reaches the want without a split**, and only otherwise the largest tile plus the split. A first
+    cut without two guards regressed the weight gradients 3× (it reached the want unsplit on a 32 × 8
+    tile for K = 3152 — for a long K the split is the right tool): so **K ≤ 1024 only**, and **no
+    eight-wide tiles**. With both: linears 0.123 → 0.108 and 0.098 → 0.072, 512³ 0.049 → 0.044
+    (32 × 16 unsplit beats 32 × 64 split four), the long-K gradients back on 32 × 64 split eight, the
+    batched and f16 paths (no K given) untouched, golden 4057/0.
+  - **Net on ViT-tiny 224 px, batch 16: eager 34.0 → 32.5 ms, compiled 32.2 → 30.5 ms (−5 %)**, faults 0.
+    Not the "24 %" the scalar `bmm` held of GPU time — that was its share; the achievable delta is
+    scalar-minus-subgroup less a mask add per block and ~20 more dispatches, and the earlier estimate
+    of ~5 % was the honest one. The alignment is in bimm (unreleased on npm; the probe refuses a
+    bimm-ts without it rather than passing vacuously), the tile rule in borch-ts. `vit-align:py` is the
+    sixty-third browser entry point.
 
 ### Step 8 — What this plan does not do
 

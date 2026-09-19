@@ -129,6 +129,11 @@ CHECKS = [
     # The host<->GPU data path (upload / readback bandwidth and latency) — a measurement the
     # timestamp profiler cannot see; behind the perf report's "batch upload is ~8% of a step".
     ("datapath", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/datapath_probe.py"]),
+    # bimm's ViT with its token row padded to a multiple of eight (attention on the subgroup
+    # kernel) against the same model unpadded — features, logits and a gradient within kernel
+    # rounding, shape kept at 197. Needs the bimm-ts that carries the alignment (it refuses an
+    # older one loudly rather than passing vacuously).
+    ("vit-align", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/vit_align_probe.py"]),
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),

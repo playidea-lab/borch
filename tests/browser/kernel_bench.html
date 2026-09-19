@@ -112,7 +112,7 @@ const BENCHES = {
         run: () => { dev.run(dev.pipeline(`mm:${sh.name}`, () => K.matmul(M, Kd, Nd, tA, tB, ssplits)), [A, B, Slab], [Math.ceil(Nd / 64), Math.ceil(M / 64), ssplits]); if (ssplits > 1) dev.run1d(dev.pipeline(`sss:${sh.name}`, () => K.sumSplits(M * Nd, ssplits)), [Slab, Out2], M * Nd); } },
     ];
     if (Device.subgroupMatrix && K.subgroupMatmulFits(M, Kd, Nd)) {
-      const t = K.subgroupMatmulTile(M, Nd), splits = K.subgroupMatmulSplit(M, Kd, Nd);
+      const t = K.subgroupMatmulTile(M, Nd, Kd), splits = K.subgroupMatmulSplit(M, Kd, Nd);
       const Target = splits > 1 ? dev.alloc(M * Nd * splits) : Out;
       runs.unshift({ name: `subgroup ${t.TM}x${t.TN}${splits > 1 ? ` split ${splits} (+ sum)` : ""}`, key: `mmsg:${sh.name}`, make: () => K.matmulSubgroup(M, Kd, Nd, tA, tB), extraKeys: splits > 1 ? [`ss:${sh.name}`] : [], outb: Out,
         run: () => { dev.run(dev.pipeline(`mmsg:${sh.name}`, () => K.matmulSubgroup(M, Kd, Nd, tA, tB)), [A, B, Target], [Nd / t.TN, M / t.TM, splits]); if (splits > 1) dev.run1d(dev.pipeline(`ss:${sh.name}`, () => K.sumSplits(M * Nd, splits)), [Target, Out], M * Nd); } });
