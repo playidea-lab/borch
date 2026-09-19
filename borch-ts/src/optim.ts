@@ -779,6 +779,23 @@ export class Adam extends Optimizer {
   private stepCount = 0;
 
   /**
+   * **The fused step, the arena SGD uses** (SGD `buildArena`/`arenaStep`). Adam's step was one
+   * dispatch per parameter; here every parameter lies end to end in one slab and `adamStep` runs
+   * once over all of it, with `m`/`v` resident between steps and only the gradients gathered in and
+   * the parameters scattered out. Gate: one group, plain Adam (no `amsgrad`, no weight decay, no
+   * `maximize` — each keeps the per-parameter path), not capturing, `suppressArena` off.
+   */
+  private arena: { pA: GPUBuffer; gA: GPUBuffer; mA: GPUBuffer; vA: GPUBuffer; zero: GPUBuffer;
+                   offs: number[]; sizes: number[]; total: number } | null = null;
+  private present: boolean[] = [];
+
+  private arenaEligible(): boolean {
+    return this.paramGroups.length === 1 && !this.amsgrad && !this.maximize
+      && this.grouped(this.weightDecay) === 0
+      && !device().capturing && !device().suppressArena;
+  }
+
+  /**
    * **`AdamW` is this class with the decay moved.** Coupled, it goes onto the
    * gradient before the moments see it; decoupled, onto the weights after the
    * update. That one placement is the whole difference between the two names.
@@ -838,7 +855,79 @@ export class Adam extends Optimizer {
     d.run1d(
       d.pipeline(`adamtick:${this.beta1}:${this.beta2}`, () => adamTick(this.beta1, this.beta2)),
       [this.tick.step.buffer, this.tick.corr.buffer], 1);
-    super.step();
+    if (this.arenaEligible()) this.arenaStepAdam();
+    else super.step();
+  }
+
+  /** The step as one dispatch over the arena — gather gradients in, run `adamStep` over the whole
+   *  slab, scatter parameters out; `m`/`v` stay resident. Mirrors SGD's `arenaStep`. */
+  private arenaStepAdam(): void {
+    this.syncHyper();
+    const d = device();
+    noGrad(() => {
+      if (!this.arena) this.buildArenaAdam();
+      const a = this.arena;
+      if (!a) return;
+      for (const [i, p] of this.params.entries()) {
+        const off = (a.offs[i] ?? 0) * 4, bytes = (a.sizes[i] ?? 0) * 4;
+        const g = p.grad;
+        if (g) { d.copyRange(a.gA, off, g.buffer, 0, bytes); this.present[i] = true; }
+        else if (this.present[i]) { d.copyRange(a.gA, off, a.zero, 0, bytes); this.present[i] = false; }
+      }
+      const corr = this.tick as { step: Tensor; corr: Tensor };
+      d.run1d(
+        d.pipeline(`adam:${a.total}:${this.beta1}:${this.beta2}:${this.eps}:false`,
+          () => adamStep(a.total, this.beta1, this.beta2, this.eps, false)),
+        [a.pA, a.gA, a.mA, a.vA, corr.corr.buffer, this.hyper().buffer], a.total);
+      for (const [i, p] of this.params.entries()) {
+        d.copyRange(p.buffer, 0, a.pA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
+      }
+    });
+  }
+
+  private buildArenaAdam(): void {
+    const d = device();
+    const offs: number[] = [], sizes: number[] = [];
+    let total = 0, max = 1;
+    for (const p of this.params) { offs.push(total); sizes.push(p.size); total += p.size; max = Math.max(max, p.size); }
+    const pA = d.alloc(total), gA = d.alloc(total), mA = d.alloc(total), vA = d.alloc(total), zero = d.alloc(max);
+    d.keep(pA); d.keep(gA); d.keep(mA); d.keep(vA); d.keep(zero);
+    d.writeWords(gA, new Uint32Array(total));
+    d.writeWords(zero, new Uint32Array(max));
+    for (const [i, p] of this.params.entries()) {
+      const off = (offs[i] ?? 0) * 4, bytes = (sizes[i] ?? 0) * 4;
+      d.copyRange(pA, off, p.buffer, 0, bytes);
+      d.copyRange(mA, off, (this.first[i] as Tensor).buffer, 0, bytes);
+      d.copyRange(vA, off, (this.second[i] as Tensor).buffer, 0, bytes);
+    }
+    this.arena = { pA, gA, mA, vA, zero, offs, sizes, total };
+    this.present = new Array(this.params.length).fill(false);
+  }
+
+  private dropArenaAdam(): void {
+    const a = this.arena;
+    if (!a) return;
+    const d = device();
+    d.unkeep(a.pA); d.unkeep(a.gA); d.unkeep(a.mA); d.unkeep(a.vA); d.unkeep(a.zero);
+    this.arena = null;
+  }
+
+  /** `m`/`v` live in the arena during training; bring them back into the state banks so the base
+   *  serializes the current values, as SGD does for its momentum. */
+  override stateDict(): { tensors: Record<string, Tensor>; numbers: Record<string, number> } {
+    const a = this.arena;
+    if (a) {
+      noGrad(() => {
+        for (const [i, m] of this.first.entries()) device().copyRange(m.buffer, 0, a.mA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
+        for (const [i, v] of this.second.entries()) device().copyRange(v.buffer, 0, a.vA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
+      });
+    }
+    return super.stateDict();
+  }
+
+  override loadStateDict(state: { tensors: Record<string, Tensor>; numbers: Record<string, number> }): void {
+    super.loadStateDict(state);
+    this.dropArenaAdam();
   }
 
   protected override counters(): Record<string, number> {

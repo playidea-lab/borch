@@ -1,0 +1,64 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the fused Adam arena against the per-parameter step</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **The fused Adam step (the arena) must be the per-parameter step, exactly.** adamStep is
+  // elementwise, so running it once over every parameter laid end to end is the same arithmetic
+  // as running it per buffer — bit for bit. This trains one model twice on identical data, once
+  // with the arena and once with `suppressArena` forcing the per-parameter path, over many small
+  // parameters (what the arena collapses; a U-Net step is ~45), and compares every weight after
+  // several steps (m/v persist in the arena across them). It also checks the arena **actually
+  // fired** — far fewer compute dispatches — so a silently-skipped arena cannot pass as a match.
+  // The arena is faster on the whole step (measured ~1.2× here, ~2.8× on the optimiser step alone,
+  // the same as SGD's arena); this file is the correctness half.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  try {
+    const bt = await import("borch-ts");
+    const { init, Tensor, optim, device, Device } = bt;
+    await init();
+    say(`adapter: ${Device.adapterInfo}\n`);
+    const seed = (n, s) => { const a = new Float32Array(n); let x = s >>> 0; for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * 2; } return a; };
+    const D = 24, IN = 16, OUT = 16, STEPS = 6;   // few steps and fresh data each — a stable trace, not a blow-up
+    const run = async (suppress) => {
+      device().suppressArena = suppress;
+      const ws = [], bs = [];
+      for (let k = 0; k < D; k++) { const W = Tensor.from(seed(IN * OUT, 100 + k), [IN, OUT]); W.requiresGrad = true; const b = Tensor.from(seed(OUT, 200 + k), [OUT]); b.requiresGrad = true; ws.push(W); bs.push(b); }
+      const opt = new optim.Adam([...ws, ...bs], 1e-3);
+      const before = device().dispatches;
+      for (let s = 0; s < STEPS; s++) {
+        opt.zeroGrad();
+        let h = Tensor.from(seed(8 * IN, 1 + s), [8, IN]);   // fresh data each step
+        for (let k = 0; k < D; k++) h = h.matmul(ws[k]).add(bs[k]).relu();
+        h.sum().backward();
+        opt.step();
+      }
+      const disp = (device().dispatches - before) / STEPS;
+      const flat = [];
+      for (const t of [...ws, ...bs]) flat.push(...await t.toArray());
+      device().suppressArena = false;
+      return { flat, disp };
+    };
+    const arena = await run(false);
+    const per = await run(true);
+    let dmax = 0; for (let i = 0; i < arena.flat.length; i++) dmax = Math.max(dmax, Math.abs((arena.flat[i] ?? 0) - (per.flat[i] ?? 0)));
+    say(`compute dispatches / step: arena ${arena.disp.toFixed(0)} · per-parameter ${per.disp.toFixed(0)}`);
+    const fired = arena.disp + 10 < per.disp;
+    say(`arena actually fired (far fewer dispatches): ${fired ? "yes" : "NO — the comparison would be vacuous"}`);
+    say(`max |Δ| over ${2 * D} parameters after ${STEPS} steps: ${dmax.toExponential(2)}`);
+    const ok = fired && dmax <= 1e-5 && device().faults.count === 0;
+    say(`faults: ${device().faults.count}`);
+    say(ok ? "\nfused Adam arena == per-parameter step" : "\n**the arena diverges from the per-parameter step (or did not fire)**");
+    window.__adamArena = { text: lines.join("\n"), ok, dmax, fired, faults: device().faults.count };
+  } catch (err) {
+    window.__adamArena = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>

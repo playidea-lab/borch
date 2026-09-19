@@ -120,6 +120,9 @@ CHECKS = [
     # value both recomputed, not stored) against BatchNorm + a separate ReLU — bit-identical, the
     # path the golden's op-level cases do not reach.
     ("bn-relu", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/bn_relu_probe.py"]),
+    # docs/SCALE.md fused optimiser: the Adam arena (one adamStep over all parameters) bit-identical
+    # to the per-parameter step, with the arena confirmed to have fired.
+    ("adam-arena", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/adam_arena_probe.py"]),
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),

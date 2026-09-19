@@ -93,6 +93,7 @@
     "workbench-lora:py": "uv run --with playwright python tests/browser/workbench_lora_py.py --build",
     "conv-dx:py": "uv run --with playwright python tests/browser/conv_dx_probe.py",
     "bn-relu:py": "uv run --with playwright python tests/browser/bn_relu_probe.py",
+    "adam-arena:py": "uv run --with playwright python tests/browser/adam_arena_probe.py",
     "finetune:py": "uv run --with playwright python tests/browser/finetune.py",
     "invariants:py": "uv run --with playwright python tests/browser/invariants_probe.py --build",
     "onnx-trap:py": "uv run --with playwright python tests/browser/onnx_trap_probe.py --build",
