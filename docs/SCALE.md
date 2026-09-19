@@ -838,6 +838,24 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   C ≠ O same-pad 8-aligned backward). Fixed to pad with O channels; the probes now compare real values,
   and `conv_dx_probe` gained a convTranspose-forward section (inherently C ≠ O) and C ≠ O backward
   shapes. Lesson: a probe that does not fail on a known-wrong input is worse than none.
+- **2026-09-19, the fused Adam step measured net-slower, and reverted** (no code kept). The step's
+  overhead is dispatch launch (26 % at 96 px, **69 % at 32 px** where the GPU work is tiny), and Adam
+  spends 45 dispatches a step — one per parameter. SGD already fuses these into one dispatch over an
+  **arena** (every parameter end to end in one slab, `optim.ts:670-734`), measured 2.8× on its step;
+  Adam/AdamW/RMSprop have none. Extending the arena to Adam was not the model-level refactor an earlier
+  note feared — the pattern is at the optimiser, not the model — so it was built (m/v resident in the
+  arena, gate = one group · plain Adam · no amsgrad · no maximize · not capturing) and verified: golden
+  4057/0 (it caught `maximize`, which the arena cannot negate — gated out) and a direct probe found the
+  arena **bit-identical** to the per-parameter step (0.00e+0) over many steps, with the compute
+  dispatches collapsed (48 params → one). **But a timed A/B on a 48-parameter model showed the arena
+  1.24× *slower*** (2.34 vs 1.89 ms/step): the arena replaces 47 compute dispatches with **90
+  copyBufferToBuffer** (gather every gradient in, scatter every parameter out), and those cost ~0.45 ms
+  here — more than the launches they save. The copies are unavoidable while parameters live in separate
+  buffers; removing them is the true model-level flatten (parameters *are* arena slices), a large change
+  whose payoff is still only in the dispatch-bound regime. So the copy-based fused optimiser is a net
+  loss on this hardware — reverted, keeping only what moves the table, and this is why SGD's 2.8× does
+  not carry over the way its dispatch count suggested. (It leaves an open question about SGD's own arena,
+  not pursued here.)
 
 ### Step 8 — What this plan does not do
 
