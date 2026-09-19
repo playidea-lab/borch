@@ -813,9 +813,11 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   `createBindGroup` every dispatch (hundreds a step), and eager training reruns the same ops on the
   same pooled buffers, so the bind groups recur and could be kept. Built it (keyed by pipeline + each
   bound buffer's identity, offset, size; bounded, insertion-order eviction) and measured: **the overhead
-  did not move** (2.35 → 2.50 ms, within noise), golden still 4057/0. So the 26 % is **GPU kernel-launch
-  latency between dispatches, not CPU bind-group construction** — reverted, keeping only what moves the
-  table. What is left to recover it is genuine dispatch reduction: a **fused optimiser** (Adam is 45
+  did not move** (2.35 → 2.50 ms, within noise), golden still 4057/0. So the 26 % is not CPU bind-group
+  construction. **[Corrected 2026-09-19, see the capture entry below: it is CPU *encode* — the whole JS
+  op-dispatch and autograd orchestration re-run each step — not GPU launch latency, and `torch.capture()`
+  recovers nearly all of it. Bind-group caching did not help because bind-group creation is only a sliver
+  of that CPU work.]** What was thought left to recover it was dispatch reduction: a **fused optimiser** (Adam is 45
   dispatches a step, one per parameter, ≈ 0.4 ms of the overhead — but the params are separate buffers,
   so it needs them flattened into one, a model-level change) or **cross-op fusion kernels** (conv→BN
   stats, the BatchNorm finish passes when a channel is one workgroup). Both are their own project; the
@@ -899,6 +901,24 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   halves the resident bytes so a bigger model streams, at a small GPU unpack cost, once the packing is
   amortised at load. It waits for a workload that is actually memory-bound (a model past the window),
   which eager training on this Mac is not. `f16_stream_probe` is the gate for that day.
+- **2026-09-19, the step's 30 % overhead is CPU encode, and `torch.capture()` already recovers it.**
+  A closer look at where the U-Net step's time goes settled what the earlier bind-group entry got wrong.
+  The eager step is 9.2 ms wall over 213 dispatches, but only **6.2–6.4 ms of that is GPU** (the timestamp
+  sum) — a **~2.8 ms (30 %) gap**. The gap is not GPU launch latency between dispatches: running the *same*
+  step under `torch.capture()` gives **6.6 ms wall (plain) / 6.8 ms (fused)** with **more** dispatches
+  (258/257 — capture gates the Adam arena off, back to per-parameter) yet the gap collapses to ~0.5 ms.
+  More dispatches, far less overhead ⇒ the overhead is the **CPU rebuilding the step every iteration** —
+  the JS op-dispatch, autograd graph, pipeline lookups, bind-group creation — which capture records once
+  and replay skips. (That is also why bind-group caching did nothing: creation is one sliver of that CPU
+  work, not the whole of it.) Two more facts from the same run: **fusion adds ~nothing here** (plain 6.6 ≈
+  fused 6.8) because the U-Net is GEMM-dominated with little elementwise glue to fuse — fusion is for the
+  attention/LayerNorm networks, not this one; and the **true GPU floor is ~6.2 ms**, skinny subgroup GEMMs
+  on the low-channel layers (`cnwg` 22 %, `cnf`/`cnft` 11 % each — a 16-channel conv is M = 16 = two 8×8
+  blocks, so it runs at ~5 TFLOP/s against the wide layers' 11; a shape limit, not a kernel one). So the
+  largest remaining lever on the step wall is **already built and verified** (`capture_py`, bit-for-bit):
+  train under `torch.capture()` for ≈ 28 % off the step. Eager pays the encode every step by definition;
+  nothing in the kernels recovers it. No code changed — the finding is the deliverable, and it corrects
+  the record.
 
 ### Step 8 — What this plan does not do
 
