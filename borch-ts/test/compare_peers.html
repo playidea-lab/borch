@@ -44,6 +44,10 @@
     const show = () => { out.textContent = lines.join("\n"); };
     try {
       await init();
+      // The adapter, before anything is timed — the runner reads it and stops here on a
+      // software rasteriser, instead of after fifteen minutes of its numbers (the 4090,
+      // 2026-09-20: `google / swiftshader` for a whole borch + jax-js run, refused at the end).
+      window.__borchAdapter = Device.adapterInfo;
       lines.push("borch.ts"); lines.push(await report([16, 32, 64])); show();
       if (!skip.has("jax")) { lines.push(""); lines.push(await reportJax([16, 32, 64])); show(); }
       if (!skip.has("burn")) { lines.push(""); lines.push(await reportBurn([16, 32, 64])); show(); }

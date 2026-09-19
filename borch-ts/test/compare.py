@@ -15,6 +15,8 @@ from launch import browser as browser_of, refuse_if_software
 
 PAGE = "/borch-ts/test/compare.html"
 TIMEOUT_MS = 1_800_000
+# The device comes up in seconds; two minutes covers a cold shader cache and a slow disk.
+ADAPTER_MS = 120_000
 
 
 def conditions(adapter):
@@ -71,6 +73,13 @@ def main(argv):
                     if m.type == "error" else None)
             page.on("pageerror", lambda e: print(f"  [browser exception] {e}"))
             page.goto(f"http://127.0.0.1:{port}{PAGE}" + ("?only=infer" if "--only-infer" in argv else ""))
+            # Refuse a software adapter before the minutes of measuring, not after them
+            # (the reasoning is on compare_peers.py, where it cost fifteen minutes first).
+            page.wait_for_function("window.__borchAdapter !== undefined || window.__borchCompare !== undefined",
+                                   timeout=ADAPTER_MS)
+            early = page.evaluate("window.__borchAdapter")
+            if early is not None and refuse_if_software(early, "ms/step and the epoch time"):
+                return 1
             page.wait_for_function("window.__borchCompare !== undefined",
                                    timeout=TIMEOUT_MS)
             result = page.evaluate("window.__borchCompare")

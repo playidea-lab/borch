@@ -35,6 +35,9 @@
     const out = document.getElementById("out");
     try {
       await init();
+      // The adapter before anything is timed — the runner refuses a software rasteriser
+      // here rather than after the minutes its numbers take (see compare_peers.html).
+      window.__borchAdapter = Device.adapterInfo;
       // `?only=infer` skips the two training halves — the inference half alone is what
       // a kernel change is measured against, and the training halves take minutes.
       const onlyInfer = new URLSearchParams(location.search).get("only") === "infer";

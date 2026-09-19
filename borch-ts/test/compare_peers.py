@@ -18,6 +18,8 @@ from launch import browser as browser_of, refuse_if_software
 
 PAGE = "/borch-ts/test/compare_peers.html"
 TIMEOUT_MS = 1_800_000
+# The device comes up in seconds; two minutes covers a cold shader cache and a slow disk.
+ADAPTER_MS = 120_000
 
 
 def main(argv):
@@ -38,6 +40,15 @@ def main(argv):
                     if m.type == "error" else None)
             page.on("pageerror", lambda e: print(f"  [browser exception] {e}"))
             page.goto(f"http://127.0.0.1:{port}{PAGE}" + (f"?skip={skip}" if skip else ""))
+            # **Refuse before measuring, not after.** The page names its adapter as soon as
+            # the device is up; a software rasteriser is refused here, with nothing timed.
+            # It used to be refused at the end — fifteen minutes of swiftshader numbers on
+            # the 4090 (2026-09-20) before the line that said they were void.
+            page.wait_for_function("window.__borchAdapter !== undefined || window.__borchPeers !== undefined",
+                                   timeout=ADAPTER_MS)
+            early = page.evaluate("window.__borchAdapter")
+            if early is not None and refuse_if_software(early, "ms/step"):
+                return 1
             page.wait_for_function("window.__borchPeers !== undefined", timeout=TIMEOUT_MS)
             result = page.evaluate("window.__borchPeers")
     finally:
