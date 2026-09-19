@@ -919,6 +919,16 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   train under `torch.capture()` for ≈ 28 % off the step. Eager pays the encode every step by definition;
   nothing in the kernels recovers it. No code changed — the finding is the deliverable, and it corrects
   the record.
+  - **The win across models (`profile_py --model=`, wall, apple/metal-3, eager → capture):** resnet18-cifar
+    3.4 → 2.1 ms (**38 %**), gpt 11.2 → 7.4 ms (**34 %**), U-Net 96 px 9.2 → 6.6 ms (**28 %**), vit-tiny 224 px
+    34.0 → 32.2 ms (**5 %**). It tracks one thing: **the CPU-encode fraction of the step.** resnet-cifar is
+    1.5 ms of GPU under a 3.4 ms wall — half the step is the CPU rebuilding it, so capture nearly halves the
+    wall; vit-tiny at 224 px is 31 ms of GPU under 34 ms — 91 % GPU-bound, nothing to recover. So capture
+    pays **most exactly where borch is aimed** — small models, small batches, low resolution, the browser-widget
+    regime where the GPU work per step is small and the JS per step is not. **Fusion adds ~0–3 % on top of
+    capture on every model measured** (U-Net, gpt, vit), even the attention ones with LayerNorm/GELU glue —
+    the replay is the whole win, kernel-merging a rounding error beside it. So: capture, not fuse, and it is
+    a product/default question (a captured step needs a static graph), not a kernel one.
 
 ### Step 8 — What this plan does not do
 
