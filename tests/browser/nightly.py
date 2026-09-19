@@ -126,6 +126,9 @@ CHECKS = [
     # docs/SCALE.md storage-f16: the window's f16 weight halves the resident bytes (a memory lever,
     # measured; wall is host-packing the probe redoes, GPU cost small).
     ("f16-stream", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/f16_stream_probe.py"]),
+    # The host<->GPU data path (upload / readback bandwidth and latency) — a measurement the
+    # timestamp profiler cannot see; behind the perf report's "batch upload is ~8% of a step".
+    ("datapath", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/datapath_probe.py"]),
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),

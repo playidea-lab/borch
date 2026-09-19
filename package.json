@@ -82,6 +82,7 @@
     "profile:py": "uv run --with playwright python tests/browser/profile_py.py --build",
     "precision:py": "uv run --with playwright python tests/browser/precision_probe.py",
     "f16-stream:py": "uv run --with playwright python tests/browser/f16_stream_probe.py",
+    "datapath:py": "uv run --with playwright python tests/browser/datapath_probe.py",
     "capture:py": "uv run --with playwright python tests/browser/capture_py.py --build",
     "fuse:py": "uv run --with playwright python tests/browser/fuse_py.py --build",
     "aliasing:py": "uv run --with playwright python tests/browser/aliasing_probe.py --build",

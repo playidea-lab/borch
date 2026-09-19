@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>host↔GPU data path — upload and readback, timed</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **What a batch costs to move.** Every training step uploads its batch (`Tensor.from`,
+  // host → GPU through a staging write) and most read something back (`toArray`, GPU → host
+  // through a mapped staging buffer). Neither is a kernel, so the timestamp profiler never
+  // sees them; this times them by wall at three sizes — a CIFAR batch, a U-Net batch, and a
+  // full activation — and reports the effective bandwidth. A measurement, not a check.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  try {
+    const bt = await import("borch-ts");
+    const { init, device, Device, Tensor } = bt;
+    await init();
+    say(`adapter: ${Device.adapterInfo}\n`);
+    const REPS = 20;
+    const cases = [["CIFAR batch 16×3×32×32", 16 * 3 * 32 * 32], ["U-Net batch 16×3×96×96", 16 * 3 * 96 * 96], ["activation 16×16×96×96", 16 * 16 * 96 * 96]];
+    const rows = [];
+    for (const [name, n] of cases) {
+      const host = new Float32Array(n); for (let i = 0; i < n; i++) host[i] = i * 1e-6;
+      const mb = n * 4 / 1e6;
+      // upload: Tensor.from lands the bytes; fence with flush+synchronize so the copy is done
+      let t = Tensor.from(host, [n]); device().flush(); await device().synchronize();   // warm
+      let t0 = performance.now();
+      for (let r = 0; r < REPS; r++) { t = Tensor.from(host, [n]); }
+      device().flush(); await device().synchronize();
+      const upMs = (performance.now() - t0) / REPS;
+      // readback: toArray maps a staging buffer and copies out
+      await t.toArray();   // warm
+      t0 = performance.now();
+      for (let r = 0; r < REPS; r++) await t.toArray();
+      const downMs = (performance.now() - t0) / REPS;
+      rows.push({ name, mb, upMs, downMs });
+      say(`${name.padEnd(26)} ${mb.toFixed(2).padStart(6)} MB   upload ${upMs.toFixed(3).padStart(7)} ms (${(mb / upMs * 1e3 / 1e3).toFixed(1)} GB/s)   readback ${downMs.toFixed(3).padStart(7)} ms (${(mb / downMs).toFixed(1)} GB/s)`);
+    }
+    say(`\nfaults: ${device().faults.count}`);
+    window.__datapath = { text: lines.join("\n"), ok: device().faults.count === 0, rows };
+  } catch (err) {
+    window.__datapath = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>
