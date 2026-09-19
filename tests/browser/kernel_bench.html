@@ -53,7 +53,7 @@ async function race(runs, size) {
     const extra = (r.extraKeys ?? []).reduce((a, k) => a + (dev.nsByKind.get(k) ?? 0), 0) / 1e6 / REPS;
     if (main + extra < r.best + r.extra) { r.best = main; r.extra = extra; }
   }
-  return runs.map((r, i) => `${r.name} ${r.best.toFixed(3)}${r.extra ? "+" + r.extra.toFixed(3) : ""}${errs[i] > 1e-4 ? " WRONG" : ""}`).join(" · ");
+  return runs.map((r, i) => `${r.name} ${r.best.toFixed(3)}${r.extra ? "+" + r.extra.toFixed(3) : ""}${errs[i] > 1e-4 ? ` WRONG(rel ${errs[i].toExponential(1)})` : ""}`).join(" · ");
 }
 const BENCHES = {
   // The weight gradient: direct against subgroup matrices, their summing counted.
@@ -116,8 +116,19 @@ const BENCHES = {
       const Target = splits > 1 ? dev.alloc(M * Nd * splits) : Out;
       runs.unshift({ name: `subgroup ${t.TM}x${t.TN}${splits > 1 ? ` split ${splits} (+ sum)` : ""}`, key: `mmsg:${sh.name}`, make: () => K.matmulSubgroup(M, Kd, Nd, tA, tB), extraKeys: splits > 1 ? [`ss:${sh.name}`] : [], outb: Out,
         run: () => { dev.run(dev.pipeline(`mmsg:${sh.name}`, () => K.matmulSubgroup(M, Kd, Nd, tA, tB)), [A, B, Target], [Nd / t.TN, M / t.TM, splits]); if (splits > 1) dev.run1d(dev.pipeline(`ss:${sh.name}`, () => K.sumSplits(M * Nd, splits)), [Target, Out], M * Nd); } });
-
-
+      // The half-precision GEMM (`f16 × f16 → f16` — the config metal-3 offers). Operands are cast
+      // to f16 once outside the timed run (weights are cast once in real use); the result cast back
+      // to f32 is the `+extra`. The race compares it to the f32 subgroup output above, so its
+      // relative error prints as WRONG when the f16 accumulator costs more than 1e-4 — the number
+      // that decides whether compute-f16 is worth its numerics.
+      if (Device.f16 && !tA && !tB) {
+        const Af16 = dev.alloc(Math.ceil(M * Kd / 2)), Bf16 = dev.alloc(Math.ceil(Kd * Nd / 2));
+        const Of16 = dev.alloc(Math.ceil(M * Nd / 2)), Of32 = dev.alloc(M * Nd);
+        dev.run1d(dev.pipeline(`c2ha:${sh.name}`, () => K.castF32ToF16(M * Kd)), [A, Af16], M * Kd);
+        dev.run1d(dev.pipeline(`c2hb:${sh.name}`, () => K.castF32ToF16(Kd * Nd)), [B, Bf16], Kd * Nd);
+        runs.push({ name: `subgroup f16 ${t.TM}x${t.TN}`, key: `mmh:${sh.name}`, make: () => K.matmulSubgroupF16(M, Kd, Nd), extraKeys: [`h2f:${sh.name}`], outb: Of32,
+          run: () => { dev.run(dev.pipeline(`mmh:${sh.name}`, () => K.matmulSubgroupF16(M, Kd, Nd)), [Af16, Bf16, Of16], [Nd / t.TN, M / t.TM, 1]); dev.run1d(dev.pipeline(`h2f:${sh.name}`, () => K.castF16ToF32(M * Nd)), [Of16, Of32], M * Nd); } });
+      }
     }
     const text = await race(runs, M * Nd);
     // The best of the runs, as a rate.

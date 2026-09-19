@@ -501,7 +501,11 @@ nightly on a real adapter (`refuse_if_software` holds).
     staging pool unchanged.
 - **4b, compute half (`autocast()` scope: activations and arithmetic in f16, f32 master
   weights and reductions)** — only after 4a's numbers, and only if 4a's traffic win is
-  not enough for the window's throughput gate. Touches the elementwise and reduction
+  not enough for the window's throughput gate. **Measured 2026-09-19 (the ledger below): on
+  metal-3 the f16 subgroup GEMM is not faster than f32 (Apple's config is `f16 × f16 → f16`,
+  same rate, no tensor-core 2×) and loses accuracy (rel 3.7e-3–1.2e-2, growing with K) — so 4b
+  is not worth building on this GPU; revisit only on hardware with an `f16 → f32` config.**
+  Touches the elementwise and reduction
   generators (`kernels.ts:1234,1262,1322`) via the same `scalar` parameter; the fused
   pass's `array<f32>` replace (`fuse.ts:374`) becomes precision-aware. Loss scaling as
   torch does it. On a device without f16 the scope throws (`index.ts:365`'s sentence is
@@ -859,6 +863,24 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
     90 `copyBufferToBuffer` (gather/scatter) cost *less* than the 47 launches they replace, not more;
     the earlier entry had it backwards. Lesson beside "measure before claiming": **measure more than
     once when the instrument is known to swing** — a single timing run reverted a real win.
+- **2026-09-19, compute-f16 measured *not worth it* on metal-3 — the Step 4b assumption is wrong here**
+  (`kernels.ts` `matmulSubgroupF16` + `castF32ToF16`/`castF16ToF32`, `kernel_bench` `mm`). The hardware
+  is capable — metal-3 has `shader-f16` and a subgroup-matrix config — but that config is
+  **`f16 × f16 → f16`**, an f16 *accumulator*, not the `→ f32` NVIDIA's tensor cores use. Built an f16
+  subgroup GEMM and raced it against the f32 subgroup GEMM (operands cast to f16 once, result cast back):
+  - **No speedup.** 512×128×512 f16 0.013 ms vs f32 0.014; 512×512×512 0.040 vs 0.034; 512×2048×512
+    0.150 vs 0.120. Apple runs f16 and f32 subgroup matrices at the **same** rate — there is no 2× to win
+    (unlike a tensor-core card). The larger-K cases are even slower, partly because the f16 kernel has no
+    K-split; but at small K, where split is not the factor, f16 is still only level with f32.
+  - **And it loses accuracy**: rel error vs f32 **3.7e-3 (K=128), 7.4e-3 (K=512), 1.2e-2 (K=2048)** —
+    growing with K as the f16 accumulator fills, 37–120× past the golden's 1e-4.
+  So on the primary dev GPU compute-f16 buys nothing and costs precision — right after the BatchNorm
+  accuracy work, the wrong direction. **Step 4b's "expect ≈ 2×" does not hold on metal-3**; whether an
+  NVIDIA card with an `f16 → f32` config would differ is untested (the 5080 in the fleet has no
+  `shader-f16` at all). What survives is **storage-f16 (4a)**: half the *bytes* for a streamed/windowed
+  weight (memory, not speed; `pack2x16float`, no `shader-f16` needed), and only under memory pressure —
+  the streaming track (Step 3), not eager training. The bench keeps the f16 `mm` variant as the gate to
+  re-run on other hardware. Net: **no f16 built into any dispatched path; the measurement is the deliverable.**
 
 ### Step 8 — What this plan does not do
 

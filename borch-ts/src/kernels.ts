@@ -1742,6 +1742,67 @@ ${store.join("\n")}
 }
 
 /**
+ * **A measurement kernel** (`kernel_bench` `mm`), not a path anything dispatches yet: the matmul on
+ * f16 subgroup matrices, to weigh compute-f16 before building it. metal-3 offers only the
+ * `f16 × f16 → f16` config (an **f16 accumulator**, not the `→ f32` tensor cores use), so this is
+ * where the accumulation-precision bill of a half-precision GEMM is read off against the f32
+ * subgroup path. No split, no transpose — the shapes the bench feeds are whole eights. `docs/SCALE.md`.
+ */
+export function matmulSubgroupF16(M: number, K: number, N: number): string {
+  const { TM, TN } = subgroupMatmulTile(M, N);
+  const am = TM / 8, bn = TN / 8;
+  const acc: string[] = [], mma: string[] = [], store: string[] = [];
+  for (let i = 0; i < am; i++) for (let j = 0; j < bn; j++) {
+    acc.push(`  var c${i}${j}: subgroup_matrix_result<f16, 8, 8>;`);
+    mma.push(`    c${i}${j} = subgroupMatrixMultiplyAccumulate(a${i}, b${j}, c${i}${j});`);
+    store.push(`  subgroupMatrixStore(&Out, (row0 + ${i * 8}u) * ${N}u + col0 + ${j * 8}u, c${i}${j}, false, ${N}u);`);
+  }
+  const loadA = Array.from({ length: am }, (_, i) => `    let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f16, 8, 8>>(&A, (row0 + ${i * 8}u) * ${K}u + k, false, ${K}u);`);
+  const loadB = Array.from({ length: bn }, (_, j) => `    let b${j} = subgroupMatrixLoad<subgroup_matrix_right<f16, 8, 8>>(&B, k * ${N}u + col0 + ${j * 8}u, false, ${N}u);`);
+  return `enable f16;
+enable chromium_experimental_subgroup_matrix;
+@group(0) @binding(0) var<storage, read> A: array<f16>;
+@group(0) @binding(1) var<storage, read> B: array<f16>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f16>;
+@compute @workgroup_size(32)
+fn main(@builtin(workgroup_id) wid: vec3<u32>) {
+  let row0 = wid.y * ${TM}u;
+  let col0 = wid.x * ${TN}u;
+${acc.join("\n")}
+  for (var k = 0u; k < ${K}u; k = k + 8u) {
+${loadA.join("\n")}
+${loadB.join("\n")}
+${mma.join("\n")}
+  }
+${store.join("\n")}
+}`;
+}
+
+/** f32 → f16 element cast, for the f16 matmul bench's operands. */
+export function castF32ToF16(n: number): string {
+  return `enable f16;
+@group(0) @binding(0) var<storage, read> In: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f16>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  Out[gid] = f16(In[gid]);
+}`;
+}
+
+/** f16 → f32 element cast, to read an f16 result back through the f32 staging path. */
+export function castF16ToF32(n: number): string {
+  return `enable f16;
+@group(0) @binding(0) var<storage, read> In: array<f16>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  Out[gid] = f32(In[gid]);
+}`;
+}
+
+/**
  * The batched matrix product on subgroup matrices — `matmulSubgroup` with a batch on
  * the grid's third axis and **either operand read transposed**, so a `q·kᵀ` or a
  * backward's `Aᵀ·G` is one dispatch over every batch entry with nothing transposed in
