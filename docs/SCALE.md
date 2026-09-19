@@ -1010,6 +1010,25 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   wall; the loop-level number is the probe's), the BOOK's loop reads every fiftieth step and says why,
   and `loop-readback:py` is the sixty-fourth browser entry point (a measurement). The report's lever
   five is corrected accordingly.
+- **2026-09-19, where borch stands — the landscape surveyed and the same-page comparisons re-run.**
+  Same page, same pinned bytes, apple/metal-3, today: the ResNet-18 CIFAR training step is **4.1× /
+  4.7× / 5.6×** TF.js 4.22.0's on WebGPU at batch 16/32/64 (21.2/36.2/62.3 vs 86.5/170.2/348.7 ms;
+  2.2–2.9× on 2026-09-03 — TF.js unmoved, borch 38.6 → 21.2 from this session's kernels); ResNet-18
+  inference against ONNX Runtime Web 1.29.0's WebGPU EP is **0.6× at batch 1** (fused 2.3–2.9 vs 4.0 ms,
+  borch ahead) and **1.3–1.4× at batch 16** (7.0–7.4 vs 5.3, ORT ahead — its small-plane 512/256-channel
+  convs, and its EP also uses subgroup matrices); both reproduce torch to ~5e-8, and ORT runs borch's
+  own ONNX export at 4.5e-8. The survey (twelve projects, sources checked 2026-09-19; `docs/BOOK.md`
+  carries the tables): **libraries that train in a browser on WebGPU are three** — borch, Burn (wgpu;
+  Brush proves it), jax-js (grad/jit, MNIST, optax) — and only borch has a PyTorch API, a Python
+  (Pyodide) binding, attention/BatchNorm autograd, and a 4,764-case parity with torch. TF.js, the one
+  mainstream framework with training, has not released since 2024-10 and its WebGPU backend answers
+  "Maybe" to training; ORT Web removed training in 1.20 (2024-11); transformers.js, WebLLM, TVM web are
+  inference-only. On Apple, borch's 10–13 TFLOP/s subgroup GEMM (M4 Max, peak 16–17) is above every
+  published WebGPU matmul found (jax-js ~7 on M4 Max, ~1 on M2); ORT Web is the other user of subgroup
+  matrices. Where borch is not: LLM inference (WebLLM 41–71 tok/s on M3 Max, transformers.js) and
+  batch-inference throughput (ORT). **The two same-page measurements still missing are jax-js and
+  Burn** — no one has published a training ms/step on Apple silicon but borch, so the training
+  comparison rests on the TF.js one until those are run.
 
 ### Step 8 — What this plan does not do
 
