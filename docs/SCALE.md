@@ -929,6 +929,39 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
     capture on every model measured** (U-Net, gpt, vit), even the attention ones with LayerNorm/GELU glue —
     the replay is the whole win, kernel-merging a rounding error beside it. So: capture, not fuse, and it is
     a product/default question (a captured step needs a static graph), not a kernel one.
+- **2026-09-19, ViT's scalar attention matmul: per-call padding measured a net loss — the fix is the
+  model's sequence length, not the library.** ViT-tiny's attention runs 72 batched matmuls a step on the
+  **scalar** tile (`bmm` 7.28 ms, 24 % of its GPU) because seq 197 fails `subgroupMatmulFits` (every dim a
+  multiple of 8); GPT at seq 128 takes the subgroup kernel. The obvious library fix — zero-pad the operands
+  to eights inside `batchedMatmul`, run `bmmsg`, gather the result back — is exactly what `kernel_bench`'s
+  `bmm` bench was written to price, and at ViT's shapes it **loses**: q·kᵀ `48@197×64×197` scalar 0.137 ms vs
+  subgroup 0.075 **+ 0.104 gather** (the 48×197×197 output is 7.4 MB — moving it back costs more than the
+  GEMM saves); attn·v `48@197×197×64` scalar 0.109 vs 0.041 + 0.012, which looks like a win until the
+  per-call pads of A (7.4 MB) and B — which the bench does once, outside the timing, but production would
+  pay every call — are added (~0.1 ms), and it loses too. The ragged-tail alternative (a subgroup kernel
+  that bounds-checks its last block) is closed by the same wall as the conv pad: `subgroupMatrixLoad` reads
+  whole blocks. **So nothing is built.** The real path is upstream of the library: build the model so
+  seq is a multiple of 8 (197 → 200 with dummy tokens and an attention mask, or a patch grid that lands
+  on eights), which routes every attention matmul to `bmmsg` with zero per-op overhead — a bimm/model
+  decision, and the guidance to write down: *keep attention's sequence length a multiple of 8.*
+- **2026-09-19, the workbench's fine-tune path put on the compiled loop — 12.0 → 4.3 s** (`borch/_workbench.py`
+  `_fit_lora`; `docs/BOOK.md` capture section refreshed). Acting on the capture finding: of the workbench's
+  three training paths, `_fit_model` and `_fit_head` already ran through `_run_steps` (which wraps the step
+  in `torch.compiled` where it exists), but **`_fit_lora` — the heaviest, a LoRA-adapted backbone's forward
+  and backward — ran its own eager loop.** Two things kept it off `compiled`, and both were bugs-in-waiting
+  rather than reasons: it uploaded the batch *inside* the step (`torch.tensor(xk)` in the closure — under
+  `compiled` that upload is recorded once and every replay would train on the first batch), and it walked
+  every image each epoch and filtered to the training rows per batch, giving ragged batch sizes (one
+  recording per size) and wasted `transform()` calls on the held-out rows. Rewritten to the other paths'
+  shape: the batch arrives as tensor arguments, the training rows are walked in order in full batches
+  (the ragged tail dropped as `_fit_model` drops it — one shape, one recording), and the loop is
+  `_run_steps`. `workbench_lora_py` (ViT-tiny LoRA, 3 epochs, three-colour folder, apple/metal-3):
+  fine-tune accuracy 1.00 both before and after, faults 0, **wall 12.0 s eager → 4.3 s compiled (2.8×)**.
+  Attribution caveat: the same change also stopped preparing the ~30 % held-out images every epoch, so a
+  slice of the 2.8× is that, not replay; the bulk is the step rebuild — a ViT backbone's few hundred
+  dispatches re-issued from Python each step on a batch of a handful of images, the dispatch-bound regime
+  where capture pays most. With this, **every workbench training path runs captured**; the probe now prints
+  the fine-tune wall so a regression to eager shows as a number.
 
 ### Step 8 — What this plan does not do
 

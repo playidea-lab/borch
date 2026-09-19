@@ -46,8 +46,12 @@ backbone = "imagenet-vit-tiny-patch16-224"
 probe = torch.workbench.setup(files, backbone=backbone, epochs=40, val=0.3, seed=0).fit()
 probe_acc = float(probe.accuracy)
 
-# The LoRA fine-tune — the same folder, the backbone adapted rather than frozen.
+# The LoRA fine-tune — the same folder, the backbone adapted rather than frozen. Timed, so
+# the fine-tune path's step cost (eager vs a compiled loop) is a number this probe reports.
+import time as _time
+_t0 = _time.perf_counter()
 ft = torch.workbench.setup(files, backbone=backbone, finetune=True, epochs=3, val=0.3, seed=0).fit()
+ft_s = _time.perf_counter() - _t0
 ft_acc = float(ft.accuracy)
 if ft.model is None:
     fails.append("fine-tune left no model to export")
@@ -62,7 +66,7 @@ if "LoRA" not in (ft.how or ""):
 
 adapter = str(js.borch.Device.adapterInfo)
 ("workbench-lora: " + ("fine-tune trains, scores and exports" if not fails else "FAILS: " + " | ".join(fails))
- + f" · probe {probe_acc:.2f} · finetune {ft_acc:.2f} · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
+ + f" · probe {probe_acc:.2f} · finetune {ft_acc:.2f} in {ft_s:.1f}s · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
 \`);
         postMessage({ done: text, ms: performance.now() - t0 });
       } catch (err) {

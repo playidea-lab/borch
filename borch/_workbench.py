@@ -463,33 +463,33 @@ class Session:
         trainable = [p for p in net.parameters() if p.requires_grad] + list(head.parameters())
         opt = self._optimizer(trainable)
         crit = torch.nn.CrossEntropyLoss()
-        train_set = set(int(i) for i in train_rows)
-        scope = getattr(torch, "scope", None)
-        losses = []
-        for _epoch in range(cfg["epochs"]):
-            last = None
-            for xb, idx in self._prepared(transform, cfg["batch"]):
-                keep = [j for j, i in enumerate(idx) if int(i) in train_set]
-                if not keep:
-                    continue
-                xk = xb[keep]
-                yk = y_all[idx][keep]
+        # Through the same loop as the other two paths, so the browser's `compiled` records this
+        # step once and replays it (`_run_steps`). Two things that makes the step obey:
+        # - the batch arrives as **tensor arguments**. `compiled` copies its arguments into
+        #   buffers it pins and replays into; an upload made *inside* the step would be recorded
+        #   once and every replay would train on the first batch forever.
+        # - the batches are full and one shape — the training rows walked in order, the ragged
+        #   tail dropped as `_fit_model` drops it — so there is one recording, not one per size.
+        # (This used to walk every image and filter to the training rows per batch, which gave
+        # ragged batches and an upload inside the step, and ran eagerly.)
+        def step(x, y):
+            opt.zero_grad()
+            feats = net.forward_head(net.forward_features(x), pre_logits=True)
+            loss = crit(head(feats), y)
+            loss.backward()
+            opt.step()
+            return loss
 
-                def step(xk=xk, yk=yk):
-                    opt.zero_grad()
-                    feats = net.forward_head(net.forward_features(torch.tensor(xk)), pre_logits=True)
-                    loss = crit(head(feats), torch.tensor(yk))
-                    loss.backward()
-                    opt.step()
-                    return loss
+        batch = cfg["batch"]
+        rows = [int(i) for i in train_rows]
 
-                if scope:
-                    with scope():
-                        last = float(step().item())
-                else:
-                    last = float(step().item())
-            losses.append(last)
-        self.losses = losses
+        def prepared_batch(rows_, s):
+            idx = rows_[s * batch:(s + 1) * batch]
+            xk = _np.stack([transform(self.data.raw(i)) for i in idx])
+            return torch.tensor(xk), torch.tensor(y_all[idx])
+
+        self._batch = prepared_batch
+        self._run_steps(step, rows, self._steps(rows))
         # Cache the **adapted** backbone's features for every image, so `_predict` scores through
         # `head(features)` exactly as the frozen-head path does — the features are the fine-tuned
         # ones now, not the frozen ones.

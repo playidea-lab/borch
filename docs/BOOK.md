@@ -552,11 +552,27 @@ own machine or remote hardware — or the GPU distribution below.
 
 ### A step captured, replayed, and fused
 
-A training step is the same dispatches with the same buffers every time, and on a laptop
-GPU the Python side that issues them — the autograd graph, the allocations, 262 dispatch
-calls — was 3.4 ms of a 17.7 ms U-Net step (measured with the device's timestamp queries,
-`npm run profile:py`). `torch.capture()` records one step as the device sees it and
-`replay()` issues it again without Python:
+A training step is the same dispatches with the same buffers every time, and the Python
+and JavaScript that issue them — the autograd graph, the allocations, the pipeline and
+bind-group setup, two hundred dispatch calls — are rebuilt on every step. On a laptop GPU
+that rebuild is most of what the GPU is *not* doing. Measured on an M4 Max (`npm run
+profile:py --model=…`, eager → `compiled`, wall per step):
+
+| model | eager | compiled | saved | why |
+|---|---|---|---|---|
+| ResNet-18 (CIFAR recipe) | 3.4 ms | 2.1 ms | **38 %** | the GPU is 1.5 ms of it — half the step was the rebuild |
+| GPT, 2 blocks | 11.2 ms | 7.4 ms | **34 %** | many small dispatches |
+| U-Net 96 px | 9.2 ms | 6.6 ms | **28 %** | |
+| ViT-tiny 224 px | 34.0 ms | 32.2 ms | 5 % | 91 % GPU already — nothing left to recover |
+
+The saving is the step's CPU share, so it is largest exactly where a browser trains —
+small models, small batches, low resolution. **Use `compiled` for any training loop**
+(the workbench's `fit()` does, on every path); fusing kernels on top of it adds one to
+three per cent and is not the point. One more thing the same measurement found: attention's
+batched matmuls take the subgroup kernel only when every dimension is a multiple of eight,
+so **keep a sequence length a multiple of 8** (ViT-tiny's 197 tokens run the scalar kernel,
+a quarter of its GPU time; 200 would not). `torch.capture()` records one step as the device
+sees it and `replay()` issues it again without Python:
 
 ```python
 def train_step(x, y):
