@@ -1905,6 +1905,14 @@ prints the adapter:
 | `nvidia / lovelace` (RTX 4090, driver 550, Chrome 143) — borch.ts | **28.1** | **38.7** | **69.7** |
 | `nvidia / lovelace` — TF.js 4.22.0 | 67.8 | 112.2 | 205.8 |
 | ratio | 2.4× | 2.9× | 3.0× |
+| `apple / metal-3`, **2026-09-19** — borch.ts | **21.2** | **36.2** | **62.3** |
+| `apple / metal-3`, 2026-09-19 — TF.js 4.22.0 | 86.5 | 170.2 | 348.7 |
+| ratio | **4.1×** | **4.7×** | **5.6×** |
+
+The 2026-09-19 rows are the same page and the same TF.js bytes sixteen days later: TF.js
+did not move (86.4 → 86.5) and borch.ts went from 38.6 to 21.2 ms at batch 16 — the
+conv backward on subgroup matrices, the fused Adam/SGD step, BatchNorm reading less
+(`docs/SCALE.md`, the 2026-09-19 entries). The ratio is what the page prints today.
 
 Held equal: architecture, SGD 0.05/0.9, cross-entropy, the same seeded pixels and
 labels, two warm-up steps then five timed, a loss readback every step. Not held
@@ -1930,6 +1938,16 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts, `eval()` + `fuse_conv_bn_eval` + `nn.intrinsic` | `nvidia / lovelace` | **2.8 ms** | 4.6 ms |
 | ONNX Runtime Web 1.29.0 (WebGPU) | `nvidia / lovelace` | 3.4 ms | **3.5 ms** |
 | ORT is faster than the fused network by | | 0.8× | 1.3× |
+| borch.ts fused, `apple / metal-3`, **2026-09-19** (two runs) | | **2.3–2.9 ms** | 7.0–7.4 ms |
+| ONNX Runtime Web 1.29.0, `apple / metal-3`, 2026-09-19 | | 4.0–4.1 ms | **5.3 ms** |
+| ORT is faster than the fused network by | | 0.6× | 1.3–1.4× |
+
+Re-measured 2026-09-19 on the same page: at batch 1 the fused network is now well ahead of
+ORT (2.3–2.9 against 4.0 ms); at batch 16 ORT keeps its 1.3–1.4× — the gap that remains is
+the 512- and 256-channel convolutions on a 4 × 4 / 8 × 8 plane (`cnt`, the tiled GEMM), a
+fifth of the forward's GPU time between them, where ORT's kernel is better fed. The unfused
+`eval()` swings run to run on this machine (5.5–7.3 ms at batch 1); the fused number is the
+one to quote, and its adapter with it.
 
 Two of ORT's advantages are now ours too. The eval-mode batch norm was six dispatches
 a layer (assembled from `sub`, `add`, `sqrt`, `div`, `mul`, `add`) and is one; and
