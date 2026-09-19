@@ -5919,88 +5919,112 @@ export function bnPieces(N: number, S: number): number {
 }
 
 /**
- * BatchNorm's per-channel statistics — the sum and the sum of squares **in one pass.**
+ * BatchNorm's per-channel statistics **in one pass** — the mean and the *centred* sum of
+ * squares by **Welford**, not the sum and the sum of squares.
  *
- * Assembled, it is three `sumDim` plus `sub` plus `square` plus three `sumDim` plus a few
- * divisions, a dozen or so dispatches, twenty times over per layer. Measured, most of the
- * 1,636 dispatches in one ResNet step came from here.
+ * The naive `variance = mean(x²) − mean(x)²` is catastrophic-cancellation unstable: when the
+ * mean is large next to the spread, both terms are big and nearly equal and their difference
+ * loses most of its digits (measured in `precision_probe`: 419 % relative error at mean 300,
+ * 5 % at mean 30, against a double reference — while the mean itself stays exact). Welford
+ * keeps a running mean and the sum of squared deviations `M2` instead, so nothing large is
+ * ever subtracted, and the variance is `M2 / n` at the end.
  *
- * Workgroup `(channel, piece)` walks its slice of the channel with 256 threads striding
- * and folding as a tree, and writes two partial sums. The first version gave one *thread*
- * a channel (6.3 ms per layer, measured); the second a workgroup — see `bnPieces` for why
- * that was still too few.
+ * Workgroup `(channel, piece)` walks its slice with 256 threads, each keeping a Welford
+ * `(count, mean, M2)`; the tree fold **merges** those triples (the parallel Welford combine)
+ * rather than adding two sums, and the workgroup writes its piece's `(mean, M2)`. The counts
+ * are fixed by the slicing, so `batchNormFinish` recovers them and does not read them back.
+ * The `vec4` load stays (bandwidth); the four lanes are four Welford updates.
  */
 export function batchNormStats(N: number, C: number, S: number): string {
   const pieces = bnPieces(N, S);
-  // Four cells a thread when a plane is a whole number of fours (`lanesOf`): the four
-  // sit in one channel and load as one `vec4`; a piece is then a whole number of fours.
   const lanes = lanesOf(S);
   const per = Math.ceil((N * S) / pieces / lanes) * lanes;
   const T = lanes === 4 ? "vec4<f32>" : "f32";
+  const update = (comp: string) => `    { cnt = cnt + 1.0; let d = ${comp} - mean; mean = mean + d / cnt; m2 = m2 + d * (${comp} - mean); }`;
+  const updates = lanes === 4
+    ? [update("v.x"), update("v.y"), update("v.z"), update("v.w")].join("\n")
+    : update("v");
   return `
 @group(0) @binding(0) var<storage, read> X: array<${T}>;
-@group(0) @binding(1) var<storage, read_write> PartSum: array<f32>;
-@group(0) @binding(2) var<storage, read_write> PartSq: array<f32>;
-var<workgroup> pt: array<f32, ${BN_GROUP}>;
-var<workgroup> pq: array<f32, ${BN_GROUP}>;
+@group(0) @binding(1) var<storage, read_write> PartMean: array<f32>;
+@group(0) @binding(2) var<storage, read_write> PartM2: array<f32>;
+var<workgroup> wc: array<f32, ${BN_GROUP}>;
+var<workgroup> wm: array<f32, ${BN_GROUP}>;
+var<workgroup> wq: array<f32, ${BN_GROUP}>;
 @compute @workgroup_size(${BN_GROUP})
 fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
   let c = w.x;
   let piece = w.y;
   let lo = piece * ${per}u;
   let hi = min(lo + ${per}u, ${N * S}u);
-  var total = ${lanes === 4 ? "vec4(0.0)" : "0.0"};
-  var sq = ${lanes === 4 ? "vec4(0.0)" : "0.0"};
+  var cnt = 0.0;
+  var mean = 0.0;
+  var m2 = 0.0;
   for (var i = lo + l.x * ${lanes}u; i < hi; i = i + ${BN_GROUP * lanes}u) {
     let n = i / ${S}u;
     let v = X[((n * ${C}u + c) * ${S}u + (i - n * ${S}u)) / ${lanes}u];
-    total = total + v;
-    sq = fma(v, v, sq);
+${updates}
   }
-  pt[l.x] = ${lanes === 4 ? "total.x + total.y + total.z + total.w" : "total"};
-  pq[l.x] = ${lanes === 4 ? "sq.x + sq.y + sq.z + sq.w" : "sq"};
+  wc[l.x] = cnt; wm[l.x] = mean; wq[l.x] = m2;
   workgroupBarrier();
   var span = ${BN_GROUP / 2}u;
   loop {
     if (span == 0u) { break; }
-    if (l.x < span) { pt[l.x] = pt[l.x] + pt[l.x + span]; pq[l.x] = pq[l.x] + pq[l.x + span]; }
+    if (l.x < span) {
+      // The parallel Welford combine of two slices a and (a+span).
+      let ca = wc[l.x]; let cb = wc[l.x + span];
+      let nc = ca + cb;
+      let inv = select(0.0, cb / nc, nc > 0.0);   // cb/nc, and 0 when both are empty
+      let delta = wm[l.x + span] - wm[l.x];
+      wm[l.x] = wm[l.x] + delta * inv;
+      wq[l.x] = wq[l.x] + wq[l.x + span] + delta * delta * ca * inv;   // ca·cb/nc = ca·inv
+      wc[l.x] = nc;
+    }
     workgroupBarrier();
     span = span / 2u;
   }
   if (l.x == 0u) {
-    PartSum[c * ${pieces}u + piece] = pt[0];
-    PartSq[c * ${pieces}u + piece] = pq[0];
+    PartMean[c * ${pieces}u + piece] = wm[0];
+    PartM2[c * ${pieces}u + piece] = wq[0];
   }
 }`;
 }
 
-/** Adds a channel's pieces and finishes the mean and the (biased) variance. */
+/** Merges a channel's pieces — the parallel Welford combine again — and finishes the mean and
+ *  the (biased) variance. The pieces' counts are fixed by the slicing, so they are recomputed
+ *  here rather than read back: piece `p` holds the elements `[p·per, min((p+1)·per, N·S))`. */
 export function batchNormFinish(N: number, C: number, S: number, eps: number): string {
   const pieces = bnPieces(N, S);
+  const lanes = lanesOf(S);
+  const per = Math.ceil((N * S) / pieces / lanes) * lanes;
   return `
-@group(0) @binding(0) var<storage, read> PartSum: array<f32>;
-@group(0) @binding(1) var<storage, read> PartSq: array<f32>;
+@group(0) @binding(0) var<storage, read> PartMean: array<f32>;
+@group(0) @binding(1) var<storage, read> PartM2: array<f32>;
 @group(0) @binding(2) var<storage, read_write> Mean: array<f32>;
 @group(0) @binding(3) var<storage, read_write> Var: array<f32>;
 @group(0) @binding(4) var<storage, read_write> InvStd: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(C)}
-  var total = 0.0;
-  var sq = 0.0;
+  var cnt = 0.0;
+  var mean = 0.0;
+  var m2 = 0.0;
   for (var p = 0u; p < ${pieces}u; p = p + 1u) {
-    total = total + PartSum[gid * ${pieces}u + p];
-    sq = sq + PartSq[gid * ${pieces}u + p];
+    let lo = p * ${per}u;
+    let cb = f32(min(lo + ${per}u, ${N * S}u) - lo);   // this piece's element count
+    let nc = cnt + cb;
+    let inv = select(0.0, cb / nc, nc > 0.0);
+    let delta = PartMean[gid * ${pieces}u + p] - mean;
+    mean = mean + delta * inv;
+    m2 = m2 + PartM2[gid * ${pieces}u + p] + delta * delta * cnt * inv;   // cnt·cb/nc = cnt·inv
+    cnt = nc;
   }
-  let m = total / ${(N * S).toFixed(1)};
-  Mean[gid] = m;
-  // **This is the biased estimate** (divided by n) — what torch's BatchNorm uses for
-  // the normalisation, and a different number from the unbiased one that goes into the
-  // running statistics. Merged into one, they diverge in evaluation mode alone.
-  let v = sq / ${(N * S).toFixed(1)} - m * m;
+  Mean[gid] = mean;
+  // **The biased estimate** (divided by n) — what torch's BatchNorm normalises by, from
+  // Welford's M2 so it never subtracted two large near-equal numbers. See precision_probe.
+  let v = m2 / ${(N * S).toFixed(1)};
   Var[gid] = v;
-  // The backward's 1/σ as well — it was an add and an rsqrt over C elements after this
-  // pass, two dispatches a layer for sixteen numbers (a captured step showed twenty).
+  // The backward's 1/σ as well — an add and an rsqrt over C elements folded in here.
   InvStd[gid] = inverseSqrt(v + ${f32lit(eps)});
 }`;
 }

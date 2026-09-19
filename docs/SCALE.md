@@ -816,6 +816,28 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   so it needs them flattened into one, a model-level change) or **cross-op fusion kernels** (conv→BN
   stats, the BatchNorm finish passes when a channel is one workgroup). Both are their own project; the
   per-kernel perf levers in conv and BatchNorm are spent.
+- **2026-09-19, accuracy measured; BatchNorm variance made stable with Welford** (`kernels.ts`
+  `batchNormStats`, `batchNormFinish`; `precision_probe.{html,py}`). WGSL has no f64, so the only
+  accuracy lever is how a reduction is arranged. Measured first against a Kahan/f64 CPU reference: the
+  tree-reduced **sum is already at the f32 floor** (2.6e-8 at n=1M) and the **mean is fine** (~1e-7) —
+  Kahan buys nothing there. But BatchNorm's one-pass `variance = mean(x²) − mean(x)²` is
+  **catastrophic-cancellation unstable**: 1e-7 at mean ≈ 0, but **5e-2 at mean 30 and 4.19 (419 %) at
+  mean 300** — the drift such a library carries silently. Replaced it with **Welford** (a running mean and
+  the centred `M2`, so nothing large is ever subtracted): each thread keeps `(count, mean, M2)`, the
+  workgroup tree and the finish pass **merge** the triples (the parallel Welford combine) instead of
+  adding sums, and the piece counts — fixed by the slicing — are recomputed in the finish rather than
+  read back, so the buffer count is unchanged and it stays one pass (no second read of the activation).
+  After: variance rel err **8.6e-7 at mean 30, 1.2e-5 at mean 300** — the cancellation is gone. Cost:
+  `bns` 0.10 → 0.14 ms (the per-element division), step unchanged in the noise; golden 4057/0,
+  `bn_relu_probe` still bit-identical. `precision_probe` is the fifty-ninth entry point (a measurement).
+- **2026-09-19, a shipped conv bug the fake probe had hidden.** Writing `precision_probe` surfaced that
+  the earlier `conv_dx_probe`/`bn_relu_probe` read gradients without `await`ing the async `toArray()` —
+  `Array.from(a promise)` is `[]`, so every comparison was empty-vs-empty, a false pass. With the await
+  fixed, the dX-subgroup path was **off by 6.6** at 32→64: it padded the gradient with `ceil(C/8)·8`
+  channels when the turned GEMM reads `O`, correct only when C = O (the golden's conv cases never hit a
+  C ≠ O same-pad 8-aligned backward). Fixed to pad with O channels; the probes now compare real values,
+  and `conv_dx_probe` gained a convTranspose-forward section (inherently C ≠ O) and C ≠ O backward
+  shapes. Lesson: a probe that does not fail on a known-wrong input is worse than none.
 
 ### Step 8 — What this plan does not do
 

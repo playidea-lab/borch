@@ -12576,17 +12576,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const variance = dev().alloc(C);
     // Workgroups (channel, piece) — see `bnPieces` — then a pass that finishes each channel.
     const pieces = bnPieces(N, S);
-    const partSum = dev().alloc(C * pieces);
-    const partSq = dev().alloc(C * pieces);
+    const partMean = dev().alloc(C * pieces);
+    const partM2 = dev().alloc(C * pieces);
     dev().run(
       dev().pipeline(`bns:${key}`, () => batchNormStats(N, C, S)),
-      [this.buffer, partSum, partSq],
+      [this.buffer, partMean, partM2],
       [C, pieces, 1],
     );
     const invStdBuf = dev().alloc(C);
     dev().run1d(
       dev().pipeline(`bnf:${key}:${eps}`, () => batchNormFinish(N, C, S, eps)),
-      [partSum, partSq, mean, variance, invStdBuf],
+      [partMean, partM2, mean, variance, invStdBuf],
       C,
     );
     const out = dev().alloc(this.size);
