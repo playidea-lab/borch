@@ -123,6 +123,9 @@ CHECKS = [
     # docs/SCALE.md fused optimiser: the Adam arena (one adamStep over all parameters) bit-identical
     # to the per-parameter step, with the arena confirmed to have fired.
     ("adam-arena", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/adam_arena_probe.py"]),
+    # docs/SCALE.md storage-f16: the window's f16 weight halves the resident bytes (a memory lever,
+    # measured; wall is host-packing the probe redoes, GPU cost small).
+    ("f16-stream", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/f16_stream_probe.py"]),
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),

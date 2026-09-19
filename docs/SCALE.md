@@ -881,6 +881,24 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   weight (memory, not speed; `pack2x16float`, no `shader-f16` needed), and only under memory pressure —
   the streaming track (Step 3), not eager training. The bench keeps the f16 `mm` variant as the gate to
   re-run on other hardware. Net: **no f16 built into any dispatched path; the measurement is the deliverable.**
+- **2026-09-19, storage-f16 in the window measured — it is a memory lever, confirmed** (`f16_stream_probe`,
+  the already-landed `Tensor.inWindowF16` + `streamSequential({f16})`). A stack too big to hold resident
+  (16 × 512×512 = 16.8 MB of weights, batch 4 so weight-movement dominates) streamed block by block
+  through a window sized for ~3 blocks, f32 window vs f16 window on apple/metal-3:
+  - **Resident halved, exactly**: `window.used` 1024 KB (f32) → 512 KB (f16), 2.00×. The stated win, real,
+    and on every device (`pack2x16float`, no `shader-f16`). This is what lets a model that would OOM fit.
+  - **Wall 2.5× slower — but that is the probe, not the mechanism.** Split by GPU timestamps: wall f32
+    4.54 / f16 12.40 ms, but **GPU-time f32 0.33 / f16 1.27 ms** — so the host side is 4.2 vs 11.1 ms, and
+    the extra ~7 ms is the JS `f32ToF16Bits` packing the probe redoes every pass. In real use the hub
+    stores f16 bytes packed once offline; the client never re-packs, so that cost is an artifact here.
+  - **The inherent cost is small and on the GPU**: the +0.9 ms GPU is the unpack pass (`unpack2x16float`
+    to an f32 scratch on each windowed weight's use, since the maths stays f32). A direct-f16 read would
+    drop it where `Device.f16` exists — but compute-f16 gained nothing on metal-3 (above), so it is not
+    worth building for this.
+  So storage-f16 is a **memory-capacity lever, not a speed one** — exactly as the plan framed it: it
+  halves the resident bytes so a bigger model streams, at a small GPU unpack cost, once the packing is
+  amortised at load. It waits for a workload that is actually memory-bound (a model past the window),
+  which eager training on this Mac is not. `f16_stream_probe` is the gate for that day.
 
 ### Step 8 — What this plan does not do
 

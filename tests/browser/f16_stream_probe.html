@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>f16 storage in the streaming window — the payoff, measured</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **Where f16 actually pays: the streaming window, not compute.** compute-f16 measured no
+  // speedup on metal-3 (kernel_bench mm), but f16 *storage* halves a windowed weight's resident
+  // bytes (Tensor.inWindowF16, pack2x16float, no shader-f16 needed). This checks whether that
+  // halving is real and whether it speeds a **bytes-bound** streaming step — a stack too big to
+  // hold resident, streamed block by block through a small window, with the weights large and the
+  // batch small so moving the weights dominates the arithmetic. f32 window vs f16 window: resident
+  // bytes, and wall per pass.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  try {
+    const bt = await import("borch-ts");
+    const { init, device, Device, Tensor, streamSequential } = bt;
+    await init();
+    say(`adapter: ${Device.adapterInfo}\n`);
+    const seed = (n, s) => { const a = new Float32Array(n); let x = s >>> 0; for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * 0.1; } return a; };
+    const D = 512, NB = 16, B = 4, PASSES = 20, WARM = 3;   // big weights, small batch — bytes-bound
+    const blocks = [];
+    for (let k = 0; k < NB; k++) blocks.push({
+      weights: [seed(D * D, 1 + k)], shapes: [[D, D]],
+      run: (h, w) => h.matmul(w[0]).relu(),
+    });
+    const totalWeightMB = NB * D * D * 4 / 1e6;
+    const measure = async (f16) => {
+      // A window sized for ~3 f32 blocks — a fraction of the stack, the same cap for both so the
+      // comparison is at one residency budget; f16 simply fills less of it.
+      const cap = 3 * D * D * 4;
+      const input = Tensor.from(seed(B * D, 99), [B, D]);
+      let used = 0;
+      for (let s = 0; s < WARM; s++) { const win = device().window(cap); const o = await streamSequential(win, input, blocks, { f16 }); used = win.used; await o.toArray(); win.free(); }
+      const t0 = performance.now();
+      for (let s = 0; s < PASSES; s++) { const win = device().window(cap); const o = await streamSequential(win, input, blocks, { f16 }); await o.toArray(); win.free(); }
+      const ms = (performance.now() - t0) / PASSES;
+      // GPU-time of one pass (excludes the host-side f16 packing), to separate the amortizable
+      // host pack from the inherent GPU unpack.
+      let gpuMs = 0;
+      await device().profile(async () => {
+        const win = device().window(cap); const o = await streamSequential(win, input, blocks, { f16 });
+        device().flush(); await device().synchronize(); await o.toArray(); win.free();
+      });
+      for (const [, ns] of device().nsByKind) gpuMs += ns / 1e6;
+      return { ms, used, gpuMs };
+    };
+    say(`stack: ${NB} blocks × ${D}×${D} = ${totalWeightMB.toFixed(1)} MB of weights, batch ${B}, window ~3 blocks\n`);
+    const f32 = await measure(false);
+    const f16 = await measure(true);
+    say(`resident (window.used):  f32 ${(f32.used / 1024).toFixed(0)} KB · f16 ${(f16.used / 1024).toFixed(0)} KB  (${(f32.used / f16.used).toFixed(2)}× smaller)`);
+    say(`wall / pass:             f32 ${f32.ms.toFixed(3)} ms · f16 ${f16.ms.toFixed(3)} ms  (${(f32.ms / f16.ms).toFixed(2)}×)`);
+    say(`GPU-time / pass:         f32 ${f32.gpuMs.toFixed(3)} ms · f16 ${f16.gpuMs.toFixed(3)} ms  (host packing is wall−GPU)`);
+    say(`faults: ${device().faults.count}`);
+    const halved = f32.used / f16.used > 1.6;   // f16 should roughly halve the resident bytes
+    say(halved ? "\nf16 window halves the resident weight bytes" : "\n**f16 did not halve residency — unexpected**");
+    window.__f16stream = { text: lines.join("\n"), ok: halved && device().faults.count === 0, f32, f16 };
+  } catch (err) {
+    window.__f16stream = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>
