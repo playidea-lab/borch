@@ -134,6 +134,9 @@ CHECKS = [
     # rounding, shape kept at 197. Needs the bimm-ts that carries the alignment (it refuses an
     # older one loudly rather than passing vacuously).
     ("vit-align", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/vit_align_probe.py"]),
+    # What reading the loss every step costs a training loop (a sync each step) against every
+    # fifty — measured 1.5x on a small loop; behind the workbench reading once an epoch.
+    ("loop-readback", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/loop_readback_probe.py"]),
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),

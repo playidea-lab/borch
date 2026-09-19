@@ -579,12 +579,20 @@ def train_step(x, y):
     opt.zero_grad(); loss = crit(model(x), y); loss.backward(); opt.step(); return loss
 
 step = torch.compiled(train_step)                             # records once per input shape
-for bx, by in batches:
+for i, (bx, by) in enumerate(batches):
     with torch.scope():
         loss = step(torch.tensor(bx), torch.tensor(by))       # first call: eager, recorded; then: copied in, replayed
-        losses.append(loss.item())
+    if i % 50 == 0:
+        print(loss.item())                                    # a readback is a sync — not every step
 step.dispose()
 ```
+
+**Read the loss every so often, not every step.** `.item()` waits for the GPU to finish
+everything queued; read each step, the CPU stands still until the step is done and then
+the GPU stands still while the CPU prepares and uploads the next batch. Left alone, the
+queue runs ahead and the next batch's upload overlaps the step the GPU is on. The
+workbench's own loop reads once an epoch (`npm run loop-readback:py` measures the difference
+on a loop that uploads a fresh batch every step).
 
 `compiled` is `capture()` with the bookkeeping done: the first call for a set of input
 shapes runs the function eagerly on copies of its arguments made under the capture, keeps

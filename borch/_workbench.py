@@ -308,14 +308,22 @@ class Session:
         losses = []
         try:
             for _epoch in range(cfg["epochs"]):
+                # **The loss is read back once an epoch, not once a step.** Only the epoch's
+                # last loss is kept, and `.item()` is a full sync with the GPU — read every
+                # step, the CPU stood still until the GPU had finished, then the GPU stood
+                # still while the CPU prepared and uploaded the next batch. Without it the
+                # queue runs ahead: the next batch's transform and upload overlap the step
+                # the GPU is on (measured on the LoRA fine-tune, `workbench_lora_py`). Under
+                # `compiled` the returned tensor is the recording's own and reads the latest
+                # replay; without it (the numpy core) it is a plain value either way.
                 last = None
                 for s in range(per_epoch):
                     if scope:
                         with scope():
-                            last = float(run(*self._batch(rows, s)).item())
+                            last = run(*self._batch(rows, s))
                     else:
-                        last = float(run(*self._batch(rows, s)).item())
-                losses.append(last)
+                        last = run(*self._batch(rows, s))
+                losses.append(float(last.item()) if last is not None else None)
         finally:
             if compiled and hasattr(run, "dispose"):
                 run.dispose()

@@ -1,0 +1,63 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>what a per-step readback costs a training loop</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **A readback is a sync.** `toArray()` / `.item()` waits for the GPU to finish everything
+  // queued, so a loop that reads its loss every step serialises the CPU and the GPU: the CPU
+  // stands still until the step is done, then the GPU stands still while the CPU prepares and
+  // uploads the next batch. Left alone, the queue runs ahead and the upload of batch k+1 overlaps
+  // step k. This times one small training loop four ways — a fresh batch uploaded each step or
+  // the same batch resident, crossed with a readback every step or every fifty — and reports the
+  // wall per step. A measurement, not a check. (`readback_probe` next door measures the bare
+  // latency of one readback; this measures what reading every step does to a loop.)
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  try {
+    const bt = await import("borch-ts");
+    const { init, device, Device, Tensor, optim } = bt;
+    await init();
+    say(`adapter: ${Device.adapterInfo}\n`);
+    const seed = (n, s) => { const a = new Float32Array(n); let x = s >>> 0; for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * 0.2; } return a; };
+    const B = 64, IN = 512, H = 512, OUT = 10, STEPS = 200, WARM = 20, EVERY = 50;
+    const params = [];
+    const lin = (i, o, k) => { const W = Tensor.from(seed(i * o, k), [i, o]); W.requiresGrad = true; const b = Tensor.from(seed(o, k + 1), [o]); b.requiresGrad = true; params.push(W, b); return [W, b]; };
+    const L = [lin(IN, H, 3), lin(H, H, 5), lin(H, OUT, 7)];
+    const opt = new optim.Adam(params, 1e-3);
+    const batches = Array.from({ length: 8 }, (_, k) => seed(B * IN, 100 + k));   // eight distinct batches, cycled
+    const resident = Tensor.from(batches[0], [B, IN]);
+    const run = async (upload, every) => {
+      let loss = null;
+      const step = (k) => {
+        opt.zeroGrad();
+        let h = upload ? Tensor.from(batches[k % batches.length], [B, IN]) : resident;
+        for (const [W, b] of L) h = h.matmul(W).add(b).relu();
+        loss = h.square().sum();
+        loss.backward();
+        opt.step();
+      };
+      for (let k = 0; k < WARM; k++) { step(k); await loss.toArray(); }
+      const t0 = performance.now();
+      for (let k = 0; k < STEPS; k++) { step(k); if (k % every === every - 1) await loss.toArray(); }
+      await loss.toArray();
+      return (performance.now() - t0) / STEPS;
+    };
+    const rows = [];
+    for (const [upload, label] of [[true, "fresh batch uploaded each step"], [false, "batch resident"]]) {
+      const everyStep = await run(upload, 1), everyFifty = await run(upload, EVERY);
+      rows.push({ label, everyStep, everyFifty });
+      say(`${label.padEnd(32)} readback every step ${everyStep.toFixed(3)} ms/step · every ${EVERY} ${everyFifty.toFixed(3)} ms/step  (${(everyStep / everyFifty).toFixed(2)}×)`);
+    }
+    say(`\nfaults: ${device().faults.count}`);
+    window.__loopReadback = { text: lines.join("\n"), ok: device().faults.count === 0, rows };
+  } catch (err) {
+    window.__loopReadback = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>

@@ -993,6 +993,23 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
     of ~5 % was the honest one. The alignment is in bimm (unreleased on npm; the probe refuses a
     bimm-ts without it rather than passing vacuously), the tile rule in borch-ts. `vit-align:py` is the
     sixty-third browser entry point.
+- **2026-09-19, the "batch upload" lever was really the per-step readback — 1.5× on a small loop**
+  (`borch/_workbench.py` `_run_steps`; `docs/BOOK.md`; `loop_readback_probe`). The performance report
+  listed "batch upload, ~8 % of a step, double-buffer it" from `datapath_probe`'s 0.72 ms for a U-Net
+  batch — but that was the upload measured on its own; the profiled step uploads nothing (its batch is
+  made once outside the loop), so the 8 % was an inference about a real loader, not a measured share.
+  Looking for where a real loop actually serialises found it one line over: `_run_steps` read the loss
+  back with `.item()` **every step** while keeping only the epoch's last, and a readback is a sync —
+  the CPU waits for the GPU to drain, then the GPU waits while the CPU prepares and uploads the next
+  batch. Measured on a step-dominated loop (`loop_readback_probe`, three Linears, batch 64, 200 steps,
+  apple/metal-3): reading every step **0.865 ms/step, every fifty 0.568 — 1.52×**; with the batch
+  resident instead of uploaded 0.797 → 0.522, the same 1.53× — so **the upload costs ~0.05 ms and
+  already overlaps; the sync was the whole cost.** There is nothing to double-buffer: drop the per-step
+  sync and the queue runs ahead on its own. `_run_steps` now reads once an epoch (the LoRA fine-tune
+  4.3 → 4.2 s — within noise there, since hub load and the post-training feature pass dominate that
+  wall; the loop-level number is the probe's), the BOOK's loop reads every fiftieth step and says why,
+  and `loop-readback:py` is the sixty-fourth browser entry point (a measurement). The report's lever
+  five is corrected accordingly.
 
 ### Step 8 — What this plan does not do
 
