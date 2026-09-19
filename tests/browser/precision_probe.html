@@ -1,0 +1,74 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>f32 reduction accuracy against a double reference</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **Where does f32 lose accuracy, and does it matter?** WGSL has no f64, so the only lever
+  // for accuracy is how a reduction is arranged. This measures three against a double reference
+  // computed the stable way (Kahan on the CPU, JS numbers being f64):
+  //   1. a plain sum — borch reduces it as a tree, which should already be near f32's floor;
+  //   2. BatchNorm's mean;
+  //   3. BatchNorm's variance, computed one-pass as mean(x²) − mean(x)², on inputs with a small
+  //      mean and with a large one. The large-mean case is the catastrophic-cancellation trap:
+  //      two big nearly-equal numbers subtracted to get a small one.
+  // A number here is a finding, not a pass/fail — it says whether a stable variance is worth building.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const kahan = (xs) => { // the double reference, summed compensated
+    let s = 0, c = 0;
+    for (let i = 0; i < xs.length; i++) { const y = xs[i] - c, t = s + y; c = (t - s) - y; s = t; }
+    return s;
+  };
+  const refMeanVar = (xs) => { const m = kahan(xs) / xs.length; const d = new Float64Array(xs.length);
+    for (let i = 0; i < xs.length; i++) d[i] = (xs[i] - m) * (xs[i] - m); return { mean: m, variance: kahan(d) / xs.length }; };
+  const rel = (got, ref) => Math.abs(ref) < 1e-30 ? Math.abs(got - ref) : Math.abs(got - ref) / Math.abs(ref);
+  try {
+    const bt = await import("borch-ts");
+    const { init, Device, Tensor } = bt;
+    await init();
+    say(`adapter: ${Device.adapterInfo}\n`);
+    // A generator with a set mean and spread — Float32Array so the GPU and the reference start equal.
+    const gen = (n, mean, spread, seed) => { const a = new Float32Array(n); let x = seed >>> 0;
+      for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = mean + (x / 4294967296 - 0.5) * 2 * spread; } return a; };
+
+    // 1. plain sum of a large array — tree reduction vs Kahan.
+    for (const n of [1 << 16, 1 << 20]) {
+      const xs = gen(n, 1.0, 0.5, 3);
+      const got = (await Tensor.from(xs, [n]).sum().toArray())[0];
+      say(`sum n=${n}: rel err ${rel(got, kahan(xs)).toExponential(2)}`);
+    }
+    say("");
+
+    // 2 & 3. BatchNorm mean and variance, at a small mean and a large one. N,C,H,W with C=8 so
+    // the per-channel reduction runs over N·H·W; all channels share the generator here.
+    const N = 16, C = 8, H = 48, W = 48, S = H * W, eps = 1e-5;
+    const w = Tensor.from(new Float32Array(C).fill(1), [C]);
+    const b = Tensor.from(new Float32Array(C).fill(0), [C]);
+    for (const [tag, mean, spread] of [["mean≈0", 0.0, 1.0], ["mean=30", 30.0, 0.1], ["mean=300", 300.0, 0.1]]) {
+      const xs = gen(N * C * S, mean, spread, 7);
+      const x = Tensor.from(xs, [N, C, H, W]);
+      const bn = x.batchNormFused(w, b, eps, false);
+      const gm = Array.from(await bn.mean.toArray()), gv = Array.from(await bn.variance.toArray());
+      // The reference per channel c: strided slice n·C·S + c·S + s.
+      let wm = 0, wv = 0;
+      for (let c = 0; c < C; c++) {
+        const slice = new Float64Array(N * S);
+        let k = 0; for (let nn = 0; nn < N; nn++) for (let s = 0; s < S; s++) slice[k++] = xs[(nn * C + c) * S + s];
+        const r = refMeanVar(slice);
+        wm = Math.max(wm, rel(gm[c], r.mean)); wv = Math.max(wv, rel(gv[c], r.variance));
+      }
+      say(`BN ${tag} (var≈${(spread * spread / 3).toExponential(1)}): mean rel err ${wm.toExponential(2)} · variance rel err ${wv.toExponential(2)}`);
+    }
+    say(`\nfaults: ${bt.device().faults.count}`);
+    window.__precision = { text: lines.join("\n"), ok: bt.device().faults.count === 0 };
+  } catch (err) {
+    window.__precision = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>
