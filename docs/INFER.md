@@ -1,0 +1,216 @@
+# Inference — where the forward loses to an engine, and the six steps that close it
+
+> Plan, written 2026-09-20 from the same-page measurements of 2026-09-19 (`docs/BOOK.md`,
+> "And the half this library loses") and a read of the forward's code path. It is the
+> inference twin of `docs/SCALE.md`: every step has a gate that is a number, and a step
+> whose gate fails is retired, not argued with. Nothing here touches the numpy core.
+
+## 0. Where the forward stands
+
+ResNet-18 (CIFAR), torch's weights, the logits within 1e-7 of torch's, mean of twenty
+after three warm-ups, readback included — the same page as `compare:ts`:
+
+| forward, ms | adapter | batch 1 | batch 16 |
+|---|---|---|---|
+| borch.ts fused (`fuse_conv_bn_eval` + `nn.intrinsic`), 2026-09-19 | `apple / metal-3` | **2.3–2.9** | 7.0–7.4 |
+| ONNX Runtime Web 1.29.0, WebGPU EP | `apple / metal-3` | 4.0–4.1 | **5.3** |
+| borch.ts fused, 2026-09-03 | `nvidia / lovelace` | **2.8** | 4.6 |
+| ONNX Runtime Web 1.29.0, WebGPU EP | `nvidia / lovelace` | 3.4 | **3.5** |
+
+At batch 1 the fused network is ahead on both adapters. At batch 16 it is 1.3–1.4×
+behind on both. The training step is 2.4–16× ahead of every library that trains in a
+browser (`compare-peers:ts`), so this is the one table where borch is second, and the
+plan is about that column.
+
+## 1. What the batch-16 forward is made of (apple/metal-3, 2026-09-19)
+
+The unfused forward at batch 16: **10.06 ms wall, 5.3 ms of GPU time, 97 dispatches.**
+Fused: **7.37 ms wall, 38 dispatches** — the fusion removed 59 dispatches and 2.7 ms,
+and not one of those milliseconds was GPU time. The GPU time by kernel:
+
+| kernel (unfused, batch 16) | ms | share |
+|---|---|---|
+| `cnt` 512→512 on a 4×4 plane (scalar tiled GEMM, K-split) | 1.4 | 26 % |
+| `cnt` 256→256 on 8×8 (scalar tiled GEMM, K-split) | 1.4 | 26 % |
+| `cnf` 64→64 on 32×32 (subgroup forward) | 0.5 | 9 % |
+| `cnf` 128→128 on 16×16 (subgroup forward) | 0.4 | 8 % |
+| `cnt` 256→512 stride 2, `cnd` direct convs, one `bna` | 0.8 | 15 % |
+| everything else | 0.8 | 15 % |
+
+So the forward is three buckets, and each has a different lever:
+
+- **(a) 2–3 ms that is not GPU time.** Wall minus GPU: 7.37 − ~4.5 at batch 16, 2.89 −
+  ~1.2 at batch 1. It is what it was in the training step before capture
+  (`docs/SCALE.md`, "the step's 30 % overhead is CPU encode"): JavaScript building bind
+  groups and encoding thirty-eight dispatches, an allocation per intermediate, and the
+  readback's round trip. ORT pays the same kind of cost — at batch 1 it is *slower* than
+  the fused network — but it pays it once per session, at graph build.
+- **(b) 2.8 ms in two convolutions that never reach the subgroup kernel.** `sgfFits`
+  (`kernels.ts`) takes the subgroup forward only when the output row is a multiple of
+  eight, the reduction is unsplit and there is no epilogue. The 4×4 plane fails the first
+  (a row of four), both deep layers take the K-split path (`convForwardSplit` > 1, checked
+  before the subgroup path in `tensor.ts` `convNDForward`), and the fused network's
+  relu/residual epilogue fails the third. So the two layers with the longest reductions in
+  the network (K = 4,608 and 2,304) run on the scalar tiled GEMM — the kernel ORT's
+  subgroup-matrix conv is "better fed" against, as the BOOK put it.
+- **(c) the early wide-plane layers read more than they multiply.** 64 channels on 32×32:
+  0.5 ms for a ninth of the FLOPs of the 512-channel layer. Bandwidth, not arithmetic.
+
+And one cost that is in every bucket: **the subgroup forward repacks its weights every
+call.** `convNDForward` allocates `turned` and dispatches `tmw` (tap-major weights) on each
+forward, because in training the weights change every step. In `eval()` they do not, and
+the repack is a dispatch plus a weight-sized write per layer per forward — ORT prepacks at
+session creation and never again.
+
+## 2. What ORT does that the forward does not — and which of it is ours to take
+
+| ORT Web (WebGPU EP) | borch.ts today | take it? |
+|---|---|---|
+| static graph → the whole forward encoded once, replayed | eager: encoded every call | **yes** — `torch.capture()` exists and is measured on training; it has not been pointed at `eval()` |
+| weights prepacked at session build | `tmw` every forward | **yes** — cache the turned weights on the parameter, invalidated by its version |
+| subgroup-matrix conv for every shape, epilogues in-kernel | subgroup only for stride 1 / row % 8 / unsplit / no epilogue | **yes** — three lifts of `sgfFits`, §3 Step 3 |
+| memory planned once, no allocation in the hot loop | pooled allocation per intermediate | comes free with capture (replay reuses its buffers) |
+| layout chosen per graph (NHWC where the kernel wants it) | NCHW, torch's, everywhere | **no** — our kernels are ours and read NCHW at full speed on the subgroup path; a layout switch would be a second kernel set for a gain not yet shown |
+| graph-level fusion beyond conv+bn+relu+add | `fuse_conv_bn_eval`, `nn.intrinsic` | not now — the remaining fusions (pool into conv, the final GEMM's bias) are single dispatches |
+| f16 weights | f32 only | **maybe** — Step 4; a memory lever on metal-3 (`f16_stream_probe`), not a compute one |
+
+## 3. The steps
+
+### Step 0 — The instrument · size S
+
+`compare.ts` prints, for the fused forward, wall time and dispatches. It does not print
+its GPU time by kind, and it has no row for a captured forward. Add both, and the
+`measured on:` line already there carries them.
+
+- **Gate**: the table has a `fused + captured` row and a per-kind breakdown for the fused
+  forward, on both adapters (the 4090 through cq — the wrapper's `script` mode runs any
+  browser script of the checkout).
+
+### Step 1 — Replay the eval forward · size S · bucket (a)
+
+`torch.capture()` around `noGrad(() => model.forward(x))`, with `x` a pinned input
+buffer the caller writes into before each replay (the `Capture.uploaded` set is exactly
+this: buffers `upload` made under the capture). Nothing new in the device; the API
+surface is `model.compile_for_inference()`-shaped (Step 6) but the measurement comes
+first.
+
+- **Predict**: batch 16 wall 7.0–7.4 → ~5.0 ms on metal-3 (GPU time + one submit + the
+  readback); batch 1 2.3–2.9 → ~1.5. That alone puts batch 16 level with ORT's 5.3.
+- **Gate**: fused + captured wall ≤ fused GPU time + 0.6 ms at batch 16, two runs; logits
+  bit-identical to the eager fused forward (the capture probe's standard).
+- **Retire if**: the replay is not within 1 ms of the GPU time — then the readback, not
+  the encode, is the cost, and Step 1 becomes "double-buffer the readback", a different
+  and smaller step.
+
+### Step 2 — Prepack once · size S · every bucket
+
+The turned weights (`tmw` output) cached on the `ConvND` parameter under `eval()`,
+keyed by the weight buffer and its version counter (the in-place guard already stamps
+one); `fuse_conv_bn_eval` and `nn.intrinsic` construction is the natural moment to fill
+it, a first `noGrad` forward the fallback. Training mode never reads the cache.
+
+- **Gate**: zero `tmw` dispatches in the steady-state eval forward; the eager fused
+  wall drops by the `tmw` time (measure it first — it is in the per-kind breakdown Step 0
+  adds). Under capture the replay would repeat `tmw` too, so this step is not made
+  redundant by Step 1.
+
+### Step 3 — The deep layers onto subgroup matrices · size M · bucket (b)
+
+Three lifts of `sgfFits`, in this order, each measured alone:
+
+1. **K-split on the subgroup forward** — the weight gradient already splits its reduction
+   on subgroup matrices (`convGradWeightSubgroup`, the `cnwg` floor); the forward gets the
+   same: pieces of whole eights of K into a `parted` slab, then `sumSplitsConv` with the
+   epilogue, as the scalar path does today. This alone moves the 8×8 layer (row of eight
+   fits) off `cnt`.
+2. **Rows shorter than eight** — the pixel axis becomes `N·OH·OW` staged through
+   workgroup memory (an implicit-GEMM tile gathered from the padded plane, then
+   `subgroupMatrixLoad` from workgroup storage), so the 4×4 plane is 16 pixels per image
+   and the tile spans images. The staging tile is bounded by
+   `Device.workgroupStorage` (16 KiB on the smallest tier) — the tile shape is chosen
+   from it, not fixed.
+3. **Epilogue in-kernel** — relu and the residual add applied when the accumulator tile
+   is stored, so the fused network's `ConvReLU2d` / `ConvAddReLU2d` take the subgroup path
+   instead of falling back to `cnt`.
+
+- **Predict**: the two layers 2.8 → ~0.8 ms at batch 16 (the 64-channel subgroup layer
+  runs its FLOPs at ~4× this rate today); forward GPU time 5.3 → ~3.3.
+- **Gate**: `cnt` absent from the ResNet-18 forward's top eight; batch-16 fused GPU time
+  ≤ 3.5 ms; every conv shape in the parity suite still within 1e-6 of torch (the padding
+  bug the fake probe hid in September is the reason this gate is the parity suite and
+  not the bench).
+- **This is the step that decides batch 16.** Steps 1–2 reach parity with ORT; Step 3
+  is what would put the fused forward ahead at batch 16 on metal-3.
+
+### Step 4 — The wide early layers · size M · bucket (c) · optional
+
+The 64→64 conv on 32×32 reads each input pixel nine times from storage. Two candidates,
+measured against each other on `kernel_bench` before either enters the tree:
+(i) the input tile staged once in workgroup memory and read for all nine taps;
+(ii) f16 storage for the weights and the padded input (`castF32ToF16`, bench-only today)
+— on metal-3 it halved residency and did not speed compute, but this layer is bandwidth.
+
+- **Gate**: `cnf` 64@32×32 0.5 → ≤ 0.3 ms at batch 16. Retire the candidate that does
+  not reach it; if neither does, retire the step.
+
+### Step 5 — NVIDIA · size S · measurement
+
+On the 4090 through Chrome 143 / Vulkan the subgroup kernels are absent and every path
+falls to the scalar ones (`docs/BOOK.md`, the compiler section). Steps 3–4 give that
+card nothing until `chromium-experimental-subgroup-matrix` reaches Vulkan on it.
+`tests/browser/features_probe.py` answers, per flag set, what this Chrome on this card
+exposes; run it through cq at each Chrome update and record the line in
+`docs/SCALE-MEASURED.md`. Steps 1–2 are layout- and feature-independent and are the
+whole plan for that card meanwhile.
+
+- **Gate**: the probe's line for the 4090, dated, in the ledger; the Step 1 gate re-run
+  there.
+
+### Step 6 — One call · size S
+
+`model.eval()` + `fuse_conv_bn_eval` + `nn.intrinsic` + prepack + capture behind one
+name — torch's shape is `torch.compile(model, mode="reduce-overhead")`, and that is the
+name to borrow (`torch.compile` is on the "deliberately not supported" list for training,
+where it would promise a graph compiler; for inference it promises exactly this). The
+Python binding gets the same call. The workbench's frozen-backbone pass
+(`_workbench.py`, the `no_grad` pass over the backbone) is its first user.
+
+- **Gate**: one call; logits within 1e-7 of the eager forward; the `compare:ts` table
+  gains the row and the BOOK's "for inference alone, use ORT Web" sentence is re-read
+  against the new numbers — kept if they say so.
+
+## 4. What this plan does not do
+
+- **A layout switch (NHWC)** — §2; a second kernel set for an unmeasured gain.
+- **A graph compiler** — capture is a recording, not a compiler; the fusions that remain
+  after conv+bn+relu+add are single dispatches each.
+- **LLM decode** — int4, KV cache, decode-shaped kernels; `docs/SCALE.md` Step 8 says
+  why not, and nothing here changes it.
+- **Safari / Firefox** — unmeasured; the same-page harness runs in Chrome.
+- **Beating ORT at every batch on every card** — the claim to make is the one the table
+  supports on the day it is printed, with the adapter beside it.
+
+## 5. Order and size
+
+```
+0 ──► 1 ──► 2 ──► 6        (overhead track: S · S · S · S)
+ │
+ └──► 3 ──► 4              (kernel track:   M · M-optional)
+ 5 at every Chrome update
+```
+
+The two tracks touch different files (`device.ts`/`nn.ts` against `kernels.ts`) and run
+at once. Predicted end state on metal-3, batch 16: today 7.0–7.4 ms → Step 1 ~5.0 →
+Step 2 ~4.8 → Step 3 ~3.0, against ORT's 5.3. Batch 1: 2.3–2.9 → ~1.5. The
+prediction is written down so that the ledger can say which step was wrong.
+
+## 6. Risks, and the sentence that retires each
+
+| risk | what would show it | retirement |
+|---|---|---|
+| a replayed forward reads a weight the user changed after capture | stale logits | the mutual refusal already in `SCALE.md` decision 6 (a captured network refuses in-place parameter writes by name); Step 6's call re-captures when a parameter's version moves |
+| the input buffer under capture is re-allocated instead of re-written | replay reads the old input | the `Capture.uploaded` contract — the input is written into the pinned buffer; a test that changes the input between replays and checks the logits move |
+| the workgroup-memory staging tile does not fit the smallest tier | shader compile refuses | tile chosen from `Device.workgroupStorage`; the parity suite runs at the 16 KiB tier in CI's SwiftShader |
+| the subgroup K-split's slab sum costs what the split saves | Step 3 lift 1 slower than `cnt` | measured alone before lift 2; retired if it is |
+| single-op timings swing 2× on the M4 Max | one run says a step won | every gate is two runs, fenced, adapter printed — the rule the Adam arena taught |
+| Vulkan never gets subgroup matrices on the 4090 | Step 5's probe line | Steps 1–2 stand on their own there; Step 3's gain is Apple-only until the probe says otherwise |
