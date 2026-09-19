@@ -1,0 +1,57 @@
+<!doctype html>
+<!--
+  The peers bench: borch.ts's ResNet-18 (CIFAR) training step and the same step in the two
+  other libraries that train in a browser on WebGPU — jax-js (@jax-js/jax, JavaScript) and
+  Burn (Rust → wasm, wgpu backend) — on this page, on this GPU, one after the other.
+      npm run build:ts
+      uv run --with playwright python borch-ts/test/compare_peers.py [--headed] [--skip=jax,burn]
+  jax-js arrives from jsDelivr at a pinned version (an ES module; not vendored like TF.js because
+  it is many files — and not from esm.sh, see the import map); Burn from
+  tests/browser/burn_resnet18/pkg (built from a scratch crate — the two commands are in its
+  .gitignore, the report in docs/BOOK.md). The result stays on the screen and in `window.__borchPeers`.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>borch.ts vs jax-js vs Burn — ResNet-18 (CIFAR) training step</title>
+  <style>
+    body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; max-width: 60rem; }
+    pre { white-space: pre-wrap; }
+  </style>
+  <!-- jax-js from jsDelivr's copy of the *published* dist, not from esm.sh: esm.sh's rebundle of
+       0.1.25 fails at run time on the WebGPU compile path ("Receiver must be an instance of class M"
+       — a private-field brand check broken by the transform; bisected op by op, 2026-09-19: the
+       same page on jsDelivr runs conv/BN/grad/jit/optax cleanly). optax imports `@jax-js/jax` bare,
+       and this map sends it to the same URL as compare_peers.ts's import — one instance. Pinned. -->
+  <script type="importmap">
+  { "imports": {
+      "@jax-js/jax": "https://cdn.jsdelivr.net/npm/@jax-js/jax@0.1.25/dist/index.js",
+      "@jax-js/optax": "https://cdn.jsdelivr.net/npm/@jax-js/optax@0.1.2/dist/index.js"
+  } }
+  </script>
+</head>
+<body>
+  <h1>borch.ts vs jax-js vs Burn — a ResNet-18 (CIFAR) training step</h1>
+  <pre id="out">measuring… (this takes a while)</pre>
+  <script type="module">
+    import { init } from "../dist/src/tensor.js";
+    import { Device } from "../dist/src/device.js";
+    import { report } from "../dist/test/bench.js";
+    import { reportJax, reportBurn } from "../dist/test/compare_peers.js";
+    const out = document.getElementById("out");
+    const skip = new Set((new URLSearchParams(location.search).get("skip") || "").split(",").filter(Boolean));
+    const lines = [];
+    const show = () => { out.textContent = lines.join("\n"); };
+    try {
+      await init();
+      lines.push("borch.ts"); lines.push(await report([16, 32, 64])); show();
+      if (!skip.has("jax")) { lines.push(""); lines.push(await reportJax([16, 32, 64])); show(); }
+      if (!skip.has("burn")) { lines.push(""); lines.push(await reportBurn([16, 32, 64])); show(); }
+      window.__borchPeers = { text: lines.join("\n"), adapter: Device.adapterInfo };
+    } catch (e) {
+      lines.push(`error: ${e && e.stack || e}`); show();
+      window.__borchPeers = { text: lines.join("\n"), error: String(e && e.stack || e), adapter: Device.adapterInfo };
+    }
+  </script>
+</body>
+</html>

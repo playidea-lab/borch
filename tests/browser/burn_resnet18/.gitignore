@@ -1,0 +1,6 @@
+# Built artefacts — 12 MB of wasm does not belong in git. Rebuild:
+#   cargo build --release --target wasm32-unknown-unknown
+#   wasm-bindgen --target web --out-dir pkg --out-name burn_resnet18 target/wasm32-unknown-unknown/release/burn_resnet18.wasm
+pkg/
+target/
+Cargo.lock

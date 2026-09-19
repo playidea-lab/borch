@@ -1028,7 +1028,28 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   matrices. Where borch is not: LLM inference (WebLLM 41–71 tok/s on M3 Max, transformers.js) and
   batch-inference throughput (ORT). **The two same-page measurements still missing are jax-js and
   Burn** — no one has published a training ms/step on Apple silicon but borch, so the training
-  comparison rests on the TF.js one until those are run.
+  comparison rests on the TF.js one until those are run. **[Run the same day — next entry.]**
+
+- **2026-09-19, the two missing rows run — jax-js and Burn on borch's page.** `borch-ts/test/compare_peers.ts`
+  (+ `.html`, `.py`; `npm run compare-peers:ts`), the `bench.ts` ResNet-18 CIFAR step in each, same seeded
+  pixels/labels, SGD 0.05/0.9, two warm-ups then five timed, loss readback every step, apple/metal-3:
+  **borch.ts 21.7 / 36.0 / 62.7 ms** at batch 16/32/64; **jax-js 0.1.25 + optax 0.1.2 68.6 / 95.0 / 150.9**
+  (borch **3.2× / 2.6× / 2.4×** — the ratio narrows with batch, TF.js's widened: jax-js pays a large fixed
+  per-step cost and its kernels are not bad); **Burn 0.21 wgpu (wasm) 262.8 / 512.0 / 1014.7** (borch
+  **12–16×**). Caveats carried with the numbers: jax-js's forward is under its `jit` (fused — its best
+  against borch's eager), BN and cross-entropy hand-written from its primitives as its MNIST example does,
+  params host-drawn (`random.normal` does not compile for its WebGPU device in 0.1.25), bytes from
+  jsDelivr's `dist` — **esm.sh's rebundle of the same version breaks at run time** on the WebGPU compile
+  path (`Receiver must be an instance of class M`; bisected op by op, cost most of the afternoon). Burn: a
+  268-line scratch crate (`tests/browser/burn_resnet18`, source committed, 12 MB `pkg/` gitignored with its
+  two build commands), first browser load includes shader autotune — **re-run with eight warm-ups:
+  264.4 / 516.2 / 1017.3, unchanged**, so autotune is not the story; its wasm wgpu path is single-threaded
+  and syncs per readback. Burn's batch-64 loss 0.38 after seven steps, 0.027 after thirteen — its init, not
+  a fault. Two readings that matter beyond the table: (1) on this GPU, in a browser, borch is the fastest
+  of the three libraries that train, at every batch, by 2.4× or more; (2) the same-page harness is what
+  made the esm.sh fault and the autotune question *checkable* — a number quoted from a peer's README would
+  have carried neither. Census 64 → 65; `compare-peers:ts` is a measurement, not a check, and stays out of
+  the nightly.
 
 ### Step 8 — What this plan does not do
 

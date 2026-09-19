@@ -1920,6 +1920,47 @@ equal, on purpose: memory layout — each library runs its native one, which is 
 what is being compared. `npm run compare:ts` reproduces it; the number is not carried
 into any sentence here without its adapter.
 
+**The two rows that were missing — measured 2026-09-19.** TF.js is the mainstream
+framework that trains, but it is not the only library that trains in a browser on
+WebGPU: the survey found two more, and nobody had published a training ms/step for
+either on Apple silicon. `borch-ts/test/compare_peers.ts` runs the same step in both, on
+borch's page, after borch:
+
+| CIFAR ResNet-18, same page, `apple / metal-3`, 2026-09-19 | batch 16 | batch 32 | batch 64 |
+|---|---|---|---|
+| **borch.ts** | **21.7 ms/step** | **36.0** | **62.7** |
+| jax-js 0.1.25 + optax 0.1.2 (WebGPU, NCHW, `jit` forward) | 68.6 | 95.0 | 150.9 |
+| ratio | 3.2× | 2.6× | 2.4× |
+| Burn 0.21 (Rust → wasm, wgpu backend, autodiff, autotune on) | 262.8 | 512.0 | 1014.7 |
+| ratio | 12.1× | 14.2× | 16.2× |
+| TF.js 4.22.0, same day, for the eye | 86.5 | 170.2 | 348.7 |
+
+Read with these attached. **jax-js**: it has no BatchNorm module and no cross-entropy, so
+both are written from its primitives the way its own MNIST example writes them; the
+forward is under its `jit` (it fuses what it can — that is its best, and borch's eager
+step is not fused, so the ratio is borch-eager against jax-js-at-its-best); parameters
+are drawn on the host and uploaded, because `random.normal` in 0.1.25 does not compile
+for its WebGPU device; and the bytes come from **jsDelivr's copy of the published
+`dist`**, not esm.sh — esm.sh's rebundle of the same version fails at run time on the
+WebGPU compile path (`Receiver must be an instance of class M`, a private-field brand
+check the transform breaks; bisected op by op). The ratio *narrows* with batch, the
+opposite of TF.js's — jax-js's per-step overhead is large and its kernels are not bad.
+**Burn**: a scratch crate (`tests/browser/burn_resnet18`, wgpu + autodiff, wasm-bindgen,
+0.21.0 — the newest on crates.io that day) exporting `init`/`train_step`; the first
+browser load includes its shader autotune, so the row was re-run with **eight** warm-up
+steps instead of two — 264.4 / 516.2 / 1017.3, the same to 1 % — autotune is not what the
+number is made of. Burn's wgpu backend on wasm is single-threaded and synchronises on
+every readback; it is not what its authors would run for speed, and it is also the only
+way to run Burn in a browser today. Both libraries' losses fall across the steps; Burn's
+batch-64 loss after seven steps (0.38) was higher than the others' and after thirteen
+(0.027) was not — its own initialisation, not a fault.
+
+`npm run compare-peers:ts` reproduces it (`--skip=jax,burn` to leave one out; the Burn row
+needs the crate built first — the two commands, `cargo build` for `wasm32-unknown-unknown`
+and `wasm-bindgen --target web`, are written in the crate's `.gitignore` beside the 12 MB
+they produce). This closes the gap the landscape survey named: every library that trains
+on WebGPU in a browser now has a same-page, same-adapter row.
+
 **And the half this library loses.** The same page runs one more comparison, for
 inference, against **ONNX Runtime Web 1.29.0** (WebGPU execution provider, bytes pinned
 the same way). The weights are one ResNet-18 exported from torch by
