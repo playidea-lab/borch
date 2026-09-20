@@ -23,7 +23,7 @@
 
 import { Tensor, noGrad } from "../src/tensor.js";
 import { Device } from "../src/device.js";
-import { clearInt8, quantizeForInt8 } from "../src/nn.js";
+import { clearInt8, fuseForInference, quantizeForInt8 } from "../src/nn.js";
 import { compiled } from "../src/compile.js";
 import { load } from "../src/serialize.js";
 import { exportOnnx } from "../src/onnx.js";
@@ -193,6 +193,58 @@ function maxAbsDiff(a: ArrayLike<number>, b: ArrayLike<number>): number {
 
 /** Warm, time, mean — the bench's shape. Inference forwards are short (single-digit ms), so
  * they take twenty timed runs where a training step takes five. `run` must include the readback. */
+/** The bytes at `url`, or `null` when there is no such file. */
+async function maybeBytes(url: string): Promise<Uint8Array | null> {
+  try { return await bytes(url); } catch { return null; }
+}
+
+/** Top-1 of `forward` over the slice, batches of `batch`; the logits' argmax on the host. */
+async function top1(forward: (x: Tensor) => Tensor, pixels: Float32Array, labels: Uint32Array, batch: number): Promise<number> {
+  const n = labels.length;
+  let correct = 0;
+  for (let i = 0; i < n; i += batch) {
+    const b = Math.min(batch, n - i);
+    const x = Tensor.from(pixels.subarray(i * 3072, (i + b) * 3072), [b, 3, 32, 32]);
+    const out = await noGrad(() => forward(x)).toArray();
+    for (let j = 0; j < b; j++) {
+      let best = 0;
+      for (let c = 1; c < 10; c++) if ((out[j * 10 + c] ?? 0) > (out[j * 10 + best] ?? 0)) best = c;
+      if (best === labels[i + j]) correct++;
+    }
+  }
+  return correct / n;
+}
+
+async function reportAccuracy(): Promise<string[]> {
+  const weights = await maybeBytes(OUT + "resnet18_cifar_trained.safetensors");
+  const slice = await maybeBytes(OUT + "cifar10_test.bin");
+  if (!weights || !slice) return ["accuracy: no trained network beside the seed-0 one (tests/browser/train_resnet18_cifar.py writes it) — the rows above are speed only"];
+  const view = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+  const n = view.getUint32(0, true);
+  const pixels = new Float32Array(slice.buffer.slice(slice.byteOffset + 4, slice.byteOffset + 4 + n * 3072 * 4));
+  const labels = new Uint32Array(slice.buffer.slice(slice.byteOffset + 4 + n * 3072 * 4, slice.byteOffset + 4 + n * 3072 * 4 + n * 4));
+  const model = new ResNet18();
+  const report = model.loadStateDict(load(weights) as Record<string, Tensor>, false);
+  const missing = report.missing.filter((k) => !k.endsWith("num_batches_tracked"));
+  if (missing.length || report.unexpected.length) throw new Error(`trained state dict did not fit: missing ${missing.join(",")} unexpected ${report.unexpected.join(",")}`);
+  model.eval();
+  fuseForInference(model);
+  const BATCH = 100;
+  const f32 = await top1((x) => model.forward(x), pixels, labels, BATCH);
+  const lines = [`accuracy on ${n} CIFAR-10 test images (trained weights): borch.ts f32 fused ${(100 * f32).toFixed(2)}%`];
+  if (Device.subgroupInt8) {
+    const layers = await quantizeForInt8(model);
+    const q = await top1((x) => model.forward(x), pixels, labels, BATCH);
+    clearInt8(model);
+    const drop = 100 * (f32 - q);
+    const GATE_POINTS = 0.5;
+    lines.push(`accuracy on the same images: borch.ts int8 (${layers} layers) ${(100 * q).toFixed(2)}% · ${drop >= 0 ? "−" : "+"}${Math.abs(drop).toFixed(2)} points · gate within ${GATE_POINTS}: ${drop <= GATE_POINTS ? "passed" : "**FAILED — the int8 path is not routed to**"}`);
+  } else {
+    lines.push("accuracy: no int8 configuration on this adapter — the int8 gate runs where there is one");
+  }
+  return lines;
+}
+
 async function timed(run: () => Promise<unknown>, warmup = 2, steps = 5): Promise<number> {
   for (let i = 0; i < warmup; i++) await run();
   const t0 = performance.now();
@@ -327,6 +379,12 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     }
   }
 
+  // **Accuracy, where a trained network exists** (`docs/INT8.md` Step 4): the trained
+  // weights and a labelled test slice written by `tests/browser/train_resnet18_cifar.py`
+  // beside the seed-0 files. The f32 fused forward's top-1 on the slice, then the int8
+  // forward's on the same images, and the gate — within half a point — beside the times
+  // above. Absent files mean the seed-0 weights only, and the line says so.
+  lines.push(...await reportAccuracy());
   // The whole story on one page: the fused network leaves as ONNX — borch's own file,
   // not torch's — and ORT Web runs it, gated against torch's logits like everything
   // above. Training here, serving anywhere.
