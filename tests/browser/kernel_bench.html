@@ -4,7 +4,7 @@
   directly — no wheel, no bundle, a rebuild of the TS emit is all a new variant needs.
 
       npm run build:ts
-      npm run bench:kernels -- [--bench=dw,fwd,bn,pad,mm,mmi8] [--shapes=16-16@96,32-32@48x8]
+      npm run bench:kernels -- [--bench=dw,fwd,bn,pad,mm,mmi8,cnvi8] [--shapes=16-16@96,32-32@48x8]
 
   Each bench times its kernels round-robin, five rounds of twenty dispatches under the
   device's timestamp profiler, and keeps the minimum; a kernel's answer is compared with
@@ -314,6 +314,75 @@ const BENCHES = {
     return `${text} · ${tops(runs[0].best)} TOPS int8 / ${tops(runs[2].best + runs[2].extra)} TFLOP/s f32 · int8 over the tile ${ratio.toFixed(2)}×`
       + (wrong ? ` WRONG(${wrong} of ${M * Nd} entries differ from the CPU int32 reference)` : " · i32 exact")
       + (relF > 1e-6 ? ` WRONG(dequantised rel ${relF.toExponential(1)})` : ` · dequantised rel ${relF.toExponential(1)}`);
+  },
+  // **The int8 convolution** (`docs/INT8.md` Steps 2–3) on an adapter with the `i8 → i32`
+  // configuration: the activation quantised on the GPU (`absMaxPass` twice, then
+  // `quantizeActivationInt8`), the weights on the host (`quantizeConvWeightInt8TapMajor`),
+  // the convolution held to a **CPU int32 reference on every output** through the same
+  // dequantising arithmetic (so a wrong tap or a wrong byte shows as a mismatch, not a
+  // tolerance), then timed against the f32 tiled kernel on the same shape, the quantise
+  // passes counted as the int8 kernel's extra. Shapes as `fwd`: `cin-cout@side x batch`.
+  async cnvi8(sh) {
+    if (!Device.subgroupInt8) return "no int8 subgroup-matrix configuration on this adapter — nothing to measure";
+    const s = conv(sh);
+    if (!K.convInt8Fits(s)) return `shape is not one the int8 convolution takes (C whole 32s, O whole 16s, a tile of 32 pixels)`;
+    const n = sh.N * sh.C * sh.H * sh.H, m = sh.N * sh.O * sh.H * sh.H, wsize = sh.O * sh.C * 9;
+    const xf = fill(n, 1), wf = fill(wsize, 2);
+    // The host's quantisation, the reference's operands.
+    let peak = 0; for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(xf[i]));
+    const sA = Math.fround(peak / 127), invA = 1 / sA;
+    const xq = new Int8Array(n); for (let i = 0; i < n; i++) xq[i] = Math.max(-127, Math.min(127, Math.round(xf[i] * invA)));
+    const Q = await import("/borch-ts/dist/src/quant.js");
+    const Op = K.convInt8CoPad(sh.O);
+    const { packed, scales } = Q.quantizeConvWeightInt8TapMajor(wf, sh.O, sh.C, 9, Op);
+    const wq = new Int8Array(wsize);
+    for (let o = 0; o < sh.O; o++) for (let i = 0; i < sh.C * 9; i++) { const sc = scales[o]; wq[o * sh.C * 9 + i] = sc === 0 ? 0 : Math.max(-127, Math.min(127, Math.round(wf[o * sh.C * 9 + i] / sc))); }
+    // The CPU int32 reference: a 3 × 3, stride 1, pad 1 convolution on the integers.
+    const H = sh.H, plane = H * H;
+    const ref = new Int32Array(m);
+    for (let b = 0; b < sh.N; b++) for (let o = 0; o < sh.O; o++) for (let y = 0; y < H; y++) for (let x = 0; x < H; x++) {
+      let acc = 0;
+      for (let c = 0; c < sh.C; c++) { const xb = (b * sh.C + c) * plane, wb = (o * sh.C + c) * 9;
+        for (let ky = 0; ky < 3; ky++) { const iy = y + ky - 1; if (iy < 0 || iy >= H) continue;
+          for (let kx = 0; kx < 3; kx++) { const ix = x + kx - 1; if (ix < 0 || ix >= H) continue; acc += xq[xb + iy * H + ix] * wq[wb + ky * 3 + kx]; } } }
+      ref[(b * sh.O + o) * plane + y * H + x] = acc;
+    }
+    // The GPU side.
+    const X = upload(n, 1), W = upload(wsize, 2), Bf = upload(sh.O, 3);
+    const parts = K.absMaxParts(n);
+    const Parts = dev.alloc(parts), Max = dev.alloc(1), Xq = dev.alloc(n / 4), Out = dev.alloc(m);
+    const Wq = dev.alloc(packed.length); dev.writeWords(Wq, packed);
+    const SW = dev.alloc(sh.O); dev.writeWords(SW, new Uint32Array(scales.buffer));
+    const quantise = () => {
+      dev.run(dev.pipeline(`amx:${n}:${parts}`, () => K.absMaxPass(n, parts)), [X, Parts], [parts, 1, 1]);
+      dev.run(dev.pipeline(`amx:${parts}:1`, () => K.absMaxPass(parts, 1)), [Parts, Max], [1, 1, 1]);
+      dev.run1d(dev.pipeline(`qa8:${sh.name}`, () => K.quantizeActivationInt8(sh.N, sh.C, H, H)), [X, Max, Xq], n / 4);
+    };
+    const grid = K.convInt8Grid(s);
+    quantise();
+    dev.run(dev.pipeline(`ci8:${sh.name}`, () => K.convForwardInt8(s, false)), [Xq, Wq, Max, SW, Out], grid); dev.flush(); await dev.synchronize();
+    const got = await new Tensor(Out, [m]).toArray();
+    const maxHost = await new Tensor(Max, [1]).toArray();
+    let wrong = 0, worst = 0;
+    for (let i = 0; i < m; i++) {
+      const o = Math.floor(i / plane) % sh.O;
+      const want = Math.fround(Math.fround(ref[i] * Math.fround(maxHost[0] / 127)) * scales[o]);
+      if (got[i] !== want) { wrong++; worst = Math.max(worst, Math.abs(got[i] - want)); }
+    }
+    const scaleNote = Math.abs(maxHost[0] - peak) > 1e-6 * peak ? ` (GPU absmax ${maxHost[0]} vs host ${peak})` : "";
+    // Timed: the int8 convolution with its quantise passes as extra, against the f32 tiled kernel.
+    const sp = K.convForwardSplit(s); const partsF = sp > 1 ? dev.alloc(m * sp) : null; const Of = dev.alloc(m);
+    const runs = [
+      { name: "int8 subgroup conv (+ quantise passes)", key: `ci8:${sh.name}`, make: () => K.convForwardInt8(s, false), extraKeys: [`amx:${n}:${parts}`, `amx:${parts}:1`, `qa8:${sh.name}`], outb: Out,
+        run: () => { quantise(); dev.run(dev.pipeline(`ci8:${sh.name}`, () => K.convForwardInt8(s, false)), [Xq, Wq, Max, SW, Out], grid); } },
+      { name: `f32 tiled (split ${sp})`, key: `cnt:${sh.name}`, extraKeys: sp > 1 ? [`ssc:${sh.name}`] : [], make: () => K.convNDForwardTiled(s, sp === 1), outb: Of,
+        run: () => { if (sp === 1) { dev.run(dev.pipeline(`cnt:${sh.name}`, () => K.convNDForwardTiled(s, true)), [X, W, Bf, Of], K.convTiledGrid(s)); return; }
+          dev.run(dev.pipeline(`cnt:${sh.name}`, () => K.convNDForwardTiled(s, false)), [X, W, partsF], K.convTiledGrid(s)); dev.run1d(dev.pipeline(`ssc:${sh.name}`, () => K.sumSplitsConv(s, sp, true)), [partsF, Bf, Of], m); } },
+    ];
+    const text = (await race(runs, 1)).replace(/ WRONG\([^)]*\)/g, "");
+    const r0 = runs[0], r1 = runs[1];
+    return `${text} · int8 kernel alone ${r0.best.toFixed(3)} vs f32 ${(r1.best + r1.extra).toFixed(3)} → ${((r1.best + r1.extra) / r0.best).toFixed(2)}× (with quantise ${((r1.best + r1.extra) / (r0.best + r0.extra)).toFixed(2)}×)`
+      + (wrong ? ` WRONG(${wrong} of ${m} outputs differ from the CPU int32 reference, worst ${worst.toExponential(1)})${scaleNote}` : ` · exact against the CPU int32 reference${scaleNote}`);
   },
   // The optimizer step: 152 tiny per-parameter dispatches against one dispatch over an
   // arena that gathers the gradients in and scatters the parameters out by copy. The

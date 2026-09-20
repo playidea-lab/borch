@@ -69,3 +69,35 @@ export function dequantInt8PerChannel(data: Float32Array, outChannels: number): 
   }
   return out;
 }
+
+/**
+ * **Per-output-channel int8 for the int8 convolution** (`docs/INT8.md` Step 3), laid out for
+ * its right operand: `[tap][ci][co]`, four output channels a word, `co` padded to a whole
+ * `coPad` so every 16-column block the subgroup load takes is inside the array. One scale
+ * per output channel over all of that channel's taps and inputs: `scale[o] = max|W[o]| /
+ * 127`. `data` is torch's `[O, C, kh, kw]`, row-major.
+ */
+export function quantizeConvWeightInt8TapMajor(
+  data: Float32Array, O: number, C: number, kSpace: number, coPad: number,
+): { packed: Uint32Array; scales: Float32Array } {
+  const scales = new Float32Array(O);
+  const perOut = C * kSpace;
+  for (let o = 0; o < O; o++) {
+    let peak = 0;
+    for (let i = 0; i < perOut; i++) { const a = Math.abs(data[o * perOut + i] as number); if (a > peak) peak = a; }
+    scales[o] = peak / I8_MAX;
+  }
+  const words = (kSpace * C * coPad) / 4;
+  const packed = new Uint32Array(words);
+  for (let t = 0; t < kSpace; t++) for (let ci = 0; ci < C; ci++) for (let o = 0; o < O; o++) {
+    const scale = scales[o] as number;
+    let q = 0;
+    if (scale !== 0) {
+      const r = Math.round((data[(o * C + ci) * kSpace + t] as number) / scale);
+      q = r > I8_MAX ? I8_MAX : r < -I8_MAX ? -I8_MAX : r;
+    }
+    const e = (t * C + ci) * coPad + o;
+    packed[e >> 2] = (((packed[e >> 2] as number) | ((q & 0xff) << ((e & 3) * 8))) >>> 0);
+  }
+  return { packed, scales };
+}

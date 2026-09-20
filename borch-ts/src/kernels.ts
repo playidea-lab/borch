@@ -2012,6 +2012,229 @@ ${stores.join("\n")}
 }
 
 /**
+ * **The absolute maximum of `n` floats, one pass** (`docs/INT8.md` Step 2): a workgroup a
+ * chunk, each thread striding it, a tree in workgroup memory, one value a workgroup into
+ * `Out`. Run twice — `n` → `parts`, then `parts` → 1 — for the per-tensor activation
+ * scale. `Out[0]` after the second pass is `max|x|`; the quantiser divides by 127 itself.
+ */
+export function absMaxPass(n: number, parts: number): string {
+  const chunk = Math.ceil(n / parts);
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+var<workgroup> red: array<f32, ${WORKGROUP}>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+  let from = wid.x * ${chunk}u;
+  let to = min(from + ${chunk}u, ${n}u);
+  var m = 0.0;
+  for (var i = from + lid; i < to; i = i + ${WORKGROUP}u) { m = max(m, abs(A[i])); }
+  red[lid] = m;
+  workgroupBarrier();
+  for (var s = ${WORKGROUP / 2}u; s > 0u; s = s / 2u) {
+    if (lid < s) { red[lid] = max(red[lid], red[lid + s]); }
+    workgroupBarrier();
+  }
+  if (lid == 0u) { Out[wid.x] = red[0]; }
+}`;
+}
+
+/** Parts for `absMaxPass`: enough workgroups to fill a card, bounded. */
+export function absMaxParts(n: number): number {
+  return Math.max(1, Math.min(1024, Math.ceil(n / (WORKGROUP * 8))));
+}
+
+/**
+ * **Quantises an NCHW activation to int8, four channels a word** (`docs/INT8.md` Step 2):
+ * `q = clamp(round(x / s), -127, 127)` with `s = Max[0] / 127` (`Max[0]` from `absMaxPass`),
+ * packed as `Xq[((n · C/4 + c/4) · H + y) · W + x]` with channel `c` in byte `c % 4` — the
+ * layout the int8 convolution stages (`convForwardInt8`). One thread a word. C whole fours.
+ */
+export function quantizeActivationInt8(N: number, C: number, H: number, W: number): string {
+  const words = N * (C / 4) * H * W;
+  const plane = H * W;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Max: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Xq: array<i32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(words)}
+  let s = Max[0] / 127.0;
+  let inv = select(0.0, 1.0 / s, s > 0.0);
+  let pos = gid % ${plane}u;
+  let nc4 = gid / ${plane}u;
+  let n = nc4 / ${C / 4}u;
+  let c0 = (nc4 - n * ${C / 4}u) * 4u;
+  var word = 0u;
+  for (var j = 0u; j < 4u; j = j + 1u) {
+    let v = X[(n * ${C}u + c0 + j) * ${plane}u + pos];
+    let q = clamp(i32(round(v * inv)), -127, 127);
+    word = word | ((u32(q) & 0xffu) << (j * 8u));
+  }
+  Xq[gid] = i32(word);
+}`;
+}
+
+/** Output channels a workgroup of `convForwardInt8` takes: four subgroups of 32. */
+export const CI8_CO = 128;
+const CI8_SUBGROUPS = 4;
+const CI8_CO_SG = 32;
+/** Words the staged band may take — 8 KiB of the guaranteed 16. */
+const CI8_STAGE_MAX = 2048;
+
+/** The padded width of the int8 weights' output-channel axis: whole sixteens. */
+export function convInt8CoPad(O: number): number { return Math.ceil(O / 16) * 16; }
+
+/** Whether a convolution takes the int8 subgroup forward: the small-plane kernel's shape
+ *  rules (`sgfsBand`, a tile of thirty-two pixels), stride one, a 3 × 3 or smaller kernel,
+ *  input channels in thirty-twos (one K step), output channels in sixteens. */
+export function convInt8Fits(s: ConvNDShape): boolean {
+  const band = sgfsBand(s);
+  return s.inDims.length === 2 && (s.groups ?? 1) === 1 && (s.dilation ?? [1, 1]).every((d) => d === 1)
+    && s.stride.every((v) => v === 1) && s.kernel.every((v) => v <= 3)
+    && s.C % 32 === 0 && s.O % 16 === 0
+    && band !== null && band.stage <= CI8_STAGE_MAX;   // stage counts 8 channels of floats; here 8 words of 4 channels — the same count
+}
+
+/** The grid: pixel tiles, blocks of 128 output channels. */
+export function convInt8Grid(s: ConvNDShape): [number, number, number] {
+  const [OH = 1, OW = 1] = s.outDims;
+  return [Math.ceil((s.N * OH * OW) / SGFS_TN), Math.ceil(s.O / CI8_CO), 1];
+}
+
+/**
+ * **The convolution on int8 subgroup matrices** (`docs/INT8.md` Step 3) — the small-plane
+ * staged kernel's shape with the roles of the operands swapped so nothing is repacked:
+ * the **activation is the left operand** — a tile of 32 pixels by 32 input channels,
+ * whose row is a pixel's 32 channels, eight consecutive words of the quantised
+ * activation — and the **weights are the right**, `[tap][ci][co]` packed along `co`
+ * (`quantizeConvWeightInt8TapMajor`). The i8 × i8 → i32 16 × 16 × 32 configuration; each
+ * subgroup owns 32 output channels as four 16 × 16 results, four subgroups a workgroup.
+ *
+ * Per block of 32 input channels the band of padded rows is staged as words (8 a
+ * position), then per kernel row the three taps' 32 × 32 blocks are copied from it side
+ * by side — eight words a pixel, contiguous — and multiplied. The result goes through
+ * workgroup memory and the lanes write `f32(c) · (Max[0] / 127) · SW[co] + B[co]`, the
+ * residual and the relu, in NCHW.
+ */
+export function convForwardInt8(s: ConvNDShape, hasBias: boolean, epilogue?: ConvEpilogue): string {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [OH = 1, OW = 1] = s.outDims;
+  const [KH = 1, KW = 1] = s.kernel;
+  const [PH = 0, PW = 0] = s.pad;
+  const PIW = IW + 2 * PW;
+  const plane = OH * OW;
+  const { imgs, band, stage } = sgfsBand(s) as { imgs: number; rows: number; band: number; stage: number };
+  const bplane = band * PIW;                       // positions of one image's staged band
+  const P = s.N * plane;
+  const TN = SGFS_TN;
+  const lanes = 32 * CI8_SUBGROUPS;
+  const Op = convInt8CoPad(s.O);
+  const kBlocks = s.C / 32;
+  const localPlane = imgs > 1 ? plane : TN;
+  const XS = KW * TN * 8;                           // words: the taps of a kernel row, a tile each
+  const slot = hasBias ? 4 : 3;
+  const OT = CI8_SUBGROUPS * TN * CI8_CO_SG;
+  const mma: string[] = [];
+  for (let kw = 0; kw < KW; kw++) {
+    mma.push(`      { let wBase = ((kh * ${KW}u + ${kw}u) * ${s.C}u + ci0) * ${Op}u + co;
+        let a0 = subgroupMatrixLoad<subgroup_matrix_left<i8, 32, 16>>(&xs, ${kw * TN * 32}u, false, 32u);
+        let a1 = subgroupMatrixLoad<subgroup_matrix_left<i8, 32, 16>>(&xs, ${kw * TN * 32 + 16 * 32}u, false, 32u);
+        let b0 = subgroupMatrixLoad<subgroup_matrix_right<i8, 16, 32>>(&Wq, wBase, false, ${Op}u);
+        let b1 = subgroupMatrixLoad<subgroup_matrix_right<i8, 16, 32>>(&Wq, wBase + 16u, false, ${Op}u);
+        c00 = subgroupMatrixMultiplyAccumulate(a0, b0, c00);
+        c01 = subgroupMatrixMultiplyAccumulate(a0, b1, c01);
+        c10 = subgroupMatrixMultiplyAccumulate(a1, b0, c10);
+        c11 = subgroupMatrixMultiplyAccumulate(a1, b1, c11); }`);
+  }
+  return `enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+@group(0) @binding(0) var<storage, read> Xq: array<i32>;
+@group(0) @binding(1) var<storage, read> Wq: array<i32>;
+@group(0) @binding(2) var<storage, read> Max: array<f32>;
+@group(0) @binding(3) var<storage, read> SW: array<f32>;
+${hasBias ? "@group(0) @binding(4) var<storage, read> B: array<f32>;" : ""}
+${residualBinding(epilogue, slot + 1)}
+@group(0) @binding(${epilogue?.residual ? slot + 2 : slot + 1}) var<storage, read_write> Out: array<f32>;
+var<workgroup> pl: array<i32, ${stage}>;
+var<workgroup> xs: array<i32, ${XS}>;
+var<workgroup> ot: array<i32, ${OT}>;
+@compute @workgroup_size(${lanes})
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32, @builtin(subgroup_id) sid: u32, @builtin(subgroup_invocation_id) siv: u32) {
+  let p0 = wid.x * ${TN}u;
+  let n0 = p0 / ${plane}u;
+  let oh0 = (p0 - n0 * ${plane}u) / ${OW}u;
+  let co = wid.y * ${CI8_CO}u + sid * ${CI8_CO_SG}u;
+  var c00: subgroup_matrix_result<i32, 16, 16>;
+  var c01: subgroup_matrix_result<i32, 16, 16>;
+  var c10: subgroup_matrix_result<i32, 16, 16>;
+  var c11: subgroup_matrix_result<i32, 16, 16>;
+  for (var kb = 0u; kb < ${kBlocks}u; kb = kb + 1u) {
+    let ci0 = kb * 32u;
+    // Stage: the band of padded rows of thirty-two channels for the tile's images, eight
+    // words a position; zero in the border and past the batch.
+    for (var e = lid; e < ${stage}u; e = e + ${lanes}u) {
+      let pos = e / 8u;
+      let w = e - pos * 8u;
+      let img = pos / ${bplane}u;
+      let r2 = pos - img * ${bplane}u;
+      let py = r2 / ${PIW}u;
+      let px = r2 - py * ${PIW}u;
+      let n = n0 + img;
+      let iy = i32(oh0 + py) - ${PH};
+      let ix = i32(px) - ${PW};
+      var v = 0;
+      if (n < ${s.N}u && iy >= 0 && iy < ${IH} && ix >= 0 && ix < ${IW}) {
+        v = Xq[((n * ${s.C / 4}u + ci0 / 4u + w) * ${IH}u + u32(iy)) * ${IW}u + u32(ix)];
+      }
+      pl[e] = v;
+    }
+    workgroupBarrier();
+    for (var kh = 0u; kh < ${KH}u; kh = kh + 1u) {
+      // The taps of one kernel row: a tile's rows (a pixel's eight words) copied from the
+      // band at (row + kh, ow + kw), side by side per tap.
+      for (var e = lid; e < ${XS}u; e = e + ${lanes}u) {
+        let kw = e / ${TN * 8}u;
+        let e1 = e - kw * ${TN * 8}u;
+        let col = e1 / 8u;
+        let w = e1 - col * 8u;
+        let img = col / ${localPlane}u;
+        let q = col - img * ${localPlane}u;
+        let r = q / ${OW}u;
+        let ow = q - r * ${OW}u;
+        xs[e] = pl[((img * ${band}u + r + kh) * ${PIW}u + ow + kw) * 8u + w];
+      }
+      workgroupBarrier();
+${mma.join("\n")}
+      workgroupBarrier();
+    }
+  }
+  // The store: [pixel][co] per subgroup through workgroup memory, then the lanes
+  // dequantise and write NCHW.
+  subgroupMatrixStore(&ot, sid * ${TN * CI8_CO_SG}u + 0u, c00, false, ${CI8_CO_SG}u);
+  subgroupMatrixStore(&ot, sid * ${TN * CI8_CO_SG}u + 16u, c01, false, ${CI8_CO_SG}u);
+  subgroupMatrixStore(&ot, sid * ${TN * CI8_CO_SG}u + ${16 * CI8_CO_SG}u, c10, false, ${CI8_CO_SG}u);
+  subgroupMatrixStore(&ot, sid * ${TN * CI8_CO_SG}u + ${16 * CI8_CO_SG + 16}u, c11, false, ${CI8_CO_SG}u);
+  workgroupBarrier();
+  let sA = Max[0] / 127.0;
+  for (var e = siv; e < ${TN * CI8_CO_SG}u; e = e + 32u) {
+    let px = e / ${CI8_CO_SG}u;
+    let cl = e - px * ${CI8_CO_SG}u;
+    let p = p0 + px;
+    let o = co + cl;
+    if (p < ${P}u && o < ${s.O}u) {
+      let n = p / ${plane}u;
+      let q = p - n * ${plane}u;
+      let idx = (n * ${s.O}u + o) * ${plane}u + q;
+      var v = f32(ot[sid * ${TN * CI8_CO_SG}u + e]) * sA * SW[o];
+${hasBias ? "      v = v + B[o];\n" : ""}${epilogueWgsl(epilogue, "v", "idx").split("\n").map((l) => (l ? "    " + l : l)).join("\n")}      Out[idx] = v;
+    }
+  }
+}`;
+}
+
+/**
  * **A measurement kernel** (`kernel_bench` `mm`), not a path anything dispatches yet: the matmul on
  * f16 subgroup matrices, to weigh compute-f16 before building it. metal-3 offers only the
  * `f16 × f16 → f16` config (an **f16 accumulator**, not the `→ f32` tensor cores use), so this is
