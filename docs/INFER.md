@@ -321,6 +321,22 @@ prediction is written down so that the ledger can say which step was wrong.
   38 dispatches a replay; batch 1 1.38 → 1.10.** The training step 19.5 → 19.0 at batch 16.
   Golden 4,057 / 4,057, logits 6.0e-8, replay bit for bit.
 
+- **2026-09-20, Step 4, candidate (ii) — retired by a measurement made before it was
+  built.** The question was whether the 64-channel layer is bandwidth. The bytes say no
+  (its weights are 147 KB a tile and cache; its staged input is 13 MB a layer — under
+  0.2 ms of DRAM either way), so the test was the other suspect: the two barriers a tap.
+  The staged kernel now assembles a kernel row's three taps at once and pays its barriers
+  per row (six a channel block, not eighteen). **The 64-channel layer did not move: 1.03 →
+  0.98 ms for its two convolutions, noise; the 512-channel 4 × 4 layer 0.84 → 0.77.** So
+  the layer is neither DRAM-bound nor sync-bound; it runs at ~4.9 TFLOP/s, about half the
+  subgroup GEMM's measured rate, and the other half is the staging and assembly work a
+  convolution has and a matmul does not. Half-precision storage cuts bytes the layer is
+  not waiting on; not built. The barrier schedule is kept (simpler, never slower). What
+  would move this layer next is a different data path — B kept resident across taps by
+  shifting the assembled block rather than rebuilding it — and that is the next plan's
+  question, not this one's. The forward stands at **4.1–4.2 ms captured at batch 16
+  (ORT 5.3–5.9) and 1.1 at batch 1**; golden 4,057 / 4,057, logits 6.0e-8.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

@@ -4482,7 +4482,6 @@ export function convForwardSubgroupSmall(s: ConvNDShape, splits: number, hasBias
   const [OH = 1, OW = 1] = s.outDims;
   const [KH = 1, KW = 1] = s.kernel;
   const [PH = 0, PW = 0] = s.pad;
-  const kSpace = KH * KW;
   const Mp = s.O, Kp = s.C;                       // gated to whole eights
   const PIW = IW + 2 * PW;
   const plane = OH * OW;
@@ -4504,7 +4503,7 @@ export function convForwardSubgroupSmall(s: ConvNDShape, splits: number, hasBias
   const mul: string[] = [];
   for (let i = 0; i < mb; i++) mul.push(`      let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&Wt, wBase + ${i * 8 * Kp}u, false, ${Kp}u);`);
   for (let j = 0; j < nb; j++) {
-    mul.push(`      { let b = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&xs, ${j * 8}u, false, ${TN}u);`);
+    mul.push(`      { let b = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&xs, kwOff + ${j * 8}u, false, ${TN}u);`);
     for (let i = 0; i < mb; i++) mul.push(`        c${i}${j} = subgroupMatrixMultiplyAccumulate(a${i}, b, c${i}${j});`);
     mul.push("      }");
   }
@@ -4554,7 +4553,7 @@ ${direct ? residualBinding(epilogue, slot) : ""}
 ${direct ? `var<workgroup> ot: array<f32, ${SGFS_SUBGROUPS * SGF_CB * TN}>;` : ""}
 // The padded planes of one channel block for the tile's images, then each tap's block.
 var<workgroup> pl: array<f32, ${stage}>;
-var<workgroup> xs: array<f32, ${8 * TN}>;
+var<workgroup> xs: array<f32, ${KW * 8 * TN}>;
 @compute @workgroup_size(${lanes})
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32, @builtin(subgroup_id) sid: u32, @builtin(subgroup_invocation_id) siv: u32) {
   let p0 = wid.x * ${TN}u;
@@ -4586,14 +4585,17 @@ ${acc.join("\n")}
       pl[e] = v;
     }
     workgroupBarrier();
-    for (var tap = 0u; tap < ${kSpace}u; tap = tap + 1u) {
-      let kh = tap / ${KW}u;
-      let kw = tap - kh * ${KW}u;
-      // This tap's 8 × ${TN} block, from the staging: the tile's local pixel (img, row of
-      // the band, ow) reads the band at (row + kh, ow + kw).
-      for (var e = lid; e < ${8 * TN}u; e = e + ${lanes}u) {
-        let k = e / ${TN}u;
-        let col = e - k * ${TN}u;
+    for (var kh = 0u; kh < ${KH}u; kh = kh + 1u) {
+      // One kernel row's ${KW} taps at once: their 8 × ${TN} blocks assembled from the
+      // staging side by side, so the two barriers are paid per kernel row, not per tap
+      // (measured: per tap, the 64-channel layer was sync-bound, not bandwidth-bound).
+      // The tile's local pixel (img, row of the band, ow) reads the band at
+      // (row + kh, ow + kw).
+      for (var e = lid; e < ${KW * 8 * TN}u; e = e + ${lanes}u) {
+        let kw = e / ${8 * TN}u;
+        let e1 = e - kw * ${8 * TN}u;
+        let k = e1 / ${TN}u;
+        let col = e1 - k * ${TN}u;
         let img = col / ${localPlane}u;
         let q = col - img * ${localPlane}u;
         let r = q / ${OW}u;
@@ -4601,8 +4603,11 @@ ${acc.join("\n")}
         xs[e] = pl[(img * 8u + k) * ${bplane}u + (r + kh) * ${PIW}u + ow + kw];
       }
       workgroupBarrier();
-      let wBase = (tap * ${Mp}u + co) * ${Kp}u + ci0;
+      for (var kw = 0u; kw < ${KW}u; kw = kw + 1u) {
+        let wBase = ((kh * ${KW}u + kw) * ${Mp}u + co) * ${Kp}u + ci0;
+        let kwOff = kw * ${8 * TN}u;
 ${mul.join("\n")}
+      }
       workgroupBarrier();
     }
     workgroupBarrier();
