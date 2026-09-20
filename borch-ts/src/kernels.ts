@@ -2025,10 +2025,10 @@ export function absMaxPass(n: number, parts: number): string {
 var<workgroup> red: array<f32, ${WORKGROUP}>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
-  let from = wid.x * ${chunk}u;
-  let to = min(from + ${chunk}u, ${n}u);
+  let lo = wid.x * ${chunk}u;
+  let hi = min(lo + ${chunk}u, ${n}u);
   var m = 0.0;
-  for (var i = from + lid; i < to; i = i + ${WORKGROUP}u) { m = max(m, abs(A[i])); }
+  for (var i = lo + lid; i < hi; i = i + ${WORKGROUP}u) { m = max(m, abs(A[i])); }
   red[lid] = m;
   workgroupBarrier();
   for (var s = ${WORKGROUP / 2}u; s > 0u; s = s / 2u) {
