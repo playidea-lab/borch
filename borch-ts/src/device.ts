@@ -186,13 +186,16 @@ const KICK_PROBE_KICKED_REPS = 3;
  *  they cost the eager forward a third. */
 const KICK_PROBE_RATIO = 3;
 const KICK_PROBE_FLOOR_MS = 1.7;
-/** Settle before the pairs, ms. Right after `requestDevice` the GPU process is busy —
- *  compiling, allocating — and looks at its fences often; the 5080's first hundred
- *  milliseconds gave plain waits of 0.1–1.3 ms on work that stalls at 2.5 for the rest
- *  of the page, and a calibration in that window said "no kicks" (`roundtrip:probe`, the
- *  rows before and after the first hundred milliseconds). The decision is about the
- *  steady state, so it waits for it. */
-const KICK_PROBE_SETTLE_MS = 150;
+/** Rounds of the calibration, each after an idle of `KICK_PROBE_SETTLE_MS`; the stall
+ *  in **any** round decides. The GPU process's polling has phases — right after
+ *  `requestDevice`, after an idle, after a flush from elsewhere on the page — in which
+ *  a run of plain waits is fast on work that stalls the rest of the time (the 5080 read
+ *  0.23 ms for 0.12 of GPU in one calibration and 2.2–3.0 in the next four, on the same
+ *  kernel), and one round in a phase says "no kicks" on a card that needs them. metal-3
+ *  never shows the stall in any round (0.3–1.2 ms over the GPU across every calibration
+ *  measured), so "any round" is one-sided the right way. */
+const KICK_PROBE_ROUNDS = 4;
+const KICK_PROBE_SETTLE_MS = 40;
 
 /**
  * **Does this browser notice a finished fence on its own?** A short loop kernel behind
@@ -262,20 +265,28 @@ async function calibrateKicks(device: GPUDevice, canTime: boolean): Promise<bool
     return t;
   };
   const median = (t: number[]): number => t.sort((a, b) => a - b)[t.length >> 1] ?? 0;
+  const stalls = (plain: number, gpu: number, kicked: number): boolean => gpu >= 0
+    ? plain - gpu > KICK_PROBE_FLOOR_MS
+    : plain > KICK_PROBE_FLOOR_MS && plain > KICK_PROBE_RATIO * kicked;
   await wait(false);                       // compile the pipeline, unmeasured
-  await new Promise((resolve) => setTimeout(resolve, KICK_PROBE_SETTLE_MS));
-  await sample(false, KICK_PROBE_WARMUPS);
-  gpuTimes.length = 0;                     // the warm-ups' GPU times carry the clock ramp
-  const plain = median(await sample(false, KICK_PROBE_PLAIN_REPS));
-  const gpu = gpuTimes.length > 0 ? median(gpuTimes) : -1;
-  const kicked = median(await sample(true, KICK_PROBE_KICKED_REPS));
+  let verdict = false;
+  let worst = { plainMs: 0, kickedMs: 0, gpuMs: -1 };
+  for (let round = 0; round < KICK_PROBE_ROUNDS; round++) {
+    await new Promise((resolve) => setTimeout(resolve, KICK_PROBE_SETTLE_MS));
+    await sample(false, KICK_PROBE_WARMUPS);
+    gpuTimes.length = 0;                   // the warm-ups' GPU times carry the clock ramp
+    const plain = median(await sample(false, KICK_PROBE_PLAIN_REPS));
+    const gpu = gpuTimes.length > 0 ? median(gpuTimes) : -1;
+    const kicked = median(await sample(true, KICK_PROBE_KICKED_REPS));
+    if (plain - Math.max(gpu, 0) > worst.plainMs - Math.max(worst.gpuMs, 0)) worst = { plainMs: plain, kickedMs: kicked, gpuMs: gpu };
+    if (stalls(plain, gpu, kicked)) { verdict = true; break; }
+  }
   buffer.destroy();
   stage.destroy();
   resolved?.destroy();
   querySet?.destroy();
-  Device.kickCalibration = { plainMs: plain, kickedMs: kicked, gpuMs: gpu };
-  if (gpu >= 0) return plain - gpu > KICK_PROBE_FLOOR_MS;
-  return plain > KICK_PROBE_FLOOR_MS && plain > KICK_PROBE_RATIO * kicked;
+  Device.kickCalibration = worst;
+  return verdict;
 }
 
 /** Which adapter, on one line. Empty fields are dropped — the browser hides most of
@@ -996,9 +1007,9 @@ export class Device {
    */
   static readbackKicks = false;
 
-  /** What `calibrateKicks` measured, ms — the plain median, the kernel's GPU time under
-   *  it (−1 without `timestamp-query`) and the kicked median — so a table can print the
-   *  numbers the decision came from rather than only the decision. */
+  /** What `calibrateKicks` measured in its worst round, ms — the plain median, the
+   *  kernel's GPU time under it (−1 without `timestamp-query`) and the kicked median — so
+   *  a table can print the numbers the decision came from rather than only the decision. */
   static kickCalibration: { plainMs: number; kickedMs: number; gpuMs: number } =
     { plainMs: 0, kickedMs: 0, gpuMs: -1 };
 
