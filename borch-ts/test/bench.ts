@@ -428,7 +428,7 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
   // browser hands over a software adapter, slow figures come out with no exception raised,
   // and they are not the library's result.
   return `ResNet-18 (CIFAR) · a real training step, per batch\n`
-    + `adapter: ${Device.adapterInfo}\n`
+    + `adapter: ${Device.adapterInfo} · ${Device.readbackNote}\n`
     + lines.join("\n");
 }
 

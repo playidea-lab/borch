@@ -329,7 +329,7 @@ export async function report(): Promise<Report> {
   want("no WebGPU faults", faults === 0, `${faults}`);
   const failed = checks.filter((c) => !c.ok);
   const out = [
-    `adapter: ${Device.adapterInfo}`,
+    `adapter: ${Device.adapterInfo} · ${Device.readbackNote}`,
     ...lines,
     ...checks.map((c) => `  ${c.ok ? "✓" : "✗"} ${c.name}${c.note ? ` — ${c.note}` : ""}`),
     failed.length === 0 ? `all ${checks.length} compiled-step checks passed` : `**${failed.length} failed** / ${checks.length}`,

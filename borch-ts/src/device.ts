@@ -152,48 +152,56 @@ const NO_ADAPTER =
   "No WebGPU adapter could be obtained — a driver blocklist, a virtual machine, or a " +
   "headless environment with no GPU.";
 
-/** How many tiny dispatches the kick calibration submits — the count at which the RTX
- *  5080's wall left its GPU time (0.08 ms of GPU, 2.6 of wall). */
-const KICK_PROBE_DISPATCHES = 40;
-/** Plain waits in the calibration — eight, because the stall is a state of the GPU
- *  process and not every wait meets it: one run of the probe on the 5080 saw a plain
- *  wait at 0.1 ms nine times in ten and 2.3 the tenth, and a first calibration of three
- *  decided "no kicks" on a card that needs them. The **slowest** plain wait decides. */
-const KICK_PROBE_PLAIN_REPS = 8;
-/** Kicked waits — three, the median; they do not vary. */
-const KICK_PROBE_KICKED_REPS = 3;
-/** Slowest plain wait this many times the kicked median, and above `KICK_PROBE_FLOOR_MS`,
- *  means the browser needs kicking: on the 5080 the ratio is 9–13; on metal-3 the slowest
-*  plain wait of eight is 0.6–0.8 ms, under the floor. */
-const KICK_PROBE_RATIO = 4;
+/** The work the kick calibration waits on: one dispatch of a loop kernel, this many
+ *  iterations a thread — 0.12 ms of GPU on the RTX 5080, about 2 ms on metal-3. Forty
+ *  tiny dispatches (0.08 ms) were tried first and the 5080 sometimes finished them
+ *  before the GPU process's first look, which is the one wait that does not stall; a
+ *  calibration of three said "no kicks" that way. Work the first look cannot catch
+ *  always meets the stall where there is one. */
+const KICK_PROBE_ITERS = 10000;
+const KICK_PROBE_WORKGROUPS = 1024;
+/** Pairs of waits in the calibration, a plain one then a kicked one, interleaved —
+ *  five, medians compared. Interleaved because a fresh GPU ramps its clock over the
+ *  first waits (metal-3 ran the 2 ms kernel at 15 ms on its first plain waits, and a
+ *  "slowest plain" rule turned kicks on there); a ramp that touches both sides alike
+ *  leaves the ratio alone. */
+const KICK_PROBE_PAIRS = 5;
+/** Plain median this many times the kicked median, and above `KICK_PROBE_FLOOR_MS`,
+ *  means the browser needs kicking: on the 5080 the ratio is 6–12; on metal-3 it is 1.0
+ *  (the wait is the kernel either way). Idle gaps between the waits were tried and
+ *  dropped — after 4 ms of idle metal-3 pays ~0.7 ms of wake-up that kicks do not remove
+ *  (`roundtrip:probe`, the idle rows), and a first gapped calibration read 9 ms there and
+ *  turned kicks on, where they cost the eager forward a third. */
+const KICK_PROBE_RATIO = 3;
 const KICK_PROBE_FLOOR_MS = 1.5;
 
 /**
- * **Does this browser notice a finished fence on its own?** Forty tiny dispatches
- * behind a 4-byte copy, mapped and waited for plainly eight times, then with the wire
- * kicked by error-scope round trips until the map resolves, three times; the slowest
- * plain wait against the kicked median. See `Device.readbackKicks` for what it found
- * and why it is measured.
+ * **Does this browser notice a finished fence on its own?** A short loop kernel behind
+ * a 4-byte copy, mapped and waited for plainly, then with the wire kicked by error-scope
+ * round trips until the map resolves, five pairs interleaved; the plain median against
+ * the kicked median. See `Device.readbackKicks` for what it found and why it is
+ * measured.
  */
 async function calibrateKicks(device: GPUDevice): Promise<boolean> {
   const module = device.createShaderModule({ code:
     "@group(0) @binding(0) var<storage, read_write> X: array<f32>;\n" +
-    "@compute @workgroup_size(1) fn main() { X[0] = X[0] + 1.0; }" });
+    "@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {\n" +
+    `  var a = f32(g.x); for (var i = 0u; i < ${KICK_PROBE_ITERS}u; i = i + 1u) { a = a * 0.999 + 0.5; }\n` +
+    "  X[g.x] = a; }" });
   const pipeline = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
-  const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC;
-  const bufs = Array.from({ length: KICK_PROBE_DISPATCHES }, () => device.createBuffer({ size: 4, usage }));
-  const binds = bufs.map((buffer) => device.createBindGroup({
-    layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer } }] }));
+  const buffer = device.createBuffer({
+    size: KICK_PROBE_WORKGROUPS * 256 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const bind = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer } }] });
   const stage = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  const first = bufs[0];
-  if (first === undefined) return false;
   const submit = (): void => {
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
     pass.setPipeline(pipeline);
-    for (const bind of binds) { pass.setBindGroup(0, bind); pass.dispatchWorkgroups(1); }
+    pass.setBindGroup(0, bind);
+    pass.dispatchWorkgroups(KICK_PROBE_WORKGROUPS);
     pass.end();
-    encoder.copyBufferToBuffer(first, 0, stage, 0, 4);
+    encoder.copyBufferToBuffer(buffer, 0, stage, 0, 4);
     device.queue.submit([encoder.finish()]);
   };
   const wait = async (kicks: boolean): Promise<number> => {
@@ -209,15 +217,17 @@ async function calibrateKicks(device: GPUDevice): Promise<boolean> {
     stage.unmap();
     return performance.now() - t0;
   };
-  const sample = async (kicks: boolean, reps: number): Promise<number[]> => {
-    const t: number[] = [];
-    for (let i = 0; i < reps; i++) t.push(await wait(kicks));
-    return t.sort((a, b) => a - b);
-  };
+  const plains: number[] = [];
+  const kickeds: number[] = [];
   await wait(false);                       // warm the pipeline once, unmeasured
-  const plain = (await sample(false, KICK_PROBE_PLAIN_REPS)).at(-1) ?? 0;
-  const kicked = (await sample(true, KICK_PROBE_KICKED_REPS))[KICK_PROBE_KICKED_REPS >> 1] ?? 0;
-  for (const b of bufs) b.destroy();
+  for (let i = 0; i < KICK_PROBE_PAIRS; i++) {
+    plains.push(await wait(false));
+    kickeds.push(await wait(true));
+  }
+  const median = (t: number[]): number => t.sort((a, b) => a - b)[t.length >> 1] ?? 0;
+  const plain = median(plains);
+  const kicked = median(kickeds);
+  buffer.destroy();
   stage.destroy();
   Device.kickCalibration = { plainMs: plain, kickedMs: kicked };
   return plain > KICK_PROBE_FLOOR_MS && plain > KICK_PROBE_RATIO * kicked;
@@ -941,15 +951,29 @@ export class Device {
    */
   static readbackKicks = false;
 
-  /** What `calibrateKicks` measured, ms — the slowest plain wait and the kicked median —
-   *  so a table can print the two numbers the decision came from rather than only the
+  /** What `calibrateKicks` measured, ms — the plain median and the kicked median — so
+   *  a table can print the two numbers the decision came from rather than only the
    *  decision. */
   static kickCalibration: { plainMs: number; kickedMs: number } = { plainMs: 0, kickedMs: 0 };
+
+  /** The kick decision and its numbers on one line, for the adapter line of a table. */
+  static get readbackNote(): string {
+    const c = Device.kickCalibration;
+    return `readbackKicks ${Device.readbackKicks} (plain ${c.plainMs.toFixed(2)} / kicked ${c.kickedMs.toFixed(2)} ms)`;
+  }
 
   /**
    * Waits for `pending` — a map or `onSubmittedWorkDone` — kicking the wire until it
    * resolves where `readbackKicks` says the browser needs it. Each kick is a round trip
    * awaited in turn, so the loop yields to the page between them; it is not a spin.
+   *
+   * **Not kicked where the calibration said no, and not re-checked later.** A detector
+   * that waited on an empty submit after each plain wait was tried (2026-09-20): a fence
+   * wait covers everything queued, so under a bench that queues the next forward before
+   * reading the last it waited for that too — the fused eager forward on metal-3 went
+   * 2.9 → 6.1 ms and a 2.25 ms outlier turned kicks on, after which the same forward
+   * was 7.7 (kicks cost the eager path on Chrome's Metal backend; the captured and the
+   * training step not at all). The calibration at `create` is the decision.
    */
   private async kicked<T>(pending: Promise<T>): Promise<T> {
     if (!Device.readbackKicks) return pending;

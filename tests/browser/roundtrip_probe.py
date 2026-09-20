@@ -156,6 +156,24 @@ PROBE = r"""async () => {
     table.push(row);
   }
   rows.__table = table;
+  // 7. **The same waits after an idle gap.** A page that calls a model when a person
+  //    asks has been idle since the last call; the calibration at `Device.create` found
+  //    metal-3 at 9 ms for a plain wait after 4 ms of idle, where the hot loop is 0.3.
+  //    Each wait here is preceded by `setTimeout(IDLE_MS)`, and the gap is not counted.
+  const idleTable = [];
+  const idle = (ms) => new Promise((r) => setTimeout(r, ms));
+  const timeIdle = async (fn, ms) => { const t = []; for (let i = 0; i < 3; i++) { await idle(ms); await fn(); } for (let i = 0; i < 20; i++) { await idle(ms); const t0 = performance.now(); await fn(); t.push(performance.now() - t0); } return stat(t); };
+  const once = async (work) => { device.pushErrorScope("validation"); device.queue.submit([encode(work).finish()]); await device.popErrorScope(); await mapDone(); };
+  for (const [name, work] of [["40 dispatches, 40 bind groups", works["40 dispatches, 40 bind groups"]], ["loop 40k", works["loop 40k"]]]) {
+    for (const ms of [1, 4, 16]) {
+      const row = { work: `${name} · idle ${ms} ms` };
+      row.map = await timeIdle(() => waits.map(work), ms);
+      row["scope, map"] = await timeIdle(() => once(work), ms);
+      kicks = []; row["map + kicks"] = await timeIdle(() => waits["map + kicks"](work), ms); row.kicks = stat(kicks);
+      idleTable.push(row);
+    }
+  }
+  rows.__idle = idleTable;
   // 8. borch's own readback on one element — the library's number.
   let borch = null;
   try {
@@ -172,8 +190,7 @@ PROBE = r"""async () => {
     rows["borch matmul 2048³ .sum().toArray()"] = await time(async () => { await A.matmul(B).sum().toArray(); });
     rows["borch matmul 2048³ then keepAlive toArray()"] = await time(async () => { A.matmul(B); await k.toArray(); });
     rows["borch matmul 2048³, synchronize(), keepAlive toArray()"] = await time(async () => { A.matmul(B); await dev.synchronize(); await k.toArray(); });
-    const cal = bt.Device.kickCalibration;
-    borch = `${bt.Device.adapterInfo} · readbackKicks ${bt.Device.readbackKicks} (calibration plain ${cal.plainMs.toFixed(2)} / kicked ${cal.kickedMs.toFixed(2)} ms)`;
+    borch = `${bt.Device.adapterInfo} · ${bt.Device.readbackNote}`;
   } catch (e) { rows["borch"] = { error: String(e).slice(0, 200) }; }
   return { adapter: `${info.vendor} / ${info.architecture}`, borch, reps: REPS, rows };
 }"""
@@ -207,6 +224,12 @@ def main(argv):
             for r in v:
                 q = lambda k: "   —   " if r.get(k) is None else f"{r[k]['p10']:5.2f}/{r[k]['p50']:5.2f}/{r[k]['p90']:5.2f}"
                 print(f"    {r['work']:<30} gpu {q('gpu')} · wsd {q('wsd')} · map {q('map')} · scope,map {q('scope, map')} · map+kicks {q('map + kicks')} (kicks {r['kicks']['p50']:.0f})")
+            continue
+        if name == "__idle":
+            print("  after an idle gap (20 repetitions): wall ms under the map alone · one kick then the map · the map with kicks")
+            for r in v:
+                q = lambda k: f"{r[k]['p10']:5.2f}/{r[k]['p50']:5.2f}/{r[k]['p90']:5.2f}"
+                print(f"    {r['work']:<44} map {q('map')} · scope,map {q('scope, map')} · map+kicks {q('map + kicks')} (kicks {r['kicks']['p50']:.0f})")
             continue
         if "error" in v: print(f"  {name:<64} error: {v['error']}")
         else: print(f"  {name:<64} {v['p10']:7.3f} / {v['p50']:7.3f} / {v['p90']:7.3f}")
