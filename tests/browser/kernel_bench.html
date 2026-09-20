@@ -335,22 +335,13 @@ const BENCHES = {
     // batch 16 had a handful of inputs on a tie and 1,501 outputs off by a few units.
     const sA = Math.fround(peak / 127), invA = Math.fround(1 / sA);
     const roundEven = (v) => { const f = Math.floor(v), d = v - f; return d < 0.5 ? f : d > 0.5 ? f + 1 : (f % 2 === 0 ? f : f + 1); };
-    const xq = new Int8Array(n); for (let i = 0; i < n; i++) xq[i] = Math.max(-127, Math.min(127, roundEven(Math.fround(xf[i] * invA))));
+    const xqHost = new Int8Array(n); for (let i = 0; i < n; i++) xqHost[i] = Math.max(-127, Math.min(127, roundEven(Math.fround(xf[i] * invA))));
+    const xq = new Int8Array(n);                              // filled from the GPU's bytes below
     const Q = await import("/borch-ts/dist/src/quant.js");
     const Op = K.convInt8CoPad(sh.O);
     const { packed, scales } = Q.quantizeConvWeightInt8TapMajor(wf, sh.O, sh.C, 9, Op);
     const wq = new Int8Array(wsize);
     for (let o = 0; o < sh.O; o++) for (let i = 0; i < sh.C * 9; i++) { const sc = scales[o]; wq[o * sh.C * 9 + i] = sc === 0 ? 0 : Math.max(-127, Math.min(127, Math.round(wf[o * sh.C * 9 + i] / sc))); }
-    // The CPU int32 reference: a 3 × 3, stride 1, pad 1 convolution on the integers.
-    const H = sh.H, plane = H * H;
-    const ref = new Int32Array(m);
-    for (let b = 0; b < sh.N; b++) for (let o = 0; o < sh.O; o++) for (let y = 0; y < H; y++) for (let x = 0; x < H; x++) {
-      let acc = 0;
-      for (let c = 0; c < sh.C; c++) { const xb = (b * sh.C + c) * plane, wb = (o * sh.C + c) * 9;
-        for (let ky = 0; ky < 3; ky++) { const iy = y + ky - 1; if (iy < 0 || iy >= H) continue;
-          for (let kx = 0; kx < 3; kx++) { const ix = x + kx - 1; if (ix < 0 || ix >= H) continue; acc += xq[xb + iy * H + ix] * wq[wb + ky * 3 + kx]; } } }
-      ref[(b * sh.O + o) * plane + y * H + x] = acc;
-    }
     // The GPU side.
     const X = upload(n, 1), W = upload(wsize, 2), Bf = upload(sh.O, 3);
     const parts = K.absMaxParts(n);
@@ -371,16 +362,35 @@ const BENCHES = {
     quantise(); runInt8(); dev.flush(); await dev.synchronize();
     const got = await new Tensor(Out, [m]).toArray();
     const maxHost = await new Tensor(Max, [1]).toArray();
-    // The quantised activation itself against the host's — which byte, and what value sat there.
     const xqGpu = new Int32Array((await new Tensor(Xq, [n / 4]).toArray()).buffer);
-    let qWrong = 0; const qFirst = [];
+    // **Two gates, kept apart.** The quantiser is held to the host to ±1 on a near-tie only:
+    // the GPU's `1.0 / s` is not the correctly rounded quotient (Vulkan allows the division
+    // an ulp or two — measured: one input at x·inv = −67.4999924 came out −68), and that is
+    // the quantiser's contract, not a fault. The convolution is then held **exactly** to a
+    // CPU int32 reference built on the GPU's own bytes, so a wrong tap or byte cannot hide
+    // behind the quantiser's tie.
+    let qTies = 0, qBad = 0; const qFirst2 = [];
     for (let i = 0; i < n; i++) {
       const b = Math.floor(i / (sh.C * plane)), c = Math.floor(i / plane) % sh.C, pos = i % plane;
       const word = xqGpu[(b * (sh.C / 4) + (c >> 2)) * plane + pos];
       const byte = (word >>> ((c & 3) * 8)) & 0xff; const q = byte > 127 ? byte - 256 : byte;
-      if (q !== xq[i]) { qWrong++; if (qFirst.length < 4) qFirst.push(`n${b} c${c} y${Math.floor(pos / H)} x${pos % H}: gpu ${q} host ${xq[i]} (x ${xf[i]}, x·inv ${Math.fround(xf[i] * invA)})`); }
+      xq[i] = q;                                              // the reference's operand from here on
+      if (q === xqHost[i]) continue;
+      const v = Math.fround(xf[i] * invA); const nearTie = Math.abs(Math.abs(v - Math.trunc(v)) - 0.5) < 1e-5;
+      if (Math.abs(q - xqHost[i]) === 1 && nearTie) qTies++; else { qBad++; if (qFirst2.length < 3) qFirst2.push(`n${b} c${c} y${Math.floor(pos / H)} x${pos % H}: gpu ${q} host ${xqHost[i]} (x·inv ${v})`); }
     }
-    const qNote = qWrong ? ` · quantised activation: ${qWrong} of ${n} differ — ${qFirst.join(" · ")}` : " · quantised activation matches the host";
+    const qNote = qBad ? ` WRONG(quantiser: ${qBad} of ${n} differ from the host off a tie — ${qFirst2.join(" · ")})` : ` · quantiser matches the host (${qTies} tie${qTies === 1 ? "" : "s"} within ±1)`;
+    // The CPU int32 reference on the GPU's bytes: a 3 × 3, stride 1, pad 1 convolution on the integers.
+    const H = sh.H, plane = H * H;
+    const ref = new Int32Array(m);
+    for (let b = 0; b < sh.N; b++) for (let o = 0; o < sh.O; o++) for (let y = 0; y < H; y++) for (let x = 0; x < H; x++) {
+      let acc = 0;
+      for (let c = 0; c < sh.C; c++) { const xb = (b * sh.C + c) * plane, wb = (o * sh.C + c) * 9;
+        for (let ky = 0; ky < 3; ky++) { const iy = y + ky - 1; if (iy < 0 || iy >= H) continue;
+          for (let kx = 0; kx < 3; kx++) { const ix = x + kx - 1; if (ix < 0 || ix >= H) continue; acc += xq[xb + iy * H + ix] * wq[wb + ky * 3 + kx]; } } }
+      ref[(b * sh.O + o) * plane + y * H + x] = acc;
+    }
+
     // Unsplit the outputs must be bit-exact through the same arithmetic; split, the
     // dequantised partials are summed in f32 and are held to a rounding.
     let wrong = 0, worst = 0; const first = [];
