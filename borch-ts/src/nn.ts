@@ -6748,5 +6748,10 @@ export async function quantizeForInt8(m: Module): Promise<number> {
   return taken;
 }
 
+/** Back to f32: every convolution's int8 weight dropped (the f32 weight never left). */
+export function clearInt8(m: Module): void {
+  for (const [, mod] of m.namedModules()) if (mod instanceof ConvND) mod.int8 = null;
+}
+
 /** The place `torch.ao.nn.intrinsic` occupies. */
 export const intrinsic = { ConvReLU2d, ConvAdd2d, ConvAddReLU2d };

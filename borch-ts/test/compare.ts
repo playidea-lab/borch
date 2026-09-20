@@ -23,7 +23,7 @@
 
 import { Tensor, noGrad } from "../src/tensor.js";
 import { Device } from "../src/device.js";
-import { quantizeForInt8 } from "../src/nn.js";
+import { clearInt8, quantizeForInt8 } from "../src/nn.js";
 import { compiled } from "../src/compile.js";
 import { load } from "../src/serialize.js";
 import { exportOnnx } from "../src/onnx.js";
@@ -321,6 +321,9 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
       const qRec = q.recordingOf(xb);
       lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts int8 + captured ${qMs.toFixed(2).padStart(8)} ms · ${qRec ? qRec.dispatches : 0} dispatches/replay · ${q.int8Layers} layers int8 · max |int8 − f32| ${qGap.toExponential(1)} (${(qGap / scale).toExponential(1)} of the logits' scale)`);
       q.dispose();
+      // The quantisation is a property of the model: back to f32 for the rows after this
+      // one (the first run left it on, and the batch-16 f32 rows measured int8).
+      clearInt8(model);
     }
   }
 
