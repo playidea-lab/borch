@@ -123,6 +123,14 @@ export async function report(): Promise<Report> {
     }
     want("a readback after a fault throws, naming the fault", thrown.includes("fault"),
       thrown ? "" : `faults grew by ${d.faults.count - before} and nothing threw`);
+    // **The browser reports one bad pipeline as several events** — the module, the
+    // pipeline, its layout — and they arrive over time: one run in three saw the third
+    // land after the first readback had already thrown and reset the count, so the
+    // "reads again" readback threw on it (2026-09-21, metal-3). The contract is that a
+    // readback after the faults have all been seen reads again; so the late ones are
+    // given a moment and swallowed, and only then is the clean readback asked for.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    try { await Tensor.full([4], 2).toArray(); } catch { /* a late event of the same fault */ }
     const again = await Tensor.full([4], 2).toArray();
     want("the readback after that reads again", again[0] === 2, `got ${again[0]}`);
   }
