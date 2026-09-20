@@ -121,7 +121,7 @@ const BENCHES = {
       }
     }
     if (sweep === "splits" || sweep === "all") for (const sp of [1, 2, 4, 8, 16, 32]) runs.push(cnt(`s${sp}`, sp, undefined));
-    if (sweep === "tiles" || sweep === "all") for (const t of ["64x64", "32x128", "16x256"]) runs.push(cnt(`t${t}`, undefined, t));
+    if (sweep === "tiles" || sweep === "all") for (const t of ["64x64", "32x128", "16x256", "128x64r8x4", "128x128r8x8", "64x128r4x8"]) runs.push(cnt(`t${t}`, undefined, t));
     if (sweep === "all") for (const t of ["32x128", "16x256"]) for (const sp of [4, 8, 16]) runs.push(cnt(`t${t}s${sp}`, sp, t));
     return race(runs, m);
   },

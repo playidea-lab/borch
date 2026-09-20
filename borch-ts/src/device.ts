@@ -17,7 +17,7 @@
  * looked at, so here the limits are **measured in advance and exceeding one throws.**
  */
 
-import { type Elementwise, grid1d, type Reduce, reduceParts, reduceSum, setDirectWeightBytes, type TiledConfig, WORKGROUP } from "./kernels.js";
+import { type Elementwise, grid1d, type Reduce, reduceParts, reduceSum, setConvTilesPreferred, setDirectWeightBytes, type TiledConfig, WORKGROUP } from "./kernels.js";
 import { fuseRecords } from "./fuse.js";
 import { planRecords, touchesOf } from "./plan.js";
 
@@ -964,6 +964,10 @@ export class Device {
     Device.workgroupStorage = adapter.limits.maxComputeWorkgroupStorageSize;
     setDirectWeightBytes(Device.workgroupStorage);
     Device.gemmConfigs = gemmConfigsFor(String((adapter.info as Partial<GPUAdapterInfo> | undefined)?.vendor ?? ""));
+    // The convolutions' implicit GEMM prefers the same micro-tile where the plain product
+    // measured it faster — the first configuration, whose loads are scalar there (the B
+    // side is a gather), at equal padding against the tiles as they were.
+    setConvTilesPreferred(Device.gemmConfigs.slice(0, 1).map((c) => ({ TM: c.TM, TN: c.TN, RM: c.RM, RN: c.RN })));
 
     let device: GPUDevice;
     try {

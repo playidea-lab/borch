@@ -5268,18 +5268,34 @@ export function isDepthwise(s: ConvNDShape): boolean {
  * inner loop is the same and only the loads and the grid change. The one with the least
  * padding wins; a tie goes to the square.
  */
-export function tileShape(M: number, N: number): { TM: number; TN: number } {
-  // A bench sweep may force the tile (`kernel_bench fwd`, the `cnt` variants); nothing
-  // else sets it.
+/** A tile of the implicit GEMM: the workgroup's `TM × TN` and a thread's `RM × RN`;
+ *  `(TM / RM) · (TN / RN)` is 256 for every candidate. */
+export interface ConvTile { readonly TM: number; readonly TN: number; readonly RM: number; readonly RN: number }
+const CONV_TILES_BASE: readonly ConvTile[] = [
+  { TM: 64, TN: 64, RM: 4, RN: 4 }, { TM: 32, TN: 128, RM: 4, RN: 4 }, { TM: 16, TN: 256, RM: 4, RN: 4 },
+];
+/** Tiles the adapter prefers over the base ones at equal padding — set by `Device.create`
+ *  from the same measurement as `Device.gemmConfigs` (`docs/GEMM.md` Step 4b): the
+ *  8 × 4 micro-tile on a 128 × 64 tile where it won. Empty is the tiles as they were. */
+let convTilesPreferred: readonly ConvTile[] = [];
+export function setConvTilesPreferred(tiles: readonly ConvTile[]): void { convTilesPreferred = tiles; }
+
+export function tileShape(M: number, N: number): ConvTile {
+  // A bench sweep may force the tile (`kernel_bench fwd`, the `cnt` variants) — `64x64`
+  // or `128x64r8x4`; nothing else sets it.
   const forced = (globalThis as { BORCH_CONV_TILE?: string }).BORCH_CONV_TILE;
-  if (forced) { const [tm, tn] = forced.split("x").map(Number); return { TM: tm ?? 64, TN: tn ?? 64 }; }
-  let best = { TM: 64, TN: 64 };
-  let least = Math.ceil(M / 64) * Math.ceil(N / 64) * 4096;
-  for (const [TM, TN] of [[32, 128], [16, 256]] as const) {
-    const area = Math.ceil(M / TM) * Math.ceil(N / TN) * 4096;
-    if (area < least) { least = area; best = { TM, TN }; }
+  if (forced) {
+    const m = /^(\d+)x(\d+)(?:r(\d+)x(\d+))?$/.exec(forced);
+    if (m) return { TM: Number(m[1]), TN: Number(m[2]), RM: Number(m[3] ?? 4), RN: Number(m[4] ?? 4) };
   }
-  return best;
+  // The least padding wins; at a tie the adapter's preferred tile, then the square.
+  let best: ConvTile | null = null;
+  let least = Infinity;
+  for (const tile of [...convTilesPreferred, ...CONV_TILES_BASE]) {
+    const area = Math.ceil(M / tile.TM) * Math.ceil(N / tile.TN) * tile.TM * tile.TN;
+    if (area < least) { least = area; best = tile; }
+  }
+  return best ?? { TM: 64, TN: 64, RM: 4, RN: 4 };
 }
 
 /**
@@ -5377,41 +5393,39 @@ function tiledGemm(opts: {
    */
   readonly groups?: number;
 }): string {
+  const splits = opts.splits ?? 1;
+  // The tile follows the matrix (see `tileShape`): TM × TN cells, a thread's RM × RN of
+  // them, TM/RM × TN/RN threads — 256 for every candidate.
+  const { TM, TN, RM, RN } = tileShape(opts.M, opts.N);
+  const TX = TN / RN;
+  const TY = TM / RM;
+  const THREADS = TX * TY;
+  const KT = tileDepth(TM);
   const decl: string[] = [];
   const zero: string[] = [];
   const fma: string[] = [];
   const store: string[] = [];
-  for (let i = 0; i < 4; i++) {
-    for (let j = 0; j < 4; j++) {
-      decl.push(`  var c${i}${j}: f32;`);
-      zero.push(`  c${i}${j} = 0.0;`);
-      fma.push(`      c${i}${j} = fma(a${i}, b${j}, c${i}${j});`);
-      store.push(`  emit(row0 + ${i}u, col0 + ${j}u, c${i}${j}, grp, part);`);
+  for (let i = 0; i < RM; i++) {
+    for (let j = 0; j < RN; j++) {
+      decl.push(`  var c${i}_${j}: f32;`);
+      zero.push(`  c${i}_${j} = 0.0;`);
+      fma.push(`      c${i}_${j} = fma(a${i}, b${j}, c${i}_${j});`);
+      store.push(`  emit(row0 + ${i}u, col0 + ${j}u, c${i}_${j}, grp, part);`);
     }
   }
-  const splits = opts.splits ?? 1;
-  // The tile follows the matrix (see `tileShape`): TM × TN cells, TM/4 × TN/4 threads.
-  const { TM, TN } = tileShape(opts.M, opts.N);
-  const TX = TN / 4;
-  const TY = TM / 4;
-  const KT = tileDepth(TM);
+  const aReads = Array.from({ length: RM }, (_, i) => `      let a${i} = As[(lid.y * ${RM}u + ${i}u) * ${KT}u + k];`);
+  const bReads = Array.from({ length: RN }, (_, j) => `      let b${j} = Bs[k * ${TN}u + lid.x * ${RN}u + ${j}u];`);
   // How many tiles each piece takes. The last piece may take slightly fewer, so the
   // count is kept inside the boundary.
   const allTiles = Math.ceil(opts.K / KT);
   const perSplit = Math.ceil(allTiles / splits);
   const aCells = TM * KT;
   const bCells = KT * TN;
-  const aLoads = Math.ceil(aCells / 256);
-  const bLoads = Math.ceil(bCells / 256);
+  const aLoads = Math.ceil(aCells / THREADS);
+  const bLoads = Math.ceil(bCells / THREADS);
   const inner = `    for (var k = 0u; k < ${KT}u; k = k + 1u) {
-      let a0 = As[(lid.y * 4u + 0u) * ${KT}u + k];
-      let a1 = As[(lid.y * 4u + 1u) * ${KT}u + k];
-      let a2 = As[(lid.y * 4u + 2u) * ${KT}u + k];
-      let a3 = As[(lid.y * 4u + 3u) * ${KT}u + k];
-      let b0 = Bs[k * ${TN}u + lid.x * 4u + 0u];
-      let b1 = Bs[k * ${TN}u + lid.x * 4u + 1u];
-      let b2 = Bs[k * ${TN}u + lid.x * 4u + 2u];
-      let b3 = Bs[k * ${TN}u + lid.x * 4u + 3u];
+${aReads.join("\n")}
+${bReads.join("\n")}
 ${fma.join("\n")}
     }`;
   const finish = store.join("\n");
@@ -5430,8 +5444,8 @@ ${opts.emit}
 fn main(@builtin(workgroup_id) wid: vec3<u32>,
         @builtin(local_invocation_id) lid: vec3<u32>) {
   let tid = lid.y * ${TX}u + lid.x;
-  let row0 = wid.y * ${TM}u + lid.y * 4u;
-  let col0 = wid.x * ${TN}u + lid.x * 4u;
+  let row0 = wid.y * ${TM}u + lid.y * ${RM}u;
+  let col0 = wid.x * ${TN}u + lid.x * ${RN}u;
 ${decl.join("\n")}
 ${zero.join("\n")}
   let grp = wid.z / ${splits}u;
@@ -5439,12 +5453,12 @@ ${zero.join("\n")}
   let tFrom = part * ${perSplit}u;
   let tTo = min(tFrom + ${perSplit}u, ${allTiles}u);
   let bcol = wid.x * ${TN}u + tid % ${TN}u;
-  let bstep = ${256 / TN}u;
+  let bstep = ${THREADS / TN}u;
   let bkk0 = tid / ${TN}u;
 ${opts.prepB ?? ""}
   for (var t = tFrom; t < tTo; t = t + 1u) {
     for (var sload = 0u; sload < ${aLoads}u; sload = sload + 1u) {
-      let idx = sload * 256u + tid;
+      let idx = sload * ${THREADS}u + tid;
       if (idx < ${aCells}u) {
         let arow = wid.y * ${TM}u + idx / ${KT}u;
         let kk = t * ${KT}u + idx % ${KT}u;
@@ -5457,7 +5471,7 @@ ${opts.loadA}
     }
 ${opts.prepBTile ?? ""}
     for (var sload = 0u; sload < ${bLoads}u; sload = sload + 1u) {
-      let idx = sload * 256u + tid;
+      let idx = sload * ${THREADS}u + tid;
       if (idx < ${bCells}u) {
         let kk = t * ${KT}u + idx / ${TN}u;
         let col = bcol;

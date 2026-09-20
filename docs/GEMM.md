@@ -110,6 +110,31 @@ else. `tileShape` / `tileDepth` / `scalarMatmulSplit` re-swept for the new tile.
   than the micro-tile here. The 5080's numbers decide the step; metal-3's say the
   routing will be per adapter.
 
+- **2026-09-21, Step 4 on metal-3, ahead of the 5080's verdict.** (a) The plain product:
+  `Device.gemmConfigs` per adapter (Apple: 128 × 64 r8×4 `vec4`, then 64 × 64 r4×4 `vec4`;
+  others empty until measured), `matmul` takes the first the shape divides, untransposed
+  only. `device:ts`: three shapes against the old tile with subgroup matrices forced off,
+  rel 0 (the same sequential K walk — bit for bit), the new pipeline taken where a
+  configuration fits and the old tile where none does. (b) The convolutions' implicit
+  GEMM: `tiledGemm` generalised to a `RM × RN` micro-tile (`ConvTile`; every candidate is
+  256 threads) and `tileShape` given the adapter's preferred tile at equal padding
+  (`setConvTilesPreferred`, the first GEMM configuration). Its loads stay scalar — the B
+  side is a gather — and on metal-3 that is the whole story: `kernel_bench fwd
+  --sweep=tiles`, ms, batch 16 / batch 1, the slab sum counted:
+
+  | tile | 512 → 512 at 4 × 4 | 256 → 256 at 8 × 8 | 128 → 128 at 16 × 16 | 512 → 512 at 4 × 4, batch 1 |
+  |---|---|---|---|---|
+  | 64 × 64 r4×4 (as it was) | 0.318 + 0.024 | 0.315 + 0.024 | 0.317 + 0.031 | **0.095 + 0.005** |
+  | 128 × 64 r8×4 | **0.299 + 0.026** | **0.295 + 0.026** | **0.298 + 0.031** | 0.100 + 0.005 |
+  | 128 × 128 r8×8 | 0.367 | 0.347 | 0.356 | 0.184 |
+
+  A wash on Apple (+6 % at batch 16, −5 % at batch 1): with scalar gathers the micro-tile
+  is not the bottleneck there, and the 8 × 8 loses as it did on the plain product. Kept —
+  the gate is "not slower", and the 5080, where the plain product's Step 1 prediction
+  stands untested, decides whether the conv's A side gets `vec4` loads (a second binding
+  of the weights as `array<vec4<f32>>`) next. Held on metal-3: `parity:ts`, `capture:ts`
+  18 / 18, `compare:ts` unchanged (its convolutions are on the subgroup kernels).
+
 ## 4. After this
 
 `docs/INT8.md` Steps 2–6 follow when this plan is done: the int8 configuration's 3–3.6×
