@@ -160,12 +160,17 @@ const NO_ADAPTER =
  *  always meets the stall where there is one. */
 const KICK_PROBE_ITERS = 10000;
 const KICK_PROBE_WORKGROUPS = 1024;
-/** Pairs of waits in the calibration, a plain one then a kicked one, interleaved —
- *  five, medians compared. Interleaved because a fresh GPU ramps its clock over the
- *  first waits (metal-3 ran the 2 ms kernel at 15 ms on its first plain waits, and a
- *  "slowest plain" rule turned kicks on there); a ramp that touches both sides alike
- *  leaves the ratio alone. */
-const KICK_PROBE_PAIRS = 5;
+/** Plain waits in a row before any is measured — six, because a fresh GPU ramps its
+ *  clock over its first waits (metal-3 ran the 2 ms kernel at 15 ms on the first, and a
+ *  "slowest plain" rule turned kicks on there). Then `KICK_PROBE_PLAIN_REPS` plain waits
+ *  measured, the median; then `KICK_PROBE_KICKED_REPS` kicked, the median. **Not
+ *  interleaved**: a kicked wait resets the GPU process's polling, and the plain wait
+ *  after it is the fast one (the 5080 read 0.9 ms interleaved against 2.5–3.0 in a row,
+ *  and said "no kicks"). The stall is what a run of plain waits meets, so that is what
+ *  is measured. */
+const KICK_PROBE_WARMUPS = 6;
+const KICK_PROBE_PLAIN_REPS = 5;
+const KICK_PROBE_KICKED_REPS = 3;
 /** Plain median this many times the kicked median, and above `KICK_PROBE_FLOOR_MS`,
  *  means the browser needs kicking: on the 5080 the ratio is 6–12; on metal-3 it is 1.0
  *  (the wait is the kernel either way). Idle gaps between the waits were tried and
@@ -184,9 +189,9 @@ const KICK_PROBE_SETTLE_MS = 150;
 
 /**
  * **Does this browser notice a finished fence on its own?** A short loop kernel behind
- * a 4-byte copy, mapped and waited for plainly, then with the wire kicked by error-scope
- * round trips until the map resolves, five pairs interleaved; the plain median against
- * the kicked median. See `Device.readbackKicks` for what it found and why it is
+ * a 4-byte copy, mapped and waited for plainly in a row, then with the wire kicked by
+ * error-scope round trips until the map resolves; the plain median against the kicked
+ * median. See `Device.readbackKicks` for what it found and why it is
  * measured.
  */
 async function calibrateKicks(device: GPUDevice): Promise<boolean> {
@@ -224,17 +229,17 @@ async function calibrateKicks(device: GPUDevice): Promise<boolean> {
     stage.unmap();
     return performance.now() - t0;
   };
-  const plains: number[] = [];
-  const kickeds: number[] = [];
-  await wait(false);                       // warm the pipeline once, unmeasured
-  await new Promise((resolve) => setTimeout(resolve, KICK_PROBE_SETTLE_MS));
-  for (let i = 0; i < KICK_PROBE_PAIRS; i++) {
-    plains.push(await wait(false));
-    kickeds.push(await wait(true));
-  }
+  const sample = async (kicks: boolean, reps: number): Promise<number[]> => {
+    const t: number[] = [];
+    for (let i = 0; i < reps; i++) t.push(await wait(kicks));
+    return t;
+  };
   const median = (t: number[]): number => t.sort((a, b) => a - b)[t.length >> 1] ?? 0;
-  const plain = median(plains);
-  const kicked = median(kickeds);
+  await wait(false);                       // compile the pipeline, unmeasured
+  await new Promise((resolve) => setTimeout(resolve, KICK_PROBE_SETTLE_MS));
+  await sample(false, KICK_PROBE_WARMUPS);
+  const plain = median(await sample(false, KICK_PROBE_PLAIN_REPS));
+  const kicked = median(await sample(true, KICK_PROBE_KICKED_REPS));
   buffer.destroy();
   stage.destroy();
   Device.kickCalibration = { plainMs: plain, kickedMs: kicked };
