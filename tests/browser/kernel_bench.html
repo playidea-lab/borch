@@ -87,7 +87,8 @@ const BENCHES = {
     // adapter without f32 subgroup matrices (the RTX 5080): the reduction split and the
     // tile forced through `BORCH_CONV_SPLITS` / `BORCH_CONV_TILE`, which only this bench
     // sets, so the policy's choice can be read against every other. `--sweep=splits`
-    // adds the split ladder, `--sweep=tiles` the three tile shapes, `--sweep=all` both.
+    // adds the split ladder, `--sweep=tiles` the three tile shapes, `--sweep=direct` the
+    // direct kernel's blocks, `--sweep=all` everything.
     const sweep = q.get("sweep") || "";
     const cnt = (label, splits, tile) => {
       const set = () => { globalThis.BORCH_CONV_SPLITS = splits; globalThis.BORCH_CONV_TILE = tile; };
@@ -103,6 +104,20 @@ const BENCHES = {
         } };
     };
     runs.push(cnt("policy", undefined, undefined));
+    // **The direct kernel's block, swept**: the strip of output columns and the output
+    // channels one thread accumulates (`DIRECT_DEFAULT` is 4 × 8, measured on the M4 Max).
+    // `--sweep=direct` (or `all`) adds the other blocks; the shape must fit the kernel.
+    if ((sweep === "direct" || sweep === "all") && K.directFits(s)) {
+      // The weight slice is capped by the workgroup storage the kernel allows itself
+      // (16 KiB, the guaranteed floor); the adapter's own limit is swept as well.
+      const wg = Device.workgroupStorage;
+      const blocks = [[4, 4, 16384], [4, 16, 16384], [8, 8, 16384], [2, 8, 16384], [4, 8, wg], [4, 16, wg], [8, 8, wg], [4, 32, wg]];
+      for (const [TS, COUT, WEIGHT_BYTES] of blocks) {
+        const cfg = { TS, COUT, WEIGHT_BYTES }; const Od = dev.alloc(m); const key = `cnd:${sh.name}:${TS}x${COUT}:${WEIGHT_BYTES}`;
+        runs.push({ name: `direct ${TS}x${COUT} (slice ${K.directCoutSlice(s, cfg)}, ${WEIGHT_BYTES / 1024}K)`, key, make: () => K.convDirect2d(s, true, undefined, false, cfg), outb: Od,
+          run: () => dev.run(dev.pipeline(key, () => K.convDirect2d(s, true, undefined, false, cfg)), [X, W, B, Od], K.directGrid(s, cfg)) });
+      }
+    }
     if (sweep === "splits" || sweep === "all") for (const sp of [1, 2, 4, 8, 16, 32]) runs.push(cnt(`s${sp}`, sp, undefined));
     if (sweep === "tiles" || sweep === "all") for (const t of ["64x64", "32x128", "16x256"]) runs.push(cnt(`t${t}`, undefined, t));
     if (sweep === "all") for (const t of ["32x128", "16x256"]) for (const sp of [4, 8, 16]) runs.push(cnt(`t${t}s${sp}`, sp, t));

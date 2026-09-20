@@ -3880,12 +3880,14 @@ const DIRECT_WEIGHT_BYTES = 16384;
 export function directCoutSlice(s: ConvNDShape, cfg: DirectConfig = DIRECT_DEFAULT): number {
   const kSpace = s.kernel.reduce((a, b) => a * b, 1);
   const perCout = s.C * kSpace * 4;
-  return Math.max(1, Math.min(cfg.COUT, s.O, Math.floor(DIRECT_WEIGHT_BYTES / perCout)));
+  return Math.max(1, Math.min(cfg.COUT, s.O, Math.floor((cfg.WEIGHT_BYTES ?? DIRECT_WEIGHT_BYTES) / perCout)));
 }
 
 /** The direct forward's thread block: the strip of output columns and the output
- *  channels one thread accumulates. */
-export interface DirectConfig { readonly TS: number; readonly COUT: number }
+ *  channels one thread accumulates; and, for a sweep, the workgroup storage the weights
+ *  may take (the guaranteed 16 KiB by default — a 128-channel layer's slice is three
+ *  under it, where 48 KiB would hold nine). */
+export interface DirectConfig { readonly TS: number; readonly COUT: number; readonly WEIGHT_BYTES?: number }
 export const DIRECT_DEFAULT: DirectConfig = { TS: DIRECT_STRIP, COUT: DIRECT_COUT };
 
 /**
