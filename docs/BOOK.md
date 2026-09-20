@@ -1982,6 +1982,9 @@ borch's page, after borch:
 | `nvidia / blackwell`, **2026-09-20 (night)**, the readback kicked — borch.ts | **12.9** | **17.4** | **27.6** |
 | `nvidia / blackwell`, same run — jax-js 0.1.25 + optax 0.1.2 | 78.1 | 79.8 | 112.3 |
 | ratio | **6.1×** | **4.6×** | **4.1×** |
+| `nvidia / blackwell`, **2026-09-21**, the scalar conv path swept on the card — borch.ts | **10.5** | **14.7** | **23.4** |
+| `nvidia / blackwell`, same run — jax-js 0.1.25 + optax 0.1.2 | 78.5 | 81.1 | 116.4 |
+| ratio | **7.5×** | **5.5×** | **5.0×** |
 
 Read with these attached. **jax-js**: it has no BatchNorm module and no cross-entropy, so
 both are written from its primitives the way its own MNIST example writes them; the
