@@ -6379,6 +6379,10 @@ ${hasMomentum
 }`;
 }
 
+/** How an Adam kernel applies weight decay: not at all, into the gradient (torch's `Adam`),
+ *  or onto the weight after the update (`AdamW`). Part of the pipeline key. */
+export type AdamDecay = "none" | "coupled" | "decoupled";
+
 /** One Adam step. The bias correction arrives by step count rather than being baked —
  *  it differs every step.
  *
@@ -6389,7 +6393,7 @@ ${hasMomentum
  */
 export function adamStep(
   n: number, beta1: number, beta2: number, eps: number,
-  amsgrad = false,
+  amsgrad = false, decay: AdamDecay = "none",
 ): string {
   return `
 @group(0) @binding(0) var<storage, read_write> P: array<f32>;
@@ -6402,7 +6406,12 @@ ${amsgrad ? "@group(0) @binding(5) var<storage, read_write> Vmax: array<f32>;" :
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  let gv = G[gid];
+  // The two decays, in the same arithmetic the per-parameter path writes as tensor ops
+  // (Adam.update): coupled adds λ·p into the gradient before the moments see it;
+  // decoupled shrinks the weight by the group's factor (1 − lr·λ) and then steps. Both
+  // read the group's device scalars, so a replay follows a scheduler.
+  let gv = G[gid]${decay === "coupled" ? ` + P[gid] * H[${HYPER_DECAY}]` : ""};
+  let p0 = P[gid]${decay === "decoupled" ? ` * H[${HYPER_DECAY_FACTOR}]` : ""};
   let m = M[gid] * ${beta1} + gv * ${1 - beta1};
   let v = V[gid] * ${beta2} + gv * gv * ${1 - beta2};
   M[gid] = m;
@@ -6411,7 +6420,7 @@ ${amsgrad ? `  let vd = max(Vmax[gid], v);
   Vmax[gid] = vd;` : "  let vd = v;"}
   // Corr[0] = 1-β₁ᵗ, Corr[1] = 1-β₂ᵗ. They differ every step, so they arrive rather
   // than being baked.
-  P[gid] = P[gid] - H[${HYPER_LR}] * (m / Corr[0]) / (sqrt(vd / Corr[1]) + ${eps});
+  P[gid] = p0 - H[${HYPER_LR}] * (m / Corr[0]) / (sqrt(vd / Corr[1]) + ${eps});
 }`;
 }
 

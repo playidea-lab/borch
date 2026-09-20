@@ -289,6 +289,36 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   every open frame as it pools it. The ResNet-18 prediction (517 → ≤ 150 MB of pool at
   batch 16) waits on Step 6's JS `compiled`; the U-Net's 2.6× is the number to hold it to.
 
+- **2026-09-20, Step 3 — measured three ways, and what stands is not what was planned.**
+  (1) *The optimizer arena under a capture*: the reason it was held off (its lazy build,
+  recorded, re-ran on every replay) was removed by building it outside the recording, and
+  the compiled loop took the arena — and was **slower**: the hand-written net's replay
+  0.66 → 1.45 ms (plain), 0.57 → 1.30 (fused); the U-Net's 6.3 → 6.2, noise. The arena's
+  eager 1.2× is the JavaScript it skips (one dispatch call, not one per parameter), and a
+  replay skips all of that anyway; what remains is its gather and scatter, two copies a
+  parameter, which cost more than the per-parameter launches they replace. **Retired**;
+  the gate stays `!capturing`, with the measurement beside it in `optim.ts`. The
+  prediction "62 → ≤ 3 optimizer dispatches" was the wrong quantity to want under replay.
+  (2) *The generic pass*: `Capture.horizontal()` counts what such a pass would merge —
+  consecutive elementwise dispatches with one recipe and no dependence. **U-Net: 0 runs.
+  GPT-2blk: 0 runs.** Nothing to fuse sideways in either; not built, and the count stays
+  in `capture:py`'s line so a model that changes the answer is seen.
+  (3) *What did land — Adam's decay into its kernel.* Extending the eager arena to weight
+  decay (`adamStep`'s `decay`, coupled and decoupled) first made the arena and the
+  per-parameter path differ by a rounding (6e-8 / 3e-7 on `adam_arena_probe`: the kernel
+  contracts the multiply and add the two tensor ops rounded apart), and an eager AdamW
+  step then no longer matched its own compiled replay (`capture:py` rel|Δparam| 3.6e-3
+  over eight scheduled steps). So the per-parameter path took the same kernel arithmetic:
+  **eager, arena and replay are one expression again — bit for bit on all three variants
+  (`adam_arena_probe`: 0.00e+0 each), and AdamW's two tensor ops a parameter are gone:
+  GPT-2blk 388 → 298 dispatches plain, 370 → 280 fused, its 30 recorded copies → 0;
+  torch's curve still walked at 7.3e-6.** The invariant that decided it: an eager step
+  and its compiled replay must be the same numbers, or `check=True` means nothing.
+- **2026-09-20, Step 2 retired at the count.** With AdamW's decay in the kernel the
+  U-Net's step records 0 copies and the GPT's 0; the copies the plan meant to eliminate
+  were those. `Capture.coverage().copies` keeps the count on every `capture:py` run; a
+  model that brings copies back reopens the step.
+
 ## 6. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

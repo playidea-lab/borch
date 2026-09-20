@@ -924,6 +924,14 @@ class capture:
                         "kept": {"liveIn": int(r.kept.liveIn), "subRange": int(r.kept.subRange)}}
         return self.planned
 
+    def horizontal(self):
+        """What a horizontal fusion pass would find: runs of side-by-side elementwise
+        dispatches with one recipe and no dependence, how many dispatches they hold, the
+        longest, and the most distinct buffers one run binds (docs/COMPILER.md Step 3's
+        count, taken before any pass)."""
+        h = self._capture.horizontal()
+        return {k: int(getattr(h, k)) for k in ("runs", "dispatches", "largest", "buffersMax")}
+
     def coverage(self):
         """How well the recording knows what each dispatch touches — `exact` (a recipe),
         `declared` (read off the kernel's WGSL), `guessed` (neither: taken to read and
@@ -1063,7 +1071,8 @@ class compiled:
         # rerun would otherwise take, keeps its momentum elsewhere and would read as a
         # spurious difference on a buffer that holds the same values (measured on
         # single-group SGD with momentum). Holding the arena off makes the comparison
-        # like for like.
+        # like for like. (The arena under a capture was tried and measured slower on
+        # replay, 2026-09-20 — docs/COMPILER.md Step 3.)
         dev.suppressArena = True
         try:
             with scope():

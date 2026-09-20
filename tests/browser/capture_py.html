@@ -153,7 +153,7 @@ for fuse in (False, True):
         gstep.sched.step()
     w = {k: v.numpy().copy() for k, v in gm.state_dict().items()}
     gres[fuse] = (max(abs(a - b) / max(abs(a), 1e-6) for a, b in zip(g_e, ls)), max(float(np.abs(g_w[k] - w[k]).max() / (np.abs(g_w[k]).max() + 1e-6)) for k in g_w), grun._records[next(iter(grun._records))][0].dispatches, grun.checked[0]["buffers"])
-    if not fuse: grun_plain_coverage = grun._records[next(iter(grun._records))][0].coverage()
+    if not fuse: grun_plain_coverage = grun._records[next(iter(grun._records))][0].coverage(); grun_plain_horizontal = grun._records[next(iter(grun._records))][0].horizontal()
     if fuse: gpl = grun._records[next(iter(grun._records))][0].planned
     grun.dispose()
 adapter = str(js.borch.Device.adapterInfo)
@@ -162,6 +162,8 @@ adapter = str(js.borch.Device.adapterInfo)
 cov = step.coverage(); gcov = grun_plain_coverage
 access = f"access unet exact {cov['exact']} declared {cov['declared']} guessed {cov['guessed']} copies {cov['copies']} rw {cov['readWrite']} · gpt exact {gcov['exact']} declared {gcov['declared']} guessed {gcov['guessed']} copies {gcov['copies']} rw {gcov['readWrite']}"
 MB = 1048576
+hz = step.horizontal(); ghz = grun_plain_horizontal
+access += f" · horizontal unet runs {hz['runs']} dispatches {hz['dispatches']} largest {hz['largest']} buffers {hz['buffersMax']} · gpt runs {ghz['runs']} dispatches {ghz['dispatches']} largest {ghz['largest']} buffers {ghz['buffersMax']}"
 access += f" · plan unet moved {upl['moved']} released {upl['released']} {upl['bytesBefore']/MB:.1f}MB→{upl['bytesAfter']/MB:.1f}MB in {upl['arenas']} arenas (kept liveIn {upl['kept']['liveIn']} subRange {upl['kept']['subRange']}) held {held0/MB:.1f}MB→{held1/MB:.1f}MB · plan gpt fused moved {gpl['moved']} released {gpl['released']} {gpl['bytesBefore']/MB:.1f}MB→{gpl['bytesAfter']/MB:.1f}MB in {gpl['arenas']} arenas"
 f"capture: {STEPS} steps · max |Δloss| {d_loss:.1e} · max |Δparam| {d_w:.1e} · {step.dispatches} dispatches a replay · {access} · eager {te:.1f} ms · replay {tr:.1f} ms a step · compiled two shapes: recordings {shapes} max |Δloss| {d_compiled:.1e} max |Δparam| {d_cw:.1e} · gpt compiled plain rel|Δloss| {gres[False][0]:.1e} rel|Δparam| {gres[False][1]:.1e} {gres[False][2]} dispatches, fused rel|Δloss| {gres[True][0]:.1e} rel|Δparam| {gres[True][1]:.1e} {gres[True][2]} dispatches · check=True passed on {gres[False][3]} live-ins · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
 \`);

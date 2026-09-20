@@ -19,7 +19,7 @@
  * copy.
  */
 
-import { adamStep, adamTick, HYPER_DECAY, HYPER_DECAY_FACTOR, rmspropStep, sgdStep } from "./kernels.js";
+import { type AdamDecay, adamStep, adamTick, HYPER_DECAY, rmspropStep, sgdStep } from "./kernels.js";
 import { RuntimeError } from "./errors.js";
 import { device, keepAlive, noGrad, Tensor } from "./tensor.js";
 
@@ -657,6 +657,12 @@ export class SGD extends Optimizer {
     // recorded and re-run on every replay, resetting the arena's state (the compiled
     // step then diverged — caught by aliasing_probe). A captured step takes the
     // per-parameter path, which records and replays like any other dispatch.
+    // **And measured, that is also the faster path under replay** (2026-09-20, the
+    // arena tried under capture with its build kept out of the recording): the arena's
+    // win eagerly is the JS it skips — one dispatch call instead of one per parameter —
+    // and a replay skips all of that anyway; what is left is its gather and scatter,
+    // two copies a parameter, which cost the hand-written net's replay 0.66 → 1.45 ms
+    // and gained the U-Net's nothing (6.3 → 6.2). `docs/COMPILER.md` Step 3's ledger.
     if (this.paramGroups.length === 1 && !device().capturing && !device().suppressArena) {
       this.arenaStep();
     } else {
@@ -782,8 +788,11 @@ export class Adam extends Optimizer {
    * **The fused step, the arena SGD uses** (SGD `buildArena`/`arenaStep`). Adam's step was one
    * dispatch per parameter; here every parameter lies end to end in one slab and `adamStep` runs
    * once over all of it, with `m`/`v` resident between steps and only the gradients gathered in and
-   * the parameters scattered out. Gate: one group, plain Adam (no `amsgrad`, no weight decay, no
-   * `maximize` — each keeps the per-parameter path), not capturing, `suppressArena` off.
+   * the parameters scattered out. Gate: one group, no `amsgrad`, no `maximize` (each keeps the
+   * per-parameter path), not capturing (the replay is faster without the arena's copies —
+   * see SGD's `step`), `suppressArena` off. Weight decay, coupled or decoupled, is in the
+   * kernel (`adamStep`'s `decay`, 2026-09-20), so `AdamW` and `Adam(weight_decay=…)` take
+   * the arena too — `adam_arena_probe` holds all three against the per-parameter step.
    */
   private arena: { pA: GPUBuffer; gA: GPUBuffer; mA: GPUBuffer; vA: GPUBuffer; zero: GPUBuffer;
                    offs: number[]; sizes: number[]; total: number } | null = null;
@@ -791,7 +800,6 @@ export class Adam extends Optimizer {
 
   private arenaEligible(): boolean {
     return this.paramGroups.length === 1 && !this.amsgrad && !this.maximize
-      && this.grouped(this.weightDecay) === 0
       && !device().capturing && !device().suppressArena;
   }
 
@@ -875,9 +883,10 @@ export class Adam extends Optimizer {
         else if (this.present[i]) { d.copyRange(a.gA, off, a.zero, 0, bytes); this.present[i] = false; }
       }
       const corr = this.tick as { step: Tensor; corr: Tensor };
+      const decay: AdamDecay = this.grouped(this.weightDecay) === 0 ? "none" : this.decoupled ? "decoupled" : "coupled";
       d.run1d(
-        d.pipeline(`adam:${a.total}:${this.beta1}:${this.beta2}:${this.eps}:false`,
-          () => adamStep(a.total, this.beta1, this.beta2, this.eps, false)),
+        d.pipeline(`adam:${a.total}:${this.beta1}:${this.beta2}:${this.eps}:false:${decay}`,
+          () => adamStep(a.total, this.beta1, this.beta2, this.eps, false, decay)),
         [a.pA, a.gA, a.mA, a.vA, corr.corr.buffer, this.hyper().buffer], a.total);
       for (const [i, p] of this.params.entries()) {
         d.copyRange(p.buffer, 0, a.pA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
@@ -951,35 +960,22 @@ export class Adam extends Optimizer {
     // The corrections were ticked on the device at the top of `step`.
     const corr = (this.tick as { step: Tensor; corr: Tensor }).corr;
 
-    // **The kernel is not touched.** Both decays can be written as tensor operations.
-    //
-    // The coupled one adds into the gradient before the moments see it — `g + λ·p`.
-    //
-    // The decoupled one applies to the original weight **after** the update:
-    // `p − lr·m̂/(√v̂+ε) − lr·λ·p`. That is the same number as
-    // `p·(1 − lr·λ) − lr·m̂/(√v̂+ε)`, so **shrink first** and then take an ordinary step.
-    // The moments come from the gradient, so shrinking in advance does not disturb them.
-    //
-    // Baking one more argument into the kernel would also have worked, and then there is
-    // one pipeline per `weightDecay` value — because that number goes into the baked
-    // name.
-    const decay = this.grouped(this.weightDecay);
-    let g = grad;
-    if (decay !== 0) {
-      // The factor and the decay come from the group's device scalars, so a replay
-      // follows a scheduler that moves the learning rate.
-      noGrad(() => {
-        if (this.decoupled) {
-          param.copyFrom(param.mul(this.hyperScalar(HYPER_DECAY_FACTOR)));
-        } else {
-          g = grad.add(param.mul(this.hyperScalar(HYPER_DECAY)));
-        }
-      });
-    }
+    // **Both decays are in the kernel** (`adamStep`'s `decay`, 2026-09-20). They used to be
+    // tensor operations here — `g + λ·p` before the moments for the coupled one, the
+    // weight shrunk by the group's factor (1 − lr·λ) before an ordinary step for the
+    // decoupled one, the same number as torch's `p − lr·m̂/(√v̂+ε) − lr·λ·p` — and the
+    // arena's kernel took the same arithmetic in. That made the two paths differ by a
+    // rounding (the kernel contracts the multiply and the add the two tensor ops rounded
+    // separately: 6e-8 coupled, 3e-7 decoupled on `adam_arena_probe`), and an eager
+    // AdamW step no longer matched its own compiled replay bit for bit. One place for the
+    // arithmetic keeps eager, arena and replay identical, and drops two dispatches a
+    // parameter. The mode, not the value, goes in the key: the value comes from the
+    // group's device scalars, so a replay follows a scheduler.
+    const decayMode: AdamDecay = this.grouped(this.weightDecay) === 0 ? "none" : this.decoupled ? "decoupled" : "coupled";
 
     const n = param.size;
     const d = device();
-    const buffers = [param.buffer, g.buffer, m.buffer, v.buffer, corr.buffer];
+    const buffers = [param.buffer, grad.buffer, m.buffer, v.buffer, corr.buffer];
     if (this.amsgrad) {
       const vmax = this.secondMax[index];
       if (!vmax) throw new Error(`Adam: no amsgrad state for parameter ${index}`);
@@ -988,8 +984,8 @@ export class Adam extends Optimizer {
     buffers.push(this.hyper().buffer);
     d.run1d(
       d.pipeline(
-        `adam:${n}:${this.beta1}:${this.beta2}:${this.eps}:${this.amsgrad}`,
-        () => adamStep(n, this.beta1, this.beta2, this.eps, this.amsgrad)),
+        `adam:${n}:${this.beta1}:${this.beta2}:${this.eps}:${this.amsgrad}:${decayMode}`,
+        () => adamStep(n, this.beta1, this.beta2, this.eps, this.amsgrad, decayMode)),
       buffers,
       n,
     );

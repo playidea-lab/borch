@@ -437,6 +437,39 @@ export class Capture {
   }
 
   /**
+   * What a horizontal fusion pass would find — **counted before any pass is written**
+   * (`docs/COMPILER.md` Step 3). A run is consecutive elementwise dispatches with the same
+   * recipe (expression, prelude, operand count and layout — the element count may differ)
+   * and no dependence between them: none writes what another in the run reads or writes.
+   * `buffersMax` is the most distinct buffers one run binds; a kernel that merged the run
+   * would bind them all, and the device allows ten storage buffers a stage.
+   */
+  horizontal(): { runs: number; dispatches: number; largest: number; buffersMax: number } {
+    let runs = 0, dispatches = 0, largest = 0, buffersMax = 0;
+    let key: string | null = null;
+    let len = 0;
+    const reads = new Set<GPUBuffer>(), writes = new Set<GPUBuffer>(), bufs = new Set<GPUBuffer>();
+    const close = (): void => {
+      if (len >= 2) { runs++; dispatches += len; largest = Math.max(largest, len); buffersMax = Math.max(buffersMax, bufs.size); }
+      key = null; len = 0; reads.clear(); writes.clear(); bufs.clear();
+    };
+    for (const r of this.records) {
+      const m = r.meta;
+      if (!m || !("expr" in m)) { close(); continue; }
+      const k = `${m.prelude ?? ""}|${m.expr}|${m.inputs.map((i) => `${i.binding}:${i.strides ? "s" : "c"}`).join(",")}|${m.out}`;
+      const rIn = m.inputs.map((i) => bufOf(r.buffers[i.binding] as BindSlot));
+      const rOut = bufOf(r.buffers[m.out] as BindSlot);
+      const dependent = rIn.some((b) => writes.has(b)) || writes.has(rOut) || reads.has(rOut);
+      if (k !== key || dependent) close();
+      key = k; len++;
+      for (const b of rIn) { reads.add(b); bufs.add(b); }
+      writes.add(rOut); bufs.add(rOut);
+    }
+    close();
+    return { runs, dispatches, largest, buffersMax };
+  }
+
+  /**
    * The buffers the recording reads before it writes them — the step's inputs and its
    * state: parameters, the optimizer's moments and counters, running statistics. A
    * replay starts from what they hold; snapshot them and the step can be run again from

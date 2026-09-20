@@ -26,11 +26,19 @@
     say(`adapter: ${Device.adapterInfo}\n`);
     const seed = (n, s) => { const a = new Float32Array(n); let x = s >>> 0; for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * 2; } return a; };
     const D = 24, IN = 16, OUT = 16, STEPS = 6;   // few steps and fresh data each — a stable trace, not a blow-up
-    const run = async (suppress) => {
+    // Three optimizers the arena takes since 2026-09-20 — plain Adam, Adam with coupled
+    // weight decay, AdamW (decoupled) — each against its own per-parameter step. The decay
+    // is in the arena's kernel; the per-parameter path writes it as tensor ops.
+    const VARIANTS = [
+      ["Adam", (ps) => new optim.Adam(ps, 1e-3)],
+      ["Adam(weight_decay=0.01)", (ps) => new optim.Adam(ps, 1e-3, [0.9, 0.999], 1e-8, 0.01)],
+      ["AdamW(weight_decay=0.01)", (ps) => new optim.AdamW(ps, 1e-3, [0.9, 0.999], 1e-8, 0.01)],
+    ];
+    const run = async (suppress, make) => {
       device().suppressArena = suppress;
       const ws = [], bs = [];
       for (let k = 0; k < D; k++) { const W = Tensor.from(seed(IN * OUT, 100 + k), [IN, OUT]); W.requiresGrad = true; const b = Tensor.from(seed(OUT, 200 + k), [OUT]); b.requiresGrad = true; ws.push(W); bs.push(b); }
-      const opt = new optim.Adam([...ws, ...bs], 1e-3);
+      const opt = make([...ws, ...bs]);
       const before = device().dispatches;
       for (let s = 0; s < STEPS; s++) {
         opt.zeroGrad();
@@ -45,17 +53,20 @@
       device().suppressArena = false;
       return { flat, disp };
     };
-    const arena = await run(false);
-    const per = await run(true);
-    let dmax = 0; for (let i = 0; i < arena.flat.length; i++) dmax = Math.max(dmax, Math.abs((arena.flat[i] ?? 0) - (per.flat[i] ?? 0)));
-    say(`compute dispatches / step: arena ${arena.disp.toFixed(0)} · per-parameter ${per.disp.toFixed(0)}`);
-    const fired = arena.disp + 10 < per.disp;
-    say(`arena actually fired (far fewer dispatches): ${fired ? "yes" : "NO — the comparison would be vacuous"}`);
-    say(`max |Δ| over ${2 * D} parameters after ${STEPS} steps: ${dmax.toExponential(2)}`);
-    const ok = fired && dmax <= 1e-5 && device().faults.count === 0;
+    let ok = true, dmaxAll = 0, firedAll = true;
+    for (const [name, make] of VARIANTS) {
+      const arena = await run(false, make);
+      const per = await run(true, make);
+      let dmax = 0; for (let i = 0; i < arena.flat.length; i++) dmax = Math.max(dmax, Math.abs((arena.flat[i] ?? 0) - (per.flat[i] ?? 0)));
+      const fired = arena.disp + 10 < per.disp;
+      say(`${name}: compute dispatches / step: arena ${arena.disp.toFixed(0)} · per-parameter ${per.disp.toFixed(0)} · fired ${fired ? "yes" : "NO — the comparison would be vacuous"} · max |Δ| over ${2 * D} parameters after ${STEPS} steps: ${dmax.toExponential(2)}`);
+      ok = ok && fired && dmax <= 1e-5;
+      dmaxAll = Math.max(dmaxAll, dmax); firedAll = firedAll && fired;
+    }
+    ok = ok && device().faults.count === 0;
     say(`faults: ${device().faults.count}`);
-    say(ok ? "\nfused Adam arena == per-parameter step" : "\n**the arena diverges from the per-parameter step (or did not fire)**");
-    window.__adamArena = { text: lines.join("\n"), ok, dmax, fired, faults: device().faults.count };
+    say(ok ? "\nfused Adam arena == per-parameter step, for all three" : "\n**the arena diverges from the per-parameter step (or did not fire)**");
+    window.__adamArena = { text: lines.join("\n"), ok, dmax: dmaxAll, fired: firedAll, faults: device().faults.count };
   } catch (err) {
     window.__adamArena = { error: String(err && err.stack || err), text: lines.join("\n") };
     say(`it could not be measured: ${err}`);
