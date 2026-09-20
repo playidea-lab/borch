@@ -910,6 +910,14 @@ class capture:
         self.unwritten = int(r.unwritten)
         return int(r.before), int(r.after)
 
+    def hoist(self):
+        """Run the replay-invariant dispatches once and take them out of the replay — a
+        dispatch whose every read is a constant of the recording and whose writes are pure
+        (`Capture.hoist`: the eval forward's weight repacks). Returns `(hoisted, bytes)`.
+        In a training step nothing qualifies; the pass finds that itself."""
+        r = self._capture.hoist()
+        return int(r.hoisted), int(r.bytes)
+
     def plan(self):
         """Lay the step's intermediates into arenas so buffers whose lives do not overlap
         share bytes, and release the buffers they replace (`plan.ts`). Run after `fuse`.
@@ -1023,7 +1031,9 @@ class compiled:
                 cap.__exit__(None, None, None)
             if self._fuse:
                 cap.fuse()
-            # Planned before the check, so the check holds the recording that will replay.
+            # The replay-invariant dispatches leave the replay, then the plan — both before
+            # the check, so the check holds the recording that will replay.
+            cap.hoist()
             if self._plan:
                 cap.plan()
             if self._check:

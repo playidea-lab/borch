@@ -125,6 +125,8 @@ export class Compiled<A extends CompiledArg[], R> {
   readonly checked: CheckReport[] = [];
   /** One report per recording when `plan` is on. */
   readonly planned: PlanReport[] = [];
+  /** Per recording, how many dispatches were replay-invariant and left the replay. */
+  readonly hoisted: number[] = [];
 
   constructor(private readonly fn: (...args: A) => R, opts: CompiledOptions = {}) {
     this.fuse = opts.fuse ?? true;
@@ -177,7 +179,10 @@ export class Compiled<A extends CompiledArg[], R> {
     const cap = d.endCapture();
     const held = tensorsOf(out).map((t) => t.buffer);
     if (this.fuse) cap.fuse(held);
-    // Planned before the check, so the check holds the recording that will replay.
+    // The replay-invariant dispatches — a frozen weight's repack — run once and leave the
+    // replay (`Capture.hoist`); then the plan, before the check, so the check holds the
+    // recording that will replay.
+    this.hoisted.push(cap.hoist().hoisted);
     if (this.plan) {
       const p = cap.plan(held);
       this.planned.push({ moved: p.moved, released: p.released, bytesBefore: p.bytesBefore, bytesAfter: p.bytesAfter, arenas: p.arenas });

@@ -19,7 +19,7 @@
 
 import { type Elementwise, grid1d, type Reduce, reduceParts, reduceSum, WORKGROUP } from "./kernels.js";
 import { fuseRecords } from "./fuse.js";
-import { planRecords } from "./plan.js";
+import { planRecords, touchesOf } from "./plan.js";
 
 const BYTES_PER_F32 = 4;
 
@@ -591,6 +591,56 @@ export class Capture {
     return { before, after: records.length, fused, unwritten };
   }
 
+  /** Buffers a hoisted dispatch wrote — constants of the recording now, never moved by
+   *  the plan and never released before `dispose`. */
+  private readonly frozen = new Set<GPUBuffer>();
+
+  /**
+   * **Runs the replay-invariant dispatches once and takes them out of the replay.** A
+   * dispatch whose every read is a constant of the recording — a buffer no record writes,
+   * not an input uploaded under the capture (the caller rewrites those before each
+   * replay), not a window slot (refilled) — and whose writes are pure (no binding read
+   * and written) produces the same bytes on every replay; it ran when the step was
+   * recorded, its outputs are pinned for the capture's life, and a replay has no reason
+   * to run it again. Found to a fixed point, so a chain of such dispatches hoists whole.
+   *
+   * What it is in practice: the eval forward's weight repacks (`tmw`, the subgroup
+   * conv's tap-major copy of a frozen weight — 0.7 ms a forward on ResNet-18's 512-channel
+   * layer, measured), a padded constant, a block of ones. In a training step the weights
+   * are written by the optimizer and nothing is hoisted — the fixed point finds that on
+   * its own. `docs/INFER.md` Step 2 and `docs/COMPILER.md`. Run after `fuse`, before
+   * `plan`.
+   */
+  hoist(): { hoisted: number; bytes: number } {
+    const refilled = new Set<GPUBuffer>();
+    for (const r of this.records) if (r.refill) refilled.add(bufOf(r.buffers[0] as BindSlot));
+    const pure = (r: Recorded): boolean => {
+      if (r.copy || r.refill || !r.pipeline) return false;
+      if (r.meta) return true;                       // a recipe's output is written whole, never read
+      if (!r.access) return false;
+      return r.access.every((a) => a !== "rw");
+    };
+    let remaining = [...this.records];
+    let hoisted = 0, bytes = 0, changed = true;
+    while (changed) {
+      changed = false;
+      const written = new Set<GPUBuffer>();
+      for (const r of remaining) for (const b of touchesOf(r).writes) written.add(b);
+      const next: Recorded[] = [];
+      for (const r of remaining) {
+        const t = touchesOf(r);
+        const constant = pure(r) && t.reads.length > 0
+          && t.reads.every((b) => !written.has(b) && !this.uploaded.has(b) && !refilled.has(b));
+        if (!constant) { next.push(r); continue; }
+        hoisted++; changed = true;
+        for (const b of t.writes) { this.frozen.add(b); bytes += this.dev.bytesOf(b); }
+      }
+      remaining = next;
+    }
+    this.records = remaining;
+    return { hoisted, bytes };
+  }
+
   /**
    * Lays the step's intermediates into arenas so that buffers whose lives do not overlap
    * share bytes, and releases the buffers they replace — see `plan.ts`. Run after
@@ -600,11 +650,13 @@ export class Capture {
    */
   plan(held?: Iterable<GPUBuffer>): { moved: number; released: number; bytesBefore: number; bytesAfter: number; arenas: number; kept: { liveIn: number; subRange: number } } {
     const heldSet = new Set(held ?? []);
-    const movable = (b: GPUBuffer): boolean => this.pinned.has(b) && !this.uploaded.has(b) && !heldSet.has(b);
+    const movable = (b: GPUBuffer): boolean => this.pinned.has(b) && !this.uploaded.has(b) && !heldSet.has(b) && !this.frozen.has(b);
     const plan = planRecords({
       records: this.records,
       movable,
-      candidates: this.pinned,
+      // A hoisted dispatch's output is touched by no record left in the recording and
+      // must not read as an untouched intermediate to release.
+      candidates: [...this.pinned].filter((b) => !this.frozen.has(b)),
       sizeOf: (b) => this.dev.bytesOf(b),
       align: this.dev.offsetAlignment,
       arenaMax: this.dev.maxBinding,

@@ -253,6 +253,36 @@ prediction is written down so that the ledger can say which step was wrong.
   step was given. **Reverted** (the attempt is the commit before the revert); the plan's
   Step 3 stands with that design under it, and the number to beat is `cnt`'s 1.38 ms.
 
+- **2026-09-20, Step 3, second attempt — the subgroup forward widened, and the forward is
+  ahead of ORT at batch 16.** Three changes to `cnf`, each measured: (1) its gate carried the
+  direct kernel's `C ≤ 128` through `directFits`, a bound this kernel never needed (it reads
+  the weight block from storage per tap) — dropped, and the 256-channel 8 × 8 layer left the
+  scalar GEMM: **1.4 → 0.7 ms at batch 16, 8.4 → 3.0 at batch 64**, the training step
+  21.3 → 19.9 ms. (2) An epilogue at a staged store — the tiles through workgroup memory,
+  the lanes adding the residual and clamping as they write — so the fused `ConvReLU2d` /
+  `ConvAddReLU2d` take it: the fused 256 → 256 layer **1.35 → 0.46 ms**. (3) The tap-major
+  repack `tmw` rewritten one thread a (row, column) writing every tap's slab — contiguous
+  reads, coalesced writes — from 0.7 ms on the 512-channel weight to below the top eight.
+  **Fused forward at batch 16: 7.39 → 6.46 ms eager, 5.57 → 4.95 captured, against ORT's
+  5.30–5.39 — 0.93×, ahead; at batch 1, 1.66 against 4.07.** Golden 4,057 / 4,057, logits
+  8.9e-8. What was measured and taken back out: a row shorter than the tile over a wider
+  padded row (tiles of eight computing eight to keep four) put the 512-channel 4 × 4 layer
+  on this kernel at **1.5 ms against `cnt`'s 1.4** — the waste ate the multiply — and cost
+  the training step 19.9 → 21.0 with its repack; `sgfFits` keeps the row of eight and that
+  layer keeps the scalar GEMM. It is now the largest single kernel of the fused forward
+  (1.39 of 4.9 ms) and the one a proper implicit GEMM would still be for.
+
+- **2026-09-20, Step 2 landed as a compiler pass, not a cache.** `Capture.hoist()`
+  (`docs/COMPILER.md`): a dispatch whose every read is a constant of the recording — no
+  record writes it, it is not an uploaded input, not a window slot — and whose writes are
+  pure, gives the same bytes on every replay; it ran when the step was recorded and leaves
+  the replay, its outputs pinned for the capture's life. Found to a fixed point. In the
+  captured eval forward that is exactly the three `tmw` repacks of the subgroup layers:
+  **41 → 38 dispatches a replay**, the repack paid once. In the training step nothing
+  qualifies (the optimizer writes the weights) and the pass finds that itself — `capture:py`
+  257 dispatches, bit for bit. Nothing is cached on a tensor, nothing can leak, and any
+  future prepack (a constant's pad, a block of ones) hoists the same way.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

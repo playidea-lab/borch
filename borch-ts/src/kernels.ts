@@ -4346,29 +4346,32 @@ ${store.join("\n")}
 export function tapMajorWeights(O: number, C: number, kSpace: number, turned: boolean, hasBias: boolean): string {
   const M = turned ? C : O, K = turned ? O : C;
   const Mp = Math.ceil(M / 8) * 8, Kp = Math.ceil(K / 8) * 8;
-  const n = kSpace * Mp * Kp + (hasBias ? Mp * 8 : 0);
   return `
 @group(0) @binding(0) var<storage, read> W: array<f32>;
 ${hasBias ? "@group(0) @binding(1) var<storage, read> B: array<f32>;" : ""}
 @group(0) @binding(${hasBias ? 2 : 1}) var<storage, read_write> Out: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
-${flatId(n)}
-  if (gid >= ${kSpace * Mp * Kp}u) {
-${hasBias ? `    let r = gid - ${kSpace * Mp * Kp}u;
+${flatId(Mp * Kp + (hasBias ? Mp * 8 : 0))}
+  if (gid >= ${Mp * Kp}u) {
+${hasBias ? `    let r = gid - ${Mp * Kp}u;
     let m = r / 8u;
-    Out[gid] = select(0.0, B[min(m, ${M - 1}u)], r % 8u == 0u && m < ${M}u);` : "    return;"}
+    Out[${kSpace * Mp * Kp}u + r] = select(0.0, B[min(m, ${M - 1}u)], r % 8u == 0u && m < ${M}u);` : "    return;"}
     return;
   }
-  let t = gid / ${Mp * Kp}u;
-  let rest = gid % ${Mp * Kp}u;
-  let m = rest / ${Kp}u;
-  let kk = rest % ${Kp}u;
+  // One thread per (row, column) of the block, writing every tap's slab: the weight's
+  // \`kSpace\` values for one (o, c) are contiguous, so the reads are a run and the writes
+  // — consecutive threads, consecutive columns — coalesce in each slab. It was one thread
+  // an element with three divisions each, 1.5 ms for a 512 × 512 × 9 weight (measured).
+  let m = gid / ${Kp}u;
+  let kk = gid - m * ${Kp}u;
   let inside = m < ${M}u && kk < ${K}u;
-  ${turned
-    ? `let o = kk; let c = m; let tap = ${kSpace - 1}u - t;`
-    : `let o = m; let c = kk; let tap = t;`}
-  Out[gid] = select(0.0, W[(min(o, ${O - 1}u) * ${C}u + min(c, ${C - 1}u)) * ${kSpace}u + tap], inside);
+  ${turned ? `let o = kk; let c = m;` : `let o = m; let c = kk;`}
+  let base = (min(o, ${O - 1}u) * ${C}u + min(c, ${C - 1}u)) * ${kSpace}u;
+  for (var t = 0u; t < ${kSpace}u; t = t + 1u) {
+    let tap = ${turned ? `${kSpace - 1}u - t` : "t"};
+    Out[t * ${Mp * Kp}u + gid] = select(0.0, W[base + tap], inside);
+  }
 }`;
 }
 
@@ -4382,7 +4385,15 @@ const SGF_CB = 16;
  */
 export function sgfFits(s: ConvNDShape): boolean {
   const [, OW = 1] = s.outDims;
-  return directFits(s) && s.stride.every((v) => v === 1) && s.kernel.every((v) => v <= 3)
+  // Not `directFits`: that carries the direct kernel's `C ≤ 128`, which this kernel never
+  // needed — it reads the weight block from storage per tap, nothing is staged — and it
+  // kept the 256- and 512-channel layers on the scalar tiled GEMM (docs/INFER.md Step 3).
+  // The output row in whole eights stays: a shorter row over a wider padded row (tiles of
+  // eight, the extra columns dropped at the store) was built and measured 2026-09-20 on
+  // the 512-channel 4 × 4 layer — computing eight to keep four cost what the hardware
+  // multiply saved (1.5 ms against `cnt`'s 1.4), so that layer keeps the scalar GEMM.
+  return s.inDims.length === 2 && (s.groups ?? 1) === 1 && (s.dilation ?? [1, 1]).every((d) => d === 1)
+    && s.stride.every((v) => v === 1) && s.kernel.every((v) => v <= 3)
     && OW % 8 === 0 && s.O % 8 === 0 && s.C % 8 === 0;
 }
 
@@ -4404,7 +4415,7 @@ export function sgfGrid(s: ConvNDShape, turned = false): [number, number, number
  * With `turned` the same kernel is the stride-1 input gradient — the gradient padded by
  * `kernel − 1 − pad` as the input, the weights laid out turned.
  */
-export function convForwardSubgroup(s: ConvNDShape, hasBias: boolean, turned = false): string {
+export function convForwardSubgroup(s: ConvNDShape, hasBias: boolean, turned = false, epilogue?: ConvEpilogue): string {
   const [IH = 1, IW = 1] = s.inDims;
   const [OH = 1, OW = 1] = s.outDims;
   const [KH = 1, KW = 1] = s.kernel;
@@ -4417,6 +4428,11 @@ export function convForwardSubgroup(s: ConvNDShape, hasBias: boolean, turned = f
   const TW = sgwGlobalTile(OW);
   const perRow = OW / TW;
   const mb = SGF_CB / 8, nb = TW / 8;
+  // **The staged store**: with an epilogue the accumulator tiles go through workgroup
+  // memory and the lanes apply the residual and the relu as they write — the fused
+  // `ConvReLU2d` / `ConvAddReLU2d` on this kernel (`docs/INFER.md` Step 3). Without one
+  // the tiles store straight to the output, as they always did.
+  const staged = epilogue !== undefined;
   const acc: string[] = [];
   for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) acc.push(`  var c${i}${j}: subgroup_matrix_result<f32, 8, 8>;`);
   const body: string[] = [];
@@ -4433,17 +4449,36 @@ export function convForwardSubgroup(s: ConvNDShape, hasBias: boolean, turned = f
     for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) bias.push(`  c${i}${j} = subgroupMatrixMultiplyAccumulate(ab${i}, ones, c${i}${j});`);
   }
   const store: string[] = [];
-  for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) {
-    store.push(`  if (co0 + ${i * 8}u < ${M}u) { subgroupMatrixStore(&Out, oBase + ${i * 8 * OH * OW + j * 8}u, c${i}${j}, false, ${OH * OW}u); }`);
+  if (!staged) {
+    for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) {
+      store.push(`  if (co0 + ${i * 8}u < ${M}u) { subgroupMatrixStore(&Out, oBase + ${i * 8 * OH * OW + j * 8}u, c${i}${j}, false, ${OH * OW}u); }`);
+    }
+  } else {
+    for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) {
+      store.push(`  subgroupMatrixStore(&ot, ${i * 8 * TW + j * 8}u, c${i}${j}, false, ${TW}u);`);
+    }
+    store.push(`  workgroupBarrier();
+  for (var e = lid; e < ${SGF_CB * TW}u; e = e + 32u) {
+    let r = e / ${TW}u;
+    let col = e - r * ${TW}u;
+    if (co0 + r < ${M}u && tw0 + col < ${OW}u) {
+      let idx = oBase + r * ${OH * OW}u + col;
+      var v = ot[e];
+${epilogueWgsl(epilogue, "v", "idx").split("\n").map((l) => (l ? "    " + l : l)).join("\n")}      Out[idx] = v;
+    }
+  }`);
   }
+  const slot = hasBias ? 3 : 2;
   return `enable subgroups;
 enable chromium_experimental_subgroup_matrix;
 @group(0) @binding(0) var<storage, read> Xp: array<f32>;
 @group(0) @binding(1) var<storage, read> Wt: array<f32>;
 ${hasBias ? "@group(0) @binding(2) var<storage, read> One: array<f32>;" : ""}
-@group(0) @binding(${hasBias ? 3 : 2}) var<storage, read_write> Out: array<f32>;
+${residualBinding(epilogue, slot)}
+@group(0) @binding(${epilogue?.residual ? slot + 1 : slot}) var<storage, read_write> Out: array<f32>;
+${staged ? `var<workgroup> ot: array<f32, ${SGF_CB * TW}>;` : ""}
 @compute @workgroup_size(32)
-fn main(@builtin(workgroup_id) wid: vec3<u32>) {
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
   let tile = wid.x;
   let co0 = wid.y * ${SGF_CB}u;
   let n = tile / ${OH * perRow}u;

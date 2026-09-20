@@ -804,6 +804,27 @@ function convForwardRun(
     return;
   }
   if (turned) throw new Error("turned weights are a direct-kernel matter");
+  if (Device.subgroupMatrix && sgfFits(s)) {
+    // The subgroup forward with the epilogue applied at its staged store — the fused
+    // `ConvReLU2d` / `ConvAddReLU2d` of an eval network, and the deep layers of any
+    // network, which the row-of-eight, `C ≤ 128` gate had kept on the scalar tiled GEMM
+    // (`docs/INFER.md` Step 3). Bias by the ones product, as the plain path does.
+    const padded = padForSubgroup(s, key, x);
+    const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+    const Mp = Math.ceil(s.O / 8) * 8, Kp = Math.ceil(s.C / 8) * 8;
+    const wsize = kSpace * Mp * Kp + (bias ? Mp * 8 : 0);
+    const turnedW = dev().alloc(wsize);
+    dev().run1d(
+      dev().pipeline(`tmw:${key}:${bias ? "b" : "n"}`, () => tapMajorWeights(s.O, s.C, kSpace, false, bias !== null)),
+      bias ? [w, bias, turnedW] : [w, turnedW], Mp * Kp + (bias ? Mp * 8 : 0));
+    const bufs = [padded, turnedW, ...(bias ? [onesBlockBuffer()] : []), ...(epilogue?.residual ? [epilogue.residual] : []), out];
+    dev().run(
+      dev().pipeline(`cnf:${key}:${bias ? "b" : "n"}${tag}`, () => convForwardSubgroup(s, bias !== null, false, ep)),
+      bufs,
+      sgfGrid(s),
+    );
+    return;
+  }
   if (splits === 1) {
     dev().run(
       dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}${tag}`, () => convNDForwardTiled(s, bias !== null, ep)),
@@ -11618,16 +11639,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     } else if (Device.subgroupMatrix && sgfFits(s)) {
       // Subgroup matrices from the buffers — see `convForwardSubgroup`.
       paddedX = padForSubgroup(s, key, this.buffer);
+      const padded = paddedX;
       const kSpace = s.kernel.reduce((a, b) => a * b, 1);
       const Mp = Math.ceil(s.O / 8) * 8, Kp = Math.ceil(s.C / 8) * 8;
       const wsize = kSpace * Mp * Kp + (bias ? Mp * 8 : 0);
       const turned = dev().alloc(wsize);
       dev().run1d(
         dev().pipeline(`tmw:${key}:${bias ? "b" : "n"}`, () => tapMajorWeights(s.O, s.C, kSpace, false, bias !== null)),
-        bias ? [weight.weightBinding(), bias.buffer, turned] : [weight.weightBinding(), turned], wsize);
+        bias ? [weight.weightBinding(), bias.buffer, turned] : [weight.weightBinding(), turned], Mp * Kp + (bias ? Mp * 8 : 0));
       dev().run(
         dev().pipeline(`cnf:${key}:${bias ? "b" : "n"}`, () => convForwardSubgroup(s, bias !== null)),
-        bias ? [paddedX, turned, onesBlockBuffer(), out] : [paddedX, turned, out],
+        bias ? [padded, turned, onesBlockBuffer(), out] : [padded, turned, out],
         sgfGrid(s));
     } else {
       convForwardRun(s, key, this.buffer, weight.weightBinding(), bias ? bias.buffer : null, out);
@@ -11657,7 +11679,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
               ...(s.dilation ? { dilation: s.dilation } : {}),
             };
             const samePad = s.inDims.every((d, i) => d === (s.outDims[i] ?? d));
-            if (Device.subgroupMatrix && sgfFits(s) && samePad) {
+            if (Device.subgroupMatrix && sgfFits(s) && samePad && (s.outDims[1] ?? 1) % 8 === 0) {
               // The input gradient on subgroup matrices — `convForwardSubgroup`'s turned path,
               // the gradient padded like the forward's input (same-padding here) and the weights
               // laid out turned. This is the direct kernel's biggest cost (dX); the subgroup GEMM
@@ -11667,7 +11689,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
               const turnedW = dev().alloc(kSpace * Mp * Kp);
               dev().run1d(
                 dev().pipeline(`tmwt:${key}`, () => tapMajorWeights(s.O, s.C, kSpace, true, false)),
-                [weight.weightBinding(), turnedW], kSpace * Mp * Kp);
+                [weight.weightBinding(), turnedW], Mp * Kp);
               // The gradient is the turned conv's *input*, so it is padded with **O channels**, not
               // C — `convForwardSubgroup` turned reads K = O channels of it. Same-padding here, so its
               // spatial matches the forward's padded input. (Padding by C silently read past the
@@ -11696,7 +11718,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
             const turnedW = dev().alloc(kSpace * s.C * s.O);
             dev().run1d(
               dev().pipeline(`tmwt:${key}`, () => tapMajorWeights(s.O, s.C, kSpace, true, false)),
-              [weight.weightBinding(), turnedW], kSpace * s.C * s.O);
+              [weight.weightBinding(), turnedW], s.C * s.O);
             const temp = dev().alloc(kSpace * s.N * s.C * s.outDims.reduce((a, b) => a * b, 1));
             dev().run(
               dev().pipeline(`cnis:${key}`, () => convGradInputSubgroupStrided(s)),
@@ -11895,7 +11917,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       const turnedW = dev().alloc(kSpace * s.C * s.O);
       dev().run1d(
         dev().pipeline(`tmwt:${key}`, () => tapMajorWeights(s.O, s.C, kSpace, true, false)),
-        [weight.buffer, turnedW], kSpace * s.C * s.O);
+        [weight.buffer, turnedW], s.C * s.O);
       const temp = dev().alloc(kSpace * s.N * s.C * s.outDims.reduce((a, b) => a * b, 1));
       dev().run(
         dev().pipeline(`cnis:${key}`, () => convGradInputSubgroupStrided(s)),

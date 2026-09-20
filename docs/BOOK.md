@@ -2009,6 +2009,9 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused **+ captured** (`compiled` over the eval forward), `apple / metal-3`, **2026-09-20** | | **1.97 ms** | 5.57 ms |
 | ONNX Runtime Web 1.29.0, same run | | 3.83 ms | **5.32 ms** |
 | ORT is faster than the captured network by | | 0.51× | 1.05× |
+| borch.ts fused + captured, the subgroup conv widened to the deep layers and given its epilogue, **2026-09-20** (later the same day) | | **1.66 ms** | **4.95 ms** |
+| ONNX Runtime Web 1.29.0, same run | | 4.07 ms | 5.30–5.39 ms |
+| ORT is faster than the captured network by | | 0.41× | **0.93×** — borch ahead |
 
 The 2026-09-20 rows are `torch.compiled` pointed at the fused network's `noGrad` forward
 (`docs/INFER.md` Step 1): the JavaScript that encodes the thirty-eight dispatches is paid

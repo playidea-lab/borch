@@ -366,6 +366,16 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   (autotune) — waits on a second adapter**: its gate is two adapters, and the 4090 is off
   the bus (2026-09-14) while the 5080 runs another experiment.
 
+- **2026-09-20, a pass the plan did not list — hoisting the replay-invariant dispatches.**
+  `Capture.hoist()`, between `fuse` and `plan` in both `compiled`s: a dispatch that reads
+  only constants of the recording (buffers no record writes, not uploaded inputs, not
+  refill slots) and writes purely is run once and dropped from the replay, its outputs
+  frozen (never planned over, never released before `dispose`). Fixed point, so chains
+  hoist whole. Motivated by `docs/INFER.md` Step 2 — the eval forward's weight repacks —
+  and it is what Step 0's access sets were for: the eval ResNet-18 replay 41 → 38
+  dispatches (the three subgroup layers' `tmw` gone), the training step untouched (257,
+  bit for bit; the optimizer writes the weights, so nothing is constant).
+
 ## 6. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |
