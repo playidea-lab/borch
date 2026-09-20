@@ -174,6 +174,13 @@ const KICK_PROBE_PAIRS = 5;
  *  turned kicks on, where they cost the eager forward a third. */
 const KICK_PROBE_RATIO = 3;
 const KICK_PROBE_FLOOR_MS = 1.5;
+/** Settle before the pairs, ms. Right after `requestDevice` the GPU process is busy —
+ *  compiling, allocating — and looks at its fences often; the 5080's first hundred
+ *  milliseconds gave plain waits of 0.1–1.3 ms on work that stalls at 2.5 for the rest
+ *  of the page, and a calibration in that window said "no kicks" (`roundtrip:probe`, the
+ *  rows before and after the first hundred milliseconds). The decision is about the
+ *  steady state, so it waits for it. */
+const KICK_PROBE_SETTLE_MS = 150;
 
 /**
  * **Does this browser notice a finished fence on its own?** A short loop kernel behind
@@ -220,6 +227,7 @@ async function calibrateKicks(device: GPUDevice): Promise<boolean> {
   const plains: number[] = [];
   const kickeds: number[] = [];
   await wait(false);                       // warm the pipeline once, unmeasured
+  await new Promise((resolve) => setTimeout(resolve, KICK_PROBE_SETTLE_MS));
   for (let i = 0; i < KICK_PROBE_PAIRS; i++) {
     plains.push(await wait(false));
     kickeds.push(await wait(true));
