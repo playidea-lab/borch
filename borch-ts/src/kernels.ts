@@ -4973,9 +4973,20 @@ export function convForwardSplit(s: ConvNDShape): number {
   const P = s.N * s.outDims.reduce((a, b) => a * b, 1);
   const tiles = tileCount(cout, P) * groups;
   const K = cin * s.kernel.reduce((a, b) => a * b, 1);
-  const WANT = 128;
+  // **1024 workgroups and pieces of at least 128 of K — swept, not chosen** (`kernel_bench
+  // fwd --sweep=all`, 2026-09-21, the minimum of five rounds, ms, the slab sum counted).
+  // The first policy wanted 128 tiles and pieces of 256, which gave 512 → 512 at 4 × 4,
+  // batch 16, four pieces; the ladder on the RTX 5080: split 1 0.635 · 2 0.323 · 4 0.179 ·
+  // 8 0.120 · 16 0.110 · 32 0.100. 256 → 256 at 8 × 8: 2 0.182 (the policy) · 8 0.110 ·
+  // 16 0.099. 128 → 128 at 16 × 16: 1 0.189 (the policy) · 8 0.099 · 16 0.103 · 32 0.152.
+  // At batch 1: 512 → 512, 16 0.049 (the policy) · 32 0.033. metal-3, 512 → 512 at 4 × 4:
+  // 4 0.437 (the policy) · 16 0.315 · 32 0.318. The tile shapes were swept on the same
+  // shapes and 64 × 64 won every one (32 × 128 within 10 %, 16 × 256 1.5× slower). So:
+  // want 1024 workgroups, and pieces of at least eight K-tiles — the ladder turns at
+  // pieces shorter than that (128 → 128, 32 pieces of 36: 0.152).
+  const WANT = 1024;
   if (tiles >= WANT) return 1;
-  const MIN_PER_SPLIT = 256;
+  const MIN_PER_SPLIT = 128;
   return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
 }
 
