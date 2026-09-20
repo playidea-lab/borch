@@ -293,21 +293,23 @@ async function calibrateKicks(device: GPUDevice, canTime: boolean): Promise<bool
  * **The re-tiled scalar GEMM's configurations for an adapter, best first** (`docs/GEMM.md`
  * Step 4). `matmul` takes the first that fits the shape (`tiledConfigFits`) and the
  * device's workgroup storage; a shape none fits stays on the tile as it was. Measured,
- * not chosen (`kernel_bench mm --sweep=gemm`, 2026-09-21):
- * - **Apple**: the 8 × 4 micro-tile on a 128 × 64 tile with `vec4` staging, 1.46× the old
- *   tile on 2048³ (3.55 → 2.43 ms) and 1.42× on the deep ResNet GEMM shapes; the 8 × 8
- *   micro-tile gains nothing there (the register file), double buffering loses 3–10 %.
- *   Then 64 × 64 r4×4 `vec4` for shapes the first does not divide — 1.34× on its own.
- * - **Everything else**: none yet — the 5080 sweep decides, and until it is measured an
- *   adapter runs the tile as it was. An empty list is the old tile.
+ * not chosen (`kernel_bench mm --sweep=gemm`, 2026-09-21), and **the same answer on both
+ * adapters**, which is why one list serves every vendor:
+ * - the 8 × 4 micro-tile on a 128 × 64 tile with `vec4` staging — metal-3 1.46× the old
+ *   tile on 2048³ (3.55 → 2.43 ms), the RTX 5080 1.21× (0.812 → 0.671, 25.6 TFLOP/s) and
+ *   1.33× on 1024³ and on the deep ResNet GEMM shapes (0.084 → 0.063);
+ * - then 64 × 64 r4×4 `vec4` for shapes the first does not divide — 1.34× on metal-3,
+ *   1.20× on the 5080, on its own.
+ * The 8 × 8 micro-tile lost on both (Apple's register file; on the 5080 0.109 + 0.011
+ * against 0.102 at 1024³ and 0.807 against 0.671 at 2048³), and double buffering lost
+ * on both (+3–10 % on metal-3, +20–50 % on the 5080). A vendor this was not measured on
+ * gets the same list: the old tile stays for every shape the list does not divide.
  */
-function gemmConfigsFor(vendor: string): readonly TiledConfig[] {
-  const APPLE: readonly TiledConfig[] = [
+function gemmConfigsFor(_vendor: string): readonly TiledConfig[] {
+  return [
     { TM: 128, TN: 64, RM: 8, RN: 4, KT: 16, vec4: true, dbuf: false },
     { TM: 64, TN: 64, RM: 4, RN: 4, KT: 16, vec4: true, dbuf: false },
   ];
-  if (vendor === "apple") return APPLE;
-  return [];
 }
 
 /** Which adapter, on one line. Empty fields are dropped — the browser hides most of

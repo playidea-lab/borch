@@ -135,6 +135,30 @@ else. `tileShape` / `tileDepth` / `scalarMatmulSplit` re-swept for the new tile.
   of the weights as `array<vec4<f32>>`) next. Held on metal-3: `parity:ts`, `capture:ts`
   18 / 18, `compare:ts` unchanged (its convolutions are on the subgroup kernels).
 
+- **2026-09-21, the sweep on the RTX 5080 — Steps 1–3 decided.** The worker came back
+  (the zombie run of 2026-07-28 had held its GPU slot for a day). Same bench, same
+  shapes, the minimum of five rounds, ms:
+
+  | shape | scalar tile | 64 × 64 r4×4 vec4 | 128 × 128 r8×8 vec4 | 128 × 64 r8×4 vec4 | r8×4 dbuf |
+  |---|---|---|---|---|---|
+  | 1024³ | 0.136 | 0.113 | 0.109 + 0.011 (split 4) · 0.129 unsplit | **0.102** (21.1 TFLOP/s) | 0.151 + 0.011 |
+  | 2048³ | 0.812 | 0.693 | 0.807 | **0.671** (25.6) | 1.003 |
+  | 512 × 4608 × 256 | 0.080 + 0.004 | 0.065 + 0.004 | 0.067 + 0.007 | **0.058 + 0.005** | 0.087 + 0.005 |
+  | 256 × 2304 × 1024 | 0.080 + 0.005 | 0.065 + 0.005 | 0.067 + 0.007 | **0.058 + 0.005** | 0.087 + 0.005 |
+
+  **Step 1's prediction was wrong on both adapters**: the 8 × 8 micro-tile does not reach
+  22 TFLOP/s on the 5080 (19.7 split, 16.7 unsplit) and loses to 8 × 4, as it did on
+  Apple — sixty-four accumulators cost more occupancy than the shared-read ratio buys,
+  on NVIDIA too. **Step 2 is the gain**: `vec4` staging alone is 1.20× on the 5080 and
+  1.34× on metal-3, and with the 8 × 4 micro-tile 1.33× / 1.46×. **Step 3 is retired on
+  both**: double buffering loses 20–50 % on the 5080 and 3–10 % on metal-3 — the
+  register cost of holding the next tile is paid by every thread, and the barrier it
+  saves was not the wait. The gate "≥ 1.3× on 1024³ on the 5080" is met by the 8 × 4
+  tile (1.33×), not by the one predicted; the deeper K-tile (32) helps the 8 × 8 a
+  little (0.105) and is not in the list. So `gemmConfigsFor` returns the same two
+  configurations for every vendor: **128 × 64 r8×4 `vec4`, then 64 × 64 r4×4 `vec4`**;
+  the old tile keeps the shapes neither divides.
+
 ## 4. After this
 
 `docs/INT8.md` Steps 2–6 follow when this plan is done: the int8 configuration's 3–3.6×
