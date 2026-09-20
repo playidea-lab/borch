@@ -253,6 +253,7 @@ import {
   convDirect2d,
   directFits,
   directGrid,
+  directGridFills,
   turnWeightsForGradInput,
   cumExtreme,
   cumprodBackward,
@@ -806,8 +807,9 @@ function convForwardRun(
   // its loads are direct from the padded plane, and it measured faster (256 → 256 on
   // 8 × 8 at batch 16: 0.75 against 0.85 ms staged).
   const smallSubgroup = Device.subgroupMatrix && !turned && sgfsFits(s) && (s.outDims[1] ?? 1) !== 8;
-  if (directFits(s) && !smallSubgroup) {
-    // The narrow layers go direct — see `convDirect2d` for the measurement.
+  if (directFits(s) && !smallSubgroup && (turned || directGridFills(s))) {
+    // The narrow layers go direct — see `convDirect2d` for the measurement; a grid too
+    // small to fill the card goes to the split GEMM instead (`DIRECT_MIN_WORKGROUPS`).
     dev().run(
       dev().pipeline(`cnd:${key}:${bias ? "b" : "n"}${tag}${turned ? ":t" : ""}`, () => convDirect2d(s, bias !== null, ep, turned)),
       [x, w, ...tail],

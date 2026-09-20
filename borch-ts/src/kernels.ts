@@ -3869,8 +3869,34 @@ export const DIRECT_STRIP = 4;
  */
 const DIRECT_COUT = 8;
 
-/** Workgroup storage the weights may take in `convDirect2d`: WebGPU's guaranteed floor. */
+/** Workgroup storage the weights may take in `convDirect2d` before the device says
+ *  otherwise: WebGPU's guaranteed floor. */
 const DIRECT_WEIGHT_BYTES = 16384;
+/** The most the weights take whatever the device offers — three times the floor. Swept
+ *  on the RTX 5080 (48 KiB, `kernel_bench fwd --sweep=direct`, 2026-09-21): 128 → 128 at
+ *  16 × 16, batch 16, a slice of three under the floor 0.146 ms, of eight under 48 KiB
+ *  **0.093**; 64 → 64 at 32 × 32 unchanged (0.078 both); 32 → 32 at 48 × 48 0.047 → 0.046.
+ *  metal-3 (32 KiB): 128 → 128 slice seven 0.272 against three 0.264, 64 → 64 0.210
+ *  against 0.229 — a wash. */
+const DIRECT_WEIGHT_MAX = 49152;
+let directWeightBytes = DIRECT_WEIGHT_BYTES;
+/** Called by `Device.create` with the adapter's workgroup storage; the direct kernel's
+ *  weight slice grows to what the device holds, up to `DIRECT_WEIGHT_MAX`. */
+export function setDirectWeightBytes(workgroupStorage: number): void {
+  directWeightBytes = Math.max(DIRECT_WEIGHT_BYTES, Math.min(DIRECT_WEIGHT_MAX, workgroupStorage));
+}
+/** The fewest workgroups the direct forward is dispatched with; under it the tiled
+ *  GEMM, split, fills the card better. Measured on the RTX 5080 at batch 1 (the same
+ *  sweep): 128 → 128 at 16 × 16 direct 0.042 (43 workgroups) against the tiled 0.027;
+ *  64 → 64 at 32 × 32 direct 0.037 against 0.029. At batch 16 every direct grid here is
+ *  64 or more and the direct kernel wins or ties. */
+export const DIRECT_MIN_WORKGROUPS = 64;
+/** Whether the direct forward's grid is large enough to prefer it — see
+ *  `DIRECT_MIN_WORKGROUPS`. The turned input gradient has no other kernel and does not ask. */
+export function directGridFills(s: ConvNDShape): boolean {
+  const [x, y] = directGrid(s);
+  return x * y >= DIRECT_MIN_WORKGROUPS;
+}
 
 /**
  * How many output channels one thread of `convDirect2d` takes: the most that fit the
@@ -3880,7 +3906,7 @@ const DIRECT_WEIGHT_BYTES = 16384;
 export function directCoutSlice(s: ConvNDShape, cfg: DirectConfig = DIRECT_DEFAULT): number {
   const kSpace = s.kernel.reduce((a, b) => a * b, 1);
   const perCout = s.C * kSpace * 4;
-  return Math.max(1, Math.min(cfg.COUT, s.O, Math.floor((cfg.WEIGHT_BYTES ?? DIRECT_WEIGHT_BYTES) / perCout)));
+  return Math.max(1, Math.min(cfg.COUT, s.O, Math.floor((cfg.WEIGHT_BYTES ?? directWeightBytes) / perCout)));
 }
 
 /** The direct forward's thread block: the strip of output columns and the output

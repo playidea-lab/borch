@@ -17,7 +17,7 @@
  * looked at, so here the limits are **measured in advance and exceeding one throws.**
  */
 
-import { type Elementwise, grid1d, type Reduce, reduceParts, reduceSum, WORKGROUP } from "./kernels.js";
+import { type Elementwise, grid1d, type Reduce, reduceParts, reduceSum, setDirectWeightBytes, WORKGROUP } from "./kernels.js";
 import { fuseRecords } from "./fuse.js";
 import { planRecords, touchesOf } from "./plan.js";
 
@@ -941,6 +941,7 @@ export class Device {
     Device.subgroups = sg;
     Device.f16 = f16;
     Device.workgroupStorage = adapter.limits.maxComputeWorkgroupStorageSize;
+    setDirectWeightBytes(Device.workgroupStorage);
 
     let device: GPUDevice;
     try {
