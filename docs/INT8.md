@@ -160,6 +160,43 @@ on exactness and 1.5×, met at 3.59× — because it is the kernel any int8 path
 and its gate is a number on a card the tree can reach; Steps 2–6 wait for a caller who
 wants the trade.
 
+## 6. Ledger
+
+- **2026-09-21, Steps 2 and 3 built and gated on the RTX 5080** (`kernel_bench --bench=cnvi8`).
+  The activation is quantised on the GPU — `absMaxAtomic` (one dispatch: a workgroup tree,
+  then `atomicMax` on the bit pattern) and `quantizeActivationInt8` (NCHW → four channels a
+  word) — the weights on the host (`quantizeConvWeightInt8TapMajor`, `[tap][ci][co]`,
+  a scale per output channel). The kernel, `convForwardInt8`: the small-plane staged
+  kernel's shape with **the operand roles swapped** — the activation is the left operand
+  (a pixel's 32 channels are eight consecutive words: a kernel row's three taps are copied
+  from the staged band eight words a pixel, nothing repacked) and the weights the right,
+  `i8 × i8 → i32` at 16 × 16 × 32, four subgroups × 32 output channels a workgroup, the
+  reduction split to 128 workgroups with dequantised partials summed by `sumSplitsConv`.
+  **Two gates, kept apart**: the quantiser to the host to ±1 on a near-tie only (the GPU's
+  `1.0 / s` is not the correctly rounded quotient — one input at x·inv = −67.4999924 came
+  out −68, and a day was nearly spent reading that as a wrong tap), and the convolution
+  **exactly** to a CPU int32 reference built on the GPU's own bytes. Nine shapes, every
+  output exact; ms, the minimum of five rounds:
+
+  | shape | int8 kernel | f32 tiled (+ sum) | kernel alone | quantise passes (2 passes + zero) | with them |
+  |---|---|---|---|---|---|
+  | 128 → 128 at 16 × 16, b16 | 0.037 | 0.098 + 0.007 | **2.85×** | 0.015 | 2.03× |
+  | 256 → 256 at 8 × 8, b16 | 0.037 + 0.002 | 0.099 + 0.007 | 2.86× | 0.016 | 1.91× |
+  | 512 → 512 at 4 × 4, b16 | 0.034 + 0.002 | 0.100 + 0.007 | **3.15×** | 0.015 | 2.09× |
+  | 64 → 64 at 32 × 32, b16 | 0.052 | 0.101 + 0.011 | 2.13× | 0.017 | 1.60× |
+  | 512 → 512 at 4 × 4, b1 | 0.012 + 0.004 | 0.029 + 0.004 | 2.73× | 0.012 | 1.16× |
+  | 256 → 256 at 8 × 8, b1 | 0.014 + 0.003 | 0.022 + 0.004 | 1.87× | 0.013 | 0.86× |
+  | 128 → 128 at 16 × 16, b1 | 0.014 + 0.003 | 0.023 + 0.004 | 1.87× | 0.013 | 0.86× |
+
+  (the quantise column is the three-dispatch first version; the one-dispatch `absMaxAtomic`
+  replaced it the same night — its number follows.) Step 3's prediction — the deep layers
+  2.5 → ~1.5 ms of GPU at batch 16 — reads, per layer, 0.10 → 0.037: **better than
+  predicted on the kernel**, and Step 2's gate ("the two dispatches cost less than 10 % of
+  the int8 layer") **failed** as written: three launch-bound dispatches are 40 % of a
+  batch-16 layer and more than the whole kernel at batch 1. That is the quantiser's bill,
+  and the reason a static scale (folded into the producing layer's epilogue) is the next
+  thing to want — which needs calibration data, which needs Step 4's trained network.
+
 ## 5. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

@@ -316,7 +316,7 @@ const BENCHES = {
       + (relF > 1e-6 ? ` WRONG(dequantised rel ${relF.toExponential(1)})` : ` · dequantised rel ${relF.toExponential(1)}`);
   },
   // **The int8 convolution** (`docs/INT8.md` Steps 2–3) on an adapter with the `i8 → i32`
-  // configuration: the activation quantised on the GPU (`absMaxPass` twice, then
+  // configuration: the activation quantised on the GPU (`absMaxAtomic`, then
   // `quantizeActivationInt8`), the weights on the host (`quantizeConvWeightInt8TapMajor`),
   // the convolution held to a **CPU int32 reference on every output** through the same
   // dequantising arithmetic (so a wrong tap or a wrong byte shows as a mismatch, not a
@@ -346,12 +346,13 @@ const BENCHES = {
     // The GPU side.
     const X = upload(n, 1), W = upload(wsize, 2), Bf = upload(sh.O, 3);
     const parts = K.absMaxParts(n);
-    const Parts = dev.alloc(parts), Max = dev.alloc(1), Xq = dev.alloc(n / 4), Out = dev.alloc(m);
+    const Max = dev.alloc(1), Zero = dev.alloc(1), Xq = dev.alloc(n / 4), Out = dev.alloc(m);
+    dev.writeWords(Zero, new Uint32Array(1));
     const Wq = dev.alloc(packed.length); dev.writeWords(Wq, packed);
     const SW = dev.alloc(sh.O); dev.writeWords(SW, new Uint32Array(scales.buffer));
     const quantise = () => {
-      dev.run(dev.pipeline(`amx:${n}:${parts}`, () => K.absMaxPass(n, parts)), [X, Parts], [parts, 1, 1]);
-      dev.run(dev.pipeline(`amx:${parts}:1`, () => K.absMaxPass(parts, 1)), [Parts, Max], [1, 1, 1]);
+      dev.copyInto(Max, Zero, 1);
+      dev.run(dev.pipeline(`amx:${n}:${parts}`, () => K.absMaxAtomic(n, parts)), [X, Max], [parts, 1, 1]);
       dev.run1d(dev.pipeline(`qa8:${sh.name}`, () => K.quantizeActivationInt8(sh.N, sh.C, H, H)), [X, Max, Xq], n / 4);
     };
     const spI = K.convInt8Split(s); const grid = K.convInt8Grid(s, spI); const slabI = spI > 1 ? dev.alloc(m * spI) : null;
@@ -410,7 +411,7 @@ const BENCHES = {
     // Timed: the int8 convolution with its quantise passes as extra, against the f32 tiled kernel.
     const sp = K.convForwardSplit(s); const partsF = sp > 1 ? dev.alloc(m * sp) : null; const Of = dev.alloc(m);
     const runs = [
-      { name: `int8 subgroup conv (split ${spI}, + quantise passes${spI > 1 ? " + sum" : ""})`, key: `ci8:${sh.name}`, make: () => K.convForwardInt8(s, spI, false), extraKeys: [`amx:${n}:${parts}`, `amx:${parts}:1`, `qa8:${sh.name}`, ...(spI > 1 ? [`ssc8:${sh.name}`] : [])], outb: Out,
+      { name: `int8 subgroup conv (split ${spI}, + quantise passes${spI > 1 ? " + sum" : ""})`, key: `ci8:${sh.name}`, make: () => K.convForwardInt8(s, spI, false), extraKeys: [`amx:${n}:${parts}`, `qa8:${sh.name}`, ...(spI > 1 ? [`ssc8:${sh.name}`] : [])], outb: Out,
         run: () => { quantise(); runInt8(); } },
       { name: `f32 tiled (split ${sp})`, key: `cnt:${sh.name}`, extraKeys: sp > 1 ? [`ssc:${sh.name}`] : [], make: () => K.convNDForwardTiled(s, sp === 1), outb: Of,
         run: () => { if (sp === 1) { dev.run(dev.pipeline(`cnt:${sh.name}`, () => K.convNDForwardTiled(s, true)), [X, W, Bf, Of], K.convTiledGrid(s)); return; }

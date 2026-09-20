@@ -2012,16 +2012,20 @@ ${stores.join("\n")}
 }
 
 /**
- * **The absolute maximum of `n` floats, one pass** (`docs/INT8.md` Step 2): a workgroup a
- * chunk, each thread striding it, a tree in workgroup memory, one value a workgroup into
- * `Out`. Run twice — `n` → `parts`, then `parts` → 1 — for the per-tensor activation
- * scale. `Out[0]` after the second pass is `max|x|`; the quantiser divides by 127 itself.
+ * **The absolute maximum of `n` floats in one dispatch** (`docs/INT8.md` Step 2): a
+ * workgroup a chunk, a tree in workgroup memory, then one `atomicMax` a workgroup on the
+ * **bit pattern** of the maximum — for non-negative floats the u32 order is the float
+ * order, so the maximum of the patterns is the pattern of the maximum. `Max[0]` must be
+ * zero before the dispatch (a recorded copy from a zero word; under `compiled` it replays
+ * as a copy), and reads back as the f32 `max|x|` through the same bits. Two passes were
+ * the first version; three launch-bound dispatches a layer cost the batch-1 layers more
+ * than the int8 kernel saved (measured, RTX 5080: 0.015–0.019 ms against a 0.014 ms kernel).
  */
-export function absMaxPass(n: number, parts: number): string {
+export function absMaxAtomic(n: number, parts: number): string {
   const chunk = Math.ceil(n / parts);
   return `
 @group(0) @binding(0) var<storage, read> A: array<f32>;
-@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Max: array<atomic<u32>>;
 var<workgroup> red: array<f32, ${WORKGROUP}>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
@@ -2035,11 +2039,11 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     if (lid < s) { red[lid] = max(red[lid], red[lid + s]); }
     workgroupBarrier();
   }
-  if (lid == 0u) { Out[wid.x] = red[0]; }
+  if (lid == 0u) { atomicMax(&Max[0], bitcast<u32>(red[0])); }
 }`;
 }
 
-/** Parts for `absMaxPass`: enough workgroups to fill a card, bounded. */
+/** Workgroups for `absMaxAtomic`: enough to fill a card, bounded. */
 export function absMaxParts(n: number): number {
   return Math.max(1, Math.min(1024, Math.ceil(n / (WORKGROUP * 8))));
 }
