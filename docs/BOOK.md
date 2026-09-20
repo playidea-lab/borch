@@ -2051,8 +2051,8 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused + captured, `nvidia / blackwell`, **2026-09-20 (night)**, the readback kicked (`Device.readbackKicks`) | | **0.98–0.99 ms** | **2.61–2.66 ms** |
 | ONNX Runtime Web 1.29.0, same runs | | 3.65–3.88 ms | 3.63–3.89 ms |
 | ORT is faster than the captured network by | | 0.26× — borch ahead | **0.68–0.73×** — borch ahead |
-| borch.ts fused + captured, `nvidia / blackwell`, **2026-09-21**, the scalar conv path swept on the card (`docs/INFER.md` ledger) | | **0.65 ms** | **1.74 ms** |
-| ONNX Runtime Web 1.29.0, same run | | 3.51 ms | 3.62 ms |
+| borch.ts fused + captured, `nvidia / blackwell`, **2026-09-21**, the scalar conv path swept on the card (`docs/INFER.md` ledger; two runs) | | **0.65 ms** | **1.74–1.90 ms** |
+| ONNX Runtime Web 1.29.0, same runs | | 3.51–3.52 ms | 3.62–3.99 ms |
 | ORT is faster than the captured network by | | 0.19× — borch ahead | **0.48×** — borch ahead |
 
 **The NVIDIA rows are a different kernel set.** On the RTX 5080 through Chrome 151 and
