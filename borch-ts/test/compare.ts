@@ -22,6 +22,7 @@
  */
 
 import { Tensor, noGrad } from "../src/tensor.js";
+import { Device } from "../src/device.js";
 import { compiled } from "../src/compile.js";
 import { load } from "../src/serialize.js";
 import { exportOnnx } from "../src/onnx.js";
@@ -302,6 +303,20 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused + captured ${capMs.toFixed(2).padStart(8)} ms · ${rec ? rec.dispatches : 0} dispatches/replay · max |replay − eager| ${capGap.toExponential(1)}`
       + (capGap > 0 ? " **— the replay is not the eager forward**" : ""));
     step.dispose();
+    // **The int8 forward** (`docs/INT8.md` Step 6) where the adapter has the configuration:
+    // `compiled(model, { int8: true })`, its logits against the f32 fused forward's — the
+    // number that stands beside its time, since this path is held to accuracy, not to
+    // torch. How many layers took int8 is printed too; the rest ran f32.
+    if (Device.subgroupInt8) {
+      const q = compiled(model, { int8: true });
+      const qOut = await (await q.call(xb)).toArray();
+      const qGap = maxAbsDiff(qOut, eagerFused);
+      let scale = 0; for (const v of eagerFused) scale = Math.max(scale, Math.abs(v));
+      const qMs = await timed(async () => (await q.call(xb)).toArray(), 3, 20);
+      const qRec = q.recordingOf(xb);
+      lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts int8 + captured ${qMs.toFixed(2).padStart(8)} ms · ${qRec ? qRec.dispatches : 0} dispatches/replay · ${q.int8Layers} layers int8 · max |int8 − f32| ${qGap.toExponential(1)} (${(qGap / scale).toExponential(1)} of the logits' scale)`);
+      q.dispose();
+    }
   }
 
   // The whole story on one page: the fused network leaves as ONNX — borch's own file,

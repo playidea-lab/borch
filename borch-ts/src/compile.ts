@@ -28,7 +28,7 @@
  * A difference throws and names the worst buffer.
  */
 import { Capture } from "./device.js";
-import { fuseForInference, Module } from "./nn.js";
+import { fuseForInference, Module, quantizeForInt8 } from "./nn.js";
 import { device, noGrad, scope, Tensor } from "./tensor.js";
 
 /** What a compiled function may take: tensors, and plain values that become part of the key. */
@@ -45,6 +45,13 @@ export interface CompiledOptions {
   readonly tol?: number;
   /** Fused, the state's — Adam magnifies a rounding on a parameter near zero. */
   readonly stateTol?: number;
+  /**
+   * **A model's convolutions on the int8 subgroup path** (`docs/INT8.md`), where the
+   * adapter has the configuration — refused by name where it has not. Off by default:
+   * the int8 forward is held to accuracy, not to torch's logits, and a caller asks for
+   * that trade. `Compiled.int8Layers` says how many layers took it.
+   */
+  readonly int8?: boolean;
 }
 
 export interface CheckReport {
@@ -129,7 +136,13 @@ export class Compiled<A extends CompiledArg[], R> {
   /** Per recording, how many dispatches were replay-invariant and left the replay. */
   readonly hoisted: number[] = [];
 
-  constructor(private readonly fn: (...args: A) => R, opts: CompiledOptions = {}) {
+  /** How many convolutions took the int8 path (`int8: true`), once prepared; −1 before. */
+  int8Layers = -1;
+  /** Runs once before the first recording — the int8 quantisation of a model's weights. */
+  private prepare: (() => Promise<void>) | null = null;
+
+  constructor(private readonly fn: (...args: A) => R, opts: CompiledOptions = {}, prepare?: () => Promise<void>) {
+    this.prepare = prepare ?? null;
     this.fuse = opts.fuse ?? true;
     this.plan = opts.plan ?? true;
     this.check = opts.check ?? false;
@@ -162,6 +175,7 @@ export class Compiled<A extends CompiledArg[], R> {
       if (rec.cap.hasRefills) await rec.cap.replayAsync(); else rec.cap.replay();
       return rec.out;
     }
+    if (this.prepare) { const p = this.prepare; this.prepare = null; await p(); }
     const datas = await Promise.all(args.map((a) => (a instanceof Tensor ? a.toArray() : Promise.resolve(null))));
     const d = device();
     d.beginCapture();
@@ -280,7 +294,9 @@ export function compiled(target: Module | ((...args: never[]) => unknown), opts:
     // Eval first: the fold reads the running statistics and refuses a training module.
     const model = target.eval();
     fuseForInference(model);
-    return new Compiled((x: Tensor) => noGrad(() => model.forward(x)), opts);
+    const step = new Compiled((x: Tensor) => noGrad(() => model.forward(x)), opts,
+      opts.int8 ? async () => { step.int8Layers = await quantizeForInt8(model); } : undefined);
+    return step;
   }
   return new Compiled(target as (...args: CompiledArg[]) => unknown, opts);
 }

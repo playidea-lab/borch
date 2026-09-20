@@ -279,6 +279,13 @@ import {
   searchSorted,
   maskedScatterKernel,
   maskedScatterSourceBackward,
+  absMaxAtomic,
+  absMaxParts,
+  convForwardInt8,
+  convInt8Fits,
+  convInt8Grid,
+  convInt8Split,
+  quantizeActivationInt8,
   matmul,
   matmulTiled,
   tiledConfigFits,
@@ -11673,6 +11680,65 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     });
   }
 
+  /**
+   * `convNDFused` on the int8 subgroup path (`docs/INT8.md` Step 5): the input quantised
+   * per tensor on the GPU (a zeroing copy, `absMaxAtomic`, `quantizeActivationInt8`), the
+   * weight already quantised (`ConvND.quantizeInt8`), `convForwardInt8` with the bias and
+   * the epilogue at its store — split, through a slab and `sumSplitsConv`. A shape the
+   * kernel does not take (`convInt8Fits`: the tile's band rules) falls back to the f32
+   * fused convolution with the f32 weight, which is why it is still passed. Traced for
+   * ONNX as the f32 nodes: int8 is how it runs, not what it means.
+   */
+  convNDFusedInt8(
+    weight: Tensor, int8: Int8ConvWeight, bias: Tensor | null, stride: number | readonly number[],
+    padding: number | readonly number[], dilation: number | readonly number[], groups: number,
+    relu: boolean, residual: Tensor | null,
+  ): Tensor {
+    const s = this.convShape(weight, stride, padding, dilation, groups);
+    if (!convInt8Fits(s)) return this.convNDFused(weight, bias, stride, padding, dilation, groups, relu, residual);
+    const spatial = this.shape.length - 2;
+    const each = (v: number | readonly number[]): number[] =>
+      typeof v === "number" ? new Array<number>(spatial).fill(v) : [...v];
+    const pads = each(padding);
+    return traced("ConvFused", [this, weight, bias, residual], {
+      kernel_shape: weight.shape.slice(2), strides: each(stride), pads: [...pads, ...pads],
+      dilations: each(dilation), group: groups, relu: relu ? 1 : 0, residual: residual ? 1 : 0,
+    }, () => {
+      const outShape = [s.N, s.O, ...s.outDims];
+      if (residual && residual.shape.join(",") !== outShape.join(",")) {
+        throw new Error(`the residual must have the output's shape [${outShape}], got [${residual.shape}]`);
+      }
+      const key = convNDKey(s);
+      const [IH = 1, IW = 1] = s.inDims;
+      const n = s.N * s.C * IH * IW;
+      const total = outShape.reduce((a, b) => a * b, 1);
+      const d = dev();
+      // The per-tensor scale: max|x| by one atomic pass over a zeroed word.
+      const max = d.alloc(1);
+      d.copyInto(max, zeroWordBuffer(), 1);
+      const parts = absMaxParts(n);
+      d.run(d.pipeline(`amx:${n}:${parts}`, () => absMaxAtomic(n, parts)), [this.buffer, max], [parts, 1, 1]);
+      const xq = d.alloc(n / 4);
+      d.run1d(d.pipeline(`qa8:${s.N}:${s.C}:${IH}:${IW}`, () => quantizeActivationInt8(s.N, s.C, IH, IW)), [this.buffer, max, xq], n / 4);
+      const out = d.alloc(total);
+      const ep: ConvEpilogue = { relu, residual: residual !== null };
+      const tag = `${relu ? "r" : ""}${residual ? "a" : ""}`;
+      const tail = [...(bias ? [bias.buffer] : []), ...(residual ? [residual.buffer] : []), out];
+      const splits = convInt8Split(s);
+      if (splits === 1) {
+        d.run(d.pipeline(`ci8:${key}:${bias ? "b" : "n"}:${tag}`, () => convForwardInt8(s, 1, bias !== null, ep)),
+          [xq, int8.packed, max, int8.scales, ...tail], convInt8Grid(s, 1));
+      } else {
+        const slab = d.alloc(total * splits);
+        d.run(d.pipeline(`ci8:${key}:s${splits}`, () => convForwardInt8(s, splits, false)),
+          [xq, int8.packed, max, int8.scales, slab], convInt8Grid(s, splits));
+        d.run1d(d.pipeline(`ssc8:${key}:${splits}:${bias ? "b" : "n"}:${tag}`, () => sumSplitsConv(s, splits, bias !== null, ep)),
+          [slab, ...tail], total);
+      }
+      return new Tensor(out, outShape);
+    });
+  }
+
   private convNDRaw(
     weight: Tensor,
     bias: Tensor | null,
@@ -13769,6 +13835,16 @@ function onesBlockBuffer(): GPUBuffer {
   onesBlockTensor ??= keepAlive(Tensor.owned([64], 1));
   return onesBlockTensor.buffer;
 }
+
+/** A kept zero word — what the int8 path's atomic maximum is reset from, by a copy. */
+let zeroWordTensor: Tensor | null = null;
+function zeroWordBuffer(): GPUBuffer {
+  zeroWordTensor ??= keepAlive(Tensor.owned([1], 0));
+  return zeroWordTensor.buffer;
+}
+
+/** A convolution weight quantised for the int8 kernel — see `ConvND.quantizeInt8`. */
+export interface Int8ConvWeight { readonly packed: GPUBuffer; readonly scales: GPUBuffer; readonly coPad: number }
 
 /** Folds a broadcast gradient back to the target shape. Identical shapes pass
  *  through. */

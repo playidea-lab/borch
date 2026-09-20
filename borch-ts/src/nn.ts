@@ -21,9 +21,12 @@ import { NotImplementedError, RuntimeError, ValueError } from "./errors.js";
 import { runningStats } from "./kernels.js";
 import { traced } from "./onnx.js";
 import { onSeed, uniform as uniform01, uniformArray } from "./random.js";
+import { Device } from "./device.js";
+import { convInt8CoPad } from "./kernels.js";
+import { quantizeConvWeightInt8TapMajor } from "./quant.js";
 import {
   device, type InterpolateMode, keepAlive, noGrad, type PadMode, type Reduction,
-  Tensor, batchedMatmul } from "./tensor.js";
+  Tensor, batchedMatmul, type Int8ConvWeight } from "./tensor.js";
 
 /**
  * A number printed the way Python prints a float — `2.0`, not `2`.
@@ -932,6 +935,35 @@ export class ConvND extends Module {
    * absorbed as a constant term.
    */
   readonly bias: Tensor | null;
+  /**
+   * **The weight quantised for the int8 convolution** (`docs/INT8.md` Step 5) — set by
+   * `quantizeInt8`, read by the intrinsic modules' forwards where the device has the int8
+   * configuration and the shape fits; `null` until then, and the f32 weight stays.
+   */
+  int8: Int8ConvWeight | null = null;
+
+  /**
+   * Quantises this convolution's weight once for the int8 path — per output channel,
+   * tap-major, packed (`quantizeConvWeightInt8TapMajor`) — where the layer is one the
+   * int8 kernel takes (two spatial axes, a 3 × 3 or smaller kernel, stride one, no groups
+   * or dilation, input channels in thirty-twos, output channels in sixteens). Reads the
+   * weight back once; the packed words and scales live as kept tensors. A layer the
+   * kernel does not take is left alone and runs f32.
+   */
+  async quantizeInt8(): Promise<boolean> {
+    const w = this.weight;
+    if (w.shape.length !== 4 || this.groups !== 1) return false;
+    const [O = 0, C = 0, KH = 0, KW = 0] = w.shape;
+    if (KH > 3 || KW > 3 || C % 32 !== 0 || O % 16 !== 0) return false;
+    if (this.stride !== 1 || this.dilation !== 1) return false;
+    const coPad = convInt8CoPad(O);
+    const { packed, scales } = quantizeConvWeightInt8TapMajor(await w.toArray(), O, C, KH * KW, coPad);
+    // The words ride in an f32-storage tensor: the bits are what the kernel reads.
+    const words = keepAlive(Tensor.from(new Float32Array(packed.buffer, packed.byteOffset, packed.length), [packed.length]));
+    const scale = keepAlive(Tensor.from(scales, [O]));
+    this.int8 = { packed: words.buffer, scales: scale.buffer, coPad };
+    return true;
+  }
 
   constructor(
     // **Kept because `describe` prints them.** They were plain arguments: the shape
@@ -6641,6 +6673,9 @@ export class ConvReLU2d extends Module {
 
   override forward(x: Tensor): Tensor {
     const c = convConfig(this.conv);
+    if (this.conv.int8 && Device.subgroupInt8) {
+      return x.convNDFusedInt8(this.conv.weight, this.conv.int8, this.conv.bias, c.stride, c.padding, c.dilation, c.groups, true, null);
+    }
     return x.convNDFused(this.conv.weight, this.conv.bias, c.stride, c.padding, c.dilation, c.groups, true, null);
   }
 }
@@ -6658,6 +6693,9 @@ export class ConvAdd2d extends Module {
   override forward(x: Tensor, residual?: Tensor): Tensor {
     if (!residual) throw new Error("ConvAdd2d.forward takes (x1, x2)");
     const c = convConfig(this.conv);
+    if (this.conv.int8 && Device.subgroupInt8) {
+      return x.convNDFusedInt8(this.conv.weight, this.conv.int8, this.conv.bias, c.stride, c.padding, c.dilation, c.groups, false, residual);
+    }
     return x.convNDFused(this.conv.weight, this.conv.bias, c.stride, c.padding, c.dilation, c.groups, false, residual);
   }
 }
@@ -6672,6 +6710,9 @@ export class ConvAddReLU2d extends Module {
   override forward(x: Tensor, residual?: Tensor): Tensor {
     if (!residual) throw new Error("ConvAddReLU2d.forward takes (x1, x2)");
     const c = convConfig(this.conv);
+    if (this.conv.int8 && Device.subgroupInt8) {
+      return x.convNDFusedInt8(this.conv.weight, this.conv.int8, this.conv.bias, c.stride, c.padding, c.dilation, c.groups, true, residual);
+    }
     return x.convNDFused(this.conv.weight, this.conv.bias, c.stride, c.padding, c.dilation, c.groups, true, residual);
   }
 }
@@ -6686,6 +6727,25 @@ export function fuseForInference(m: Module): void {
   const own = (m as unknown as { fuse?: () => void }).fuse;
   if (typeof own === "function") { own.call(m); return; }
   m.fuseEval();
+}
+
+/**
+ * **Every convolution of the model quantised for the int8 path** (`docs/INT8.md` Step 5)
+ * — what `torch.compiled(model, { int8: true })` runs after the fold and before it
+ * records. Returns how many layers took it; the rest run f32, and the count is printed
+ * beside the number so a table never quotes an int8 forward that was mostly f32.
+ * Refused by name on an adapter without the int8 configuration: the path is an
+ * accuracy trade a caller asks for, and it should not silently become the f32 forward.
+ */
+export async function quantizeForInt8(m: Module): Promise<number> {
+  if (!Device.subgroupInt8) {
+    throw new Error("int8: this adapter has no int8 subgroup-matrix configuration (Device.subgroupInt8) — the int8 forward is not available here");
+  }
+  let taken = 0;
+  for (const [, mod] of m.namedModules()) {
+    if (mod instanceof ConvND && (await mod.quantizeInt8())) taken++;
+  }
+  return taken;
 }
 
 /** The place `torch.ao.nn.intrinsic` occupies. */
