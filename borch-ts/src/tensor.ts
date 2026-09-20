@@ -225,6 +225,10 @@ import {
   convForwardSubgroup,
   sgfFits,
   sgfGrid,
+  convForwardSubgroupSmall,
+  sgfsFits,
+  sgfsGrid,
+  sgfsSplit,
   sgiStridedFits,
   sgiStridedGrid,
   convGradInputSubgroupStrided,
@@ -804,6 +808,28 @@ function convForwardRun(
     return;
   }
   if (turned) throw new Error("turned weights are a direct-kernel matter");
+  if (Device.subgroupMatrix && sgfsFits(s)) {
+    // The small-plane subgroup forward — the 512-channel layer on its 4 × 4 plane, which
+    // the row-of-eight kernel cannot take (`convForwardSubgroupSmall`, `docs/INFER.md`).
+    const pieces = sgfsSplit(s);
+    const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+    const turnedW = dev().alloc(kSpace * s.O * s.C);
+    dev().run1d(
+      dev().pipeline(`tmw:${key}:n`, () => tapMajorWeights(s.O, s.C, kSpace, false, false)),
+      [w, turnedW], s.O * s.C);
+    const parted = dev().alloc(n * pieces);
+    dev().run(
+      dev().pipeline(`cnfs:${key}:${pieces}`, () => convForwardSubgroupSmall(s, pieces)),
+      [x, turnedW, parted],
+      sgfsGrid(s, pieces),
+    );
+    dev().run1d(
+      dev().pipeline(`ssc:${key}:${bias ? "b" : "n"}${tag}:${pieces}`, () => sumSplitsConv(s, pieces, bias !== null, ep)),
+      [parted, ...tail],
+      n,
+    );
+    return;
+  }
   if (Device.subgroupMatrix && sgfFits(s)) {
     // The subgroup forward with the epilogue applied at its staged store — the fused
     // `ConvReLU2d` / `ConvAddReLU2d` of an eval network, and the deep layers of any

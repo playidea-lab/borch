@@ -283,6 +283,26 @@ prediction is written down so that the ledger can say which step was wrong.
   257 dispatches, bit for bit. Nothing is cached on a tensor, nothing can leak, and any
   future prepack (a constant's pad, a block of ones) hoists the same way.
 
+- **2026-09-20, Step 3, third attempt — the last layer leaves the scalar GEMM.**
+  `convForwardSubgroupSmall` (`cnfs`), for the plane the row-of-eight kernel cannot take:
+  the padded planes of one channel block for the tile's images are **staged once in
+  workgroup memory** (a 4 × 4 plane padded is thirty-six floats; eight channels of two
+  images, 576), each tap's 8 × 32 input block is assembled from that staging — no gather
+  from storage, no phantom column — and **four subgroups share it**, each owning sixteen
+  output channels, so the staging is paid once for sixty-four and every weight block
+  loaded from storage feeds thirty-two pixels. Partial sums per K piece, `sumSplitsConv`
+  for bias and epilogue, as before. What the two lost attempts taught is in its shape: the
+  first gathered every tap from storage (eight multiply-adds a load), the second computed
+  phantom columns; this one loads each input value from storage once per channel block and
+  computes only real pixels. **metal-3, the three 512 → 512 layers on 4 × 4 at batch 16:
+  `cnt` 1.38 → `cnfs` 0.84 ms; at batch 64, 10.8 → 4.6.** Fused + captured forward at
+  batch 16 **4.95 → 4.42 ms against ORT's 5.25–5.31 (0.83×)**; batch 1 **1.38** against
+  3.07–4.97. The training step 20.0 → 19.5 ms at batch 16, 33.9 → 31.8 at 32, **59.7 → 54.1
+  at 64**. Golden 4,057 / 4,057, logits 6.0e-8 from torch's; the replay bit for bit. With
+  this, no convolution of ResNet-18 runs on the scalar tiled GEMM at stride one; what
+  remains on it is the stride-2 shortcut and the stride-2 3 × 3 (`cnt:…|2,2|…:s`, 0.3 ms),
+  and the early wide layers on the direct kernel (Step 4's question, still open).
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

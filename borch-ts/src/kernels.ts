@@ -4397,6 +4397,164 @@ export function sgfFits(s: ConvNDShape): boolean {
     && OW % 8 === 0 && s.O % 8 === 0 && s.C % 8 === 0;
 }
 
+// ── The small-plane subgroup forward ────────────────────────────────────────────
+//
+// The 512-channel layer on a 4 × 4 plane is the last of ResNet-18's convolutions on the
+// scalar tiled GEMM, and the largest kernel of its fused forward (1.39 of 4.9 ms at batch
+// 16, `docs/INFER.md`). Two ways onto subgroup matrices were measured and lost: gathering
+// each tap's input block from storage (eight multiply-adds a load — the multiply starved),
+// and tiles of eight over a padded row (computing eight pixels to keep four). This kernel
+// is the third: **the padded planes of a channel block are staged once in workgroup
+// memory** — a 4 × 4 plane padded is thirty-six floats, eight channels of two images are
+// 576 — and each tap's 8 × 32 input block is assembled from that staging, not from storage;
+// **four subgroups share it**, each owning sixteen output channels, so the staging is paid
+// once for sixty-four; and the pixel tile is thirty-two, so every weight block loaded from
+// storage feeds thirty-two columns. No phantom column: the pixels are the real ones, in
+// `N · OH · OW` order, and an 8-pixel block never straddles an image (the plane divides
+// thirty-two). Partial sums per K piece to a slab, `sumSplitsConv` for bias and epilogue.
+
+/** The pixels one workgroup computes; the plane must divide it. */
+export const SGFS_TN = 32;
+/** Subgroups a workgroup, each with sixteen output channels. */
+export const SGFS_SUBGROUPS = 4;
+const SGFS_CO = SGF_CB * SGFS_SUBGROUPS;
+/** Workgroup floats the staged planes may take: eight channels of `imgs` padded planes. */
+const SGFS_STAGE_MAX = 4096;
+
+/** Whether a convolution takes the small-plane subgroup forward: a stride-one 3 × 3 (or
+ *  smaller) on a plane that divides thirty-two and is a whole eight, channels in eights —
+ *  and a row the plain subgroup forward cannot take (it is faster where it can). */
+export function sgfsFits(s: ConvNDShape): boolean {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [OH = 1, OW = 1] = s.outDims;
+  const [PH = 0, PW = 0] = s.pad;
+  const plane = OH * OW;
+  const imgs = SGFS_TN / plane;
+  return s.inDims.length === 2 && (s.groups ?? 1) === 1 && (s.dilation ?? [1, 1]).every((d) => d === 1)
+    && s.stride.every((v) => v === 1) && s.kernel.every((v) => v <= 3)
+    && OW % 8 !== 0 && plane % 8 === 0 && SGFS_TN % plane === 0
+    && s.O % 8 === 0 && s.C % 8 === 0
+    && imgs * 8 * (IH + 2 * PH) * (IW + 2 * PW) <= SGFS_STAGE_MAX;
+}
+
+/** How many K pieces: the split policy on this kernel's tiles, to 128 workgroups. */
+export function sgfsSplit(s: ConvNDShape): number {
+  const [OH = 1, OW = 1] = s.outDims;
+  const tiles = Math.ceil((s.N * OH * OW) / SGFS_TN) * Math.ceil(s.O / SGFS_CO);
+  const kBlocks = s.C / 8;
+  const WANT = 128;
+  if (tiles >= WANT) return 1;
+  return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(kBlocks / 2)));
+}
+
+/** The grid: pixel tiles, blocks of sixty-four output channels, K pieces. */
+export function sgfsGrid(s: ConvNDShape, splits: number): [number, number, number] {
+  const [OH = 1, OW = 1] = s.outDims;
+  return [Math.ceil((s.N * OH * OW) / SGFS_TN), Math.ceil(s.O / SGFS_CO), splits];
+}
+
+export function convForwardSubgroupSmall(s: ConvNDShape, splits: number): string {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [OH = 1, OW = 1] = s.outDims;
+  const [KH = 1, KW = 1] = s.kernel;
+  const [PH = 0, PW = 0] = s.pad;
+  const kSpace = KH * KW;
+  const Mp = s.O, Kp = s.C;                       // gated to whole eights
+  const PIH = IH + 2 * PH, PIW = IW + 2 * PW;
+  const pplane = PIH * PIW;
+  const plane = OH * OW;
+  const imgs = SGFS_TN / plane;
+  const P = s.N * plane;
+  const total = s.N * s.O * plane;
+  const kBlocks = Kp / 8;
+  const perPart = Math.ceil(kBlocks / splits);
+  const TN = SGFS_TN;
+  const lanes = 32 * SGFS_SUBGROUPS;
+  const stage = imgs * 8 * pplane;
+  const mb = SGF_CB / 8, nb = TN / 8;
+  const acc: string[] = [];
+  for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) acc.push(`  var c${i}${j}: subgroup_matrix_result<f32, 8, 8>;`);
+  const mul: string[] = [];
+  for (let i = 0; i < mb; i++) mul.push(`      let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&Wt, wBase + ${i * 8 * Kp}u, false, ${Kp}u);`);
+  for (let j = 0; j < nb; j++) {
+    mul.push(`      { let b = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&xs, ${j * 8}u, false, ${TN}u);`);
+    for (let i = 0; i < mb; i++) mul.push(`        c${i}${j} = subgroupMatrixMultiplyAccumulate(a${i}, b, c${i}${j});`);
+    mul.push("      }");
+  }
+  const store: string[] = [];
+  for (let j = 0; j < nb; j++) {
+    store.push(`  { let pj = p0 + ${j * 8}u;
+    if (pj < ${P}u) {
+      let n = pj / ${plane}u;
+      let q = pj - n * ${plane}u;`);
+    for (let i = 0; i < mb; i++) {
+      store.push(`      if (co + ${i * 8}u < ${s.O}u) { subgroupMatrixStore(&Out, part * ${total}u + ((n * ${s.O}u + co + ${i * 8}u) * ${plane}u) + q, c${i}${j}, false, ${plane}u); }`);
+    }
+    store.push("    }\n  }");
+  }
+  return `enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Wt: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+// The padded planes of one channel block for the tile's images, then each tap's block.
+var<workgroup> pl: array<f32, ${stage}>;
+var<workgroup> xs: array<f32, ${8 * TN}>;
+@compute @workgroup_size(${lanes})
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32, @builtin(subgroup_id) sid: u32) {
+  let p0 = wid.x * ${TN}u;
+  let n0 = p0 / ${plane}u;
+  let co = wid.y * ${SGFS_CO}u + sid * ${SGF_CB}u;
+  let part = wid.z;
+  let kb0 = part * ${perPart}u;
+  let kb1 = min(kb0 + ${perPart}u, ${kBlocks}u);
+${acc.join("\n")}
+  for (var kb = kb0; kb < kb1; kb = kb + 1u) {
+    let ci0 = kb * 8u;
+    // Stage: eight channels' padded planes for the tile's images — a row of the input at a
+    // time, contiguous reads; zero in the border, past the batch, and past C.
+    for (var e = lid; e < ${stage}u; e = e + ${lanes}u) {
+      let img = e / ${8 * pplane}u;
+      let r1 = e - img * ${8 * pplane}u;
+      let k = r1 / ${pplane}u;
+      let r2 = r1 - k * ${pplane}u;
+      let py = r2 / ${PIW}u;
+      let px = r2 - py * ${PIW}u;
+      let n = n0 + img;
+      let iy = i32(py) - ${PH};
+      let ix = i32(px) - ${PW};
+      var v = 0.0;
+      if (n < ${s.N}u && iy >= 0 && iy < ${IH} && ix >= 0 && ix < ${IW}) {
+        v = X[((n * ${s.C}u + ci0 + k) * ${IH}u + u32(iy)) * ${IW}u + u32(ix)];
+      }
+      pl[e] = v;
+    }
+    workgroupBarrier();
+    for (var tap = 0u; tap < ${kSpace}u; tap = tap + 1u) {
+      let kh = tap / ${KW}u;
+      let kw = tap - kh * ${KW}u;
+      // This tap's 8 × ${TN} block, from the staging: pixel (img, oh, ow) reads the padded
+      // plane at (oh + kh, ow + kw).
+      for (var e = lid; e < ${8 * TN}u; e = e + ${lanes}u) {
+        let k = e / ${TN}u;
+        let col = e - k * ${TN}u;
+        let img = col / ${plane}u;
+        let q = col - img * ${plane}u;
+        let oh = q / ${OW}u;
+        let ow = q - oh * ${OW}u;
+        xs[e] = pl[(img * 8u + k) * ${pplane}u + (oh + kh) * ${PIW}u + ow + kw];
+      }
+      workgroupBarrier();
+      let wBase = (tap * ${Mp}u + co) * ${Kp}u + ci0;
+${mul.join("\n")}
+      workgroupBarrier();
+    }
+    workgroupBarrier();
+  }
+${store.join("\n")}
+}`;
+}
+
 /** The grid: tiles of a row, output-channel blocks. */
 export function sgfGrid(s: ConvNDShape, turned = false): [number, number, number] {
   const [OH = 1, OW = 1] = s.outDims;
