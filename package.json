@@ -55,6 +55,7 @@
     "firstrun:site": "uv run --with playwright python tests/browser/first_run.py",
     "compare:ts": "uv run --with playwright python borch-ts/test/compare.py",
     "compare-peers:ts": "uv run --with playwright python borch-ts/test/compare_peers.py",
+    "capture:ts": "uv run --with playwright python borch-ts/test/capture.py",
     "cpu:ts": "uv run --with playwright python borch-ts/test/cpu.py",
     "cpu:py": "uv run --with playwright python tests/browser/cpu_py.py",
     "refine:py": "uv run --with playwright python tests/browser/refine_py.py",

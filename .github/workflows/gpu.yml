@@ -88,7 +88,7 @@
 # ## What this file does **not** run — counted, because it used to say it did
 #
 # The line above read "the commands below are all of it". They are all of the *golden
-# comparison*. There are **sixty-five entry points that need a browser** and this file
+# comparison*. There are **sixty-six entry points that need a browser** and this file
 # names four:
 #
 #     here          run.py --lib borch · run.py --lib borch_webgpu ·
@@ -98,7 +98,7 @@
 #                   lessons:ts · scope:py · firstrun:site · onnx:ts · onnx:binding ·
 #                   learner:site · wheel:py · lab:py · marimo:py · folder:py · hub:py · offline:py · trajectory:py ·
 #                   cpu:ts · cpu:py · review:py · coi:site · seg:py · capture:py · fuse:py · refine:py · cdn:py · weight:py · claims:py ·
-#                   aliasing:py · compiled:py · churn:py · vcount:py · compiled-train:py · invariants:py · onnx-trap:py · checkpoint:py · window:py · stream-model:py · stream-train:py · peft:py · finetune:py · streaming:py · workbench-lora:py · conv-dx:py · bn-relu:py · adam-arena:py · vit-align:py   (forty-eight more correctness checks)
+#                   aliasing:py · compiled:py · churn:py · vcount:py · compiled-train:py · invariants:py · onnx-trap:py · checkpoint:py · window:py · stream-model:py · stream-train:py · peft:py · finetune:py · streaming:py · workbench-lora:py · conv-dx:py · bn-relu:py · adam-arena:py · vit-align:py · capture:ts   (forty-nine more correctness checks)
 #                   cost:ts · bench:ts · compare:ts · compare-peers:ts · envelope:py · envelope2:py · profile:py · precision:py · f16-stream:py · datapath:py · loop-readback:py · bench:kernels · ceiling:py  (measurements, not checks)
 #
 #     `cpu:ts` arrived 2026-09-05: the CPU device against the WebGPU device on two hub
@@ -128,6 +128,9 @@
 #     `done`'s 10.20 MB, and only the first number has to stay small — a font or a library
 #     added to that page is paid by everyone before they are told anything, and every other
 #     check here reads what the page says rather than what it weighs.
+#     `capture:ts` 2026-09-20: `torch.compiled` in JavaScript held to the eager step — an MLP
+#     over two batch shapes bit for bit with `check: true`, then the ResNet-18 of `bench.ts`
+#     replayed against eager, with the memory plan's bytes and the replay's clock printed.
 #     `compare-peers:ts` 2026-09-19: the ResNet-18 training step of `bench.ts` in the two other
 #     libraries that train in a browser on WebGPU — jax-js (pinned, from jsDelivr) and Burn (a
 #     scratch wasm crate under `tests/browser/burn_resnet18`, built by hand) — on borch's page, one
@@ -139,8 +142,8 @@
 #     are built now — an assertion protecting a decision nobody makes any more, sitting in
 #     the file written to catch exactly that.
 #
-# **Nothing runs any of the sixty-five automatically** — the reason above is a good one
-# and it applies to all of them equally, so the sixty-one below are in exactly the position
+# **Nothing runs any of the sixty-six automatically** — the reason above is a good one
+# and it applies to all of them equally, so the sixty-two below are in exactly the position
 # the four above are: run when a person runs them.
 #
 # The cost of that is not hypothetical. Three commits shipped in one session with the

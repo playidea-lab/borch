@@ -662,6 +662,16 @@ and any buffer a kernel reads before writing. The one WebGPU rule that shapes it
 may not be bound read-only and read-write in the same dispatch even at different offsets,
 so a kernel's inputs and outputs never share an arena — three arenas, not one.
 
+**The same names in JavaScript** (2026-09-20): `torch.compiled(fn, { fuse, plan, check })`
+and `torch.capture(fn)` from `borch-ts`, with the binding's shape key, copies-in and
+`check`; `step.call(x, y)` is async because the first call for a shape reads its tensor
+arguments back to make the recording's own. One difference, written on `compile.ts`:
+Python knows every tensor still referenced and tells the passes so; JavaScript does not,
+so what `fn` returns is what is held — return what you want after the step. And
+`Capture.explain()` prints a recording a dispatch a line, with GPU time per kind after a
+profiled replay. On the ResNet-18 of `bench.ts` at batch 16 (`npm run capture:ts`): three
+replays bit for bit against eager, 21.3 → 19.1 ms a step, 369 intermediates 342 → 129 MB.
+
 **One kind hides a few slow shapes among many fast ones.** The profile of a ViT-tiny
 step (`profile:py --model=vit`, batch 8) put 48% of its GPU time in the subgroup matmul,
 147 of them, and the kernel bench said the same products ran at torch's rate. The

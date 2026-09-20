@@ -470,6 +470,29 @@ export class Capture {
   }
 
   /**
+   * The recording as a person reads it: one line a dispatch — its index, the pipeline's
+   * key, the workgroup grid, the buffers it binds as small ids with their bytes — and,
+   * given a profile (`Device.nsByKind` after a replay run under `profile`), the GPU time
+   * of that kind divided among its dispatches here. `head` limits the lines.
+   */
+  explain(ns?: ReadonlyMap<string, number>, head = Infinity): string {
+    const rows = this.describe();
+    const count = new Map<string, number>();
+    for (const r of this.records) if (r.sig) count.set(r.sig, (count.get(r.sig) ?? 0) + 1);
+    const lines: string[] = [];
+    rows.forEach((row, i) => {
+      if (i >= head) return;
+      const rec = this.records[i] as Recorded;
+      const bufs = row.buffers.map((id, k) => `${id}:${Math.round((row.sizes[k] as number) / 1024)}K`).join(" ");
+      const time = ns && rec.sig && ns.has(rec.sig)
+        ? `  ${((ns.get(rec.sig) as number) / 1e6 / (count.get(rec.sig) ?? 1)).toFixed(3)} ms` : "";
+      lines.push(`#${String(i).padStart(4)}  ${row.key.slice(0, 48).padEnd(48)}  grid ${row.groups.join("×").padEnd(12)}  [${bufs}]${time}`);
+    });
+    if (rows.length > head) lines.push(`… ${rows.length - head} more`);
+    return lines.join("\n");
+  }
+
+  /**
    * The buffers the recording reads before it writes them — the step's inputs and its
    * state: parameters, the optimizer's moments and counters, running statistics. A
    * replay starts from what they hold; snapshot them and the step can be run again from

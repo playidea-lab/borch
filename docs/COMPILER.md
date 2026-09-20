@@ -319,6 +319,24 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   were those. `Capture.coverage().copies` keeps the count on every `capture:py` run; a
   model that brings copies back reopens the step.
 
+- **2026-09-20, Step 6 landed — `torch.compiled` and `torch.capture` in JavaScript, and
+  `explain()`.** `compile.ts`: the binding's bookkeeping ported — shape key over tensor
+  shapes and plain values, the tensor arguments read back once and re-made under the
+  capture as uploads (live-ins, never moved), later calls copy in and replay, a new shape
+  records again; `fuse` and `plan` on by default with what the function *returns* as the
+  held set (JavaScript has no registry of live tensors — the contract is written on the
+  file); `check: true` ported whole. `Capture.explain(ns?, head?)` prints the recording
+  a dispatch a line with its key, grid, buffers and, after a profiled replay, GPU ms per
+  dispatch of its kind. `capture:ts` (census 65 → 66, in the nightly): **an MLP over two
+  batch shapes — two recordings, fourteen losses bit for bit, `check` clean on both; the
+  ResNet-18 of `bench.ts` at batch 16 — three replays bit for bit against eager, eager
+  21.3 → replay 19.1 ms a step, and the number Step 1 waited on: 369 intermediates
+  341.8 MB → 129.3 MB in 3 arenas.** The prediction was "517 → ≤ 150 MB of pool beside
+  the step"; the like-for-like is the intermediates' bytes, and 129 is under it. The
+  first line of `explain` on that recording already says where a person would look next:
+  the subgroup conv's `pdw` pad and `tmw` weight repack run every step (`docs/INFER.md`
+  Step 2 is the eval half of that).
+
 ## 6. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

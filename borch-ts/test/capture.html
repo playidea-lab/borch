@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>torch.compiled in JavaScript — the replay against the eager step</title>
+<body>
+  <pre id="out">running…</pre>
+  <script type="module">
+    import { Device } from "../dist/src/device.js";
+    import { init } from "../dist/src/tensor.js";
+    import { report } from "../dist/test/capture.js";
+    import { why } from "./why.js";
+
+    const out = document.getElementById("out");
+    try {
+      await init();
+      // The adapter before anything is timed — the runner refuses a software rasteriser here.
+      window.__borchAdapter = Device.adapterInfo;
+      const { text, checks } = await report();
+      window.__borchCaptureTs = { text, checks, adapter: Device.adapterInfo };
+      out.textContent = text;
+    } catch (err) {
+      window.__borchCaptureTs = { error: String(why(err)) };
+      out.textContent = `the compiled-step check blew up: ${why(err)}`;
+    }
+  </script>
+</body>
