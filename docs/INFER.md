@@ -462,6 +462,16 @@ prediction is written down so that the ledger can say which step was wrong.
   is a faster scalar GEMM (the tile itself is at 15.8 of a card that does ~56 f32) or
   the int8 configuration (`docs/INT8.md`, 3–3.6× on the GEMM core).
 
+- **2026-09-21, the split policy's memory bill, found and priced.** The 5080's captured
+  training step read "400 intermediates 600.3 MB" where the day before it read "398 ·
+  415.3", and the re-tiled GEMM was the suspect. Bisected with `capture.py --noretile`
+  (no change) and `--splits=4` (437.3 MB): it is the split policy of the entry above —
+  pieces of up to 32 mean a slab of `splits × output` per deep convolution, ~15 MB each
+  at batch 16, twelve of them. Under `compiled` the plan packs them (161.3 → 171.8 MB in
+  the arenas, +10); eager pays the pool, +160 MB at batch 16 and in proportion to the
+  batch. The time it bought (0.68 → 0.38 ms a deep layer) stands; the bill is written
+  here so the next reader of that number does not chase the GEMM again.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |
