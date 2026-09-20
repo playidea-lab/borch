@@ -213,7 +213,26 @@ at once. Predicted end state on metal-3, batch 16: today 7.0–7.4 ms → Step 1
 Step 2 ~4.8 → Step 3 ~3.0, against ORT's 5.3. Batch 1: 2.3–2.9 → ~1.5. The
 prediction is written down so that the ledger can say which step was wrong.
 
-## 6. Risks, and the sentence that retires each
+## 6. Ledger
+
+- **2026-09-20, Steps 0 and 1 landed — the instrument, and the eval forward replayed.**
+  `compare.ts` prints the fused forward's GPU time by kind and a `fused + captured` row:
+  `compiled` over the fused network's `noGrad` forward (`docs/COMPILER.md` Step 6's JS
+  `compiled`), its logits held to the eager fused forward's bit for bit before the clock
+  is read. **metal-3, twenty forwards after three warm-ups, readback included: batch 1 —
+  fused 2.86 → captured 1.97 ms (ORT 3.83); batch 16 — fused 7.39 → captured 5.57 ms
+  (ORT 5.32), 38 dispatches a replay, max |replay − eager| 0.** The prediction was ~5.0 at
+  batch 16; 5.57 is the fused forward's profiled GPU time (5.4, a pass per dispatch while
+  profiling) plus a submit and the readback, so the gate — wall ≤ GPU + 0.6 ms — is met
+  and the non-GPU 2 ms is gone. At batch 16 the fused-and-captured forward is 1.05× ORT;
+  at batch 1, 0.51×. What the instrument says about Step 3's order: in the *fused* forward
+  the 64- and 128-channel layers run on the direct kernel with the epilogue (`cnd:…:b:ra`,
+  ~2 ms of 5.4) — the subgroup forward has no epilogue, so `nn.intrinsic` sends them
+  elsewhere — and the two deep layers stay on the scalar tiled GEMM (`cnt`, 2.7 ms). So
+  lift 3 (epilogue in the subgroup kernel) comes first, then Step 2's prepack (only a
+  subgroup layer repacks), then lifts 1–2 for the deep layers.
+
+## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |
 |---|---|---|

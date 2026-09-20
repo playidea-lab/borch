@@ -22,6 +22,7 @@
  */
 
 import { Tensor, noGrad } from "../src/tensor.js";
+import { compiled } from "../src/compile.js";
 import { load } from "../src/serialize.js";
 import { exportOnnx } from "../src/onnx.js";
 import { device as dev } from "../src/tensor.js";
@@ -278,6 +279,26 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     const d0 = d.dispatches;
     await noGrad(() => model.forward(xb)).toArray();
     lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${d.dispatches - d0} dispatches/forward`);
+    // The fused forward's GPU time by kind — what of the wall is the GPU's (INFER Step 0).
+    await d.profile(() => noGrad(() => model.forward(xb)).toArray());
+    const hot: [string, number][] = [];
+    for (const [kind, ns] of d.nsByKind) hot.push([kind, ns / 1e6]);
+    hot.sort((p, q) => q[1] - p[1]);
+    const total = hot.reduce((a, [, v]) => a + v, 0);
+    lines.push(`           fused GPU time (ms, total ${total.toFixed(1)}): ` + hot.slice(0, 8).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(" · "));
+    // **The eval forward recorded and replayed** (INFER Step 1): `compiled` over the fused
+    // network's `noGrad` forward — the intermediates fused, laid into arenas, and the
+    // JavaScript that encodes thirty-eight dispatches paid once. The replay's logits are
+    // held to the eager fused forward's, bit for bit, before its clock is printed.
+    const step = compiled((x: Tensor) => noGrad(() => model.forward(x)));
+    const captured = await (await step.call(xb)).toArray();
+    const eagerFused = await noGrad(() => model.forward(xb)).toArray();
+    const capGap = maxAbsDiff(captured, eagerFused);
+    const capMs = await timed(async () => (await step.call(xb)).toArray(), 3, 20);
+    const rec = step.recordingOf(xb);
+    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused + captured ${capMs.toFixed(2).padStart(8)} ms · ${rec ? rec.dispatches : 0} dispatches/replay · max |replay − eager| ${capGap.toExponential(1)}`
+      + (capGap > 0 ? " **— the replay is not the eager forward**" : ""));
+    step.dispose();
   }
 
   // The whole story on one page: the fused network leaves as ONNX — borch's own file,

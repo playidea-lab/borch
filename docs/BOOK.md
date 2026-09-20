@@ -2006,6 +2006,17 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused, `apple / metal-3`, **2026-09-19** (two runs) | | **2.3–2.9 ms** | 7.0–7.4 ms |
 | ONNX Runtime Web 1.29.0, `apple / metal-3`, 2026-09-19 | | 4.0–4.1 ms | **5.3 ms** |
 | ORT is faster than the fused network by | | 0.6× | 1.3–1.4× |
+| borch.ts fused **+ captured** (`compiled` over the eval forward), `apple / metal-3`, **2026-09-20** | | **1.97 ms** | 5.57 ms |
+| ONNX Runtime Web 1.29.0, same run | | 3.83 ms | **5.32 ms** |
+| ORT is faster than the captured network by | | 0.51× | 1.05× |
+
+The 2026-09-20 rows are `torch.compiled` pointed at the fused network's `noGrad` forward
+(`docs/INFER.md` Step 1): the JavaScript that encodes the thirty-eight dispatches is paid
+once and the replay reads the same logits bit for bit. What was 2–3 ms of the wall that
+was not the GPU's is gone; at batch 16 the forward is within 5 % of ORT, at batch 1 it is
+twice as fast. What remains at batch 16 is the GPU time itself — the two deep small-plane
+convolutions on the scalar tiled GEMM and the early layers on the direct kernel — which
+is the rest of that plan.
 
 Re-measured 2026-09-19 on the same page: at batch 1 the fused network is now well ahead of
 ORT (2.3–2.9 against 4.0 ms); at batch 16 ORT keeps its 1.3–1.4× — the gap that remains is
