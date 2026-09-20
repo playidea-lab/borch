@@ -20,6 +20,7 @@ over the readings the proposal leaves open, held to a CPU reference, then timed.
 | 1024 × 1024 × 1024, i8 → i32 | **0.078 ms · 27.7 TOPS** (thirty dispatches, 32 × 32 tile a workgroup, one subgroup) |
 | the same GEMM, f32 on the scalar tile (`kernel_bench --bench=mm`, same card, same day) | 0.136 ms · **15.8 TFLOP/s** |
 | the ratio | **1.75×** on the multiply — not the 10× the f32 subgroup path is over the scalar tile on Apple, because this card's scalar tile is already at 15.8 |
+| **the same GEMM under the timestamp profiler, Step 1's kernel** (`kernel_bench --bench=mmi8`, the same night) | **0.038 ms · 56.6 TOPS · 3.59× the tile**; 2048³ 0.273 ms · 62.9 TOPS · 3.0×. The probe's 0.078 was a wall clock over thirty dispatches, and the wall on this card carried the GPU process's polling stall (`docs/INFER.md` ledger, the round trip) — so the ceiling above is **not 1.75× but 3–3.6×** on shapes that fill the card, and 1.0–1.3× on 256³ / 512 × 1024 × 256, where a dispatch is launch-bound |
 
 Two things follow. **The ceiling is 1.75× on the GEMM core**, before any cost of getting
 there (quantising activations is a pass per layer; dequantising the i32 result is the
@@ -54,17 +55,23 @@ can be taken up; the order is in §4.
 
 §0. The gate was "compiles, exact, faster than the scalar tile": met, at 1.75×.
 
-### Step 1 — The int8 GEMM in the tree · size S
+### Step 1 — The int8 GEMM in the tree · size S · **done 2026-09-20**
 
 `kernels.ts` `matmulInt8`: the probe's kernel generalised — M, N, K in multiples of the
 configuration, a 32 × 32 output tile a workgroup (four 16 × 16 results), K walked in
 32s, `array<i32>` operands packed four to a word with offsets in components, the i32 result
 dequantised at the store by a per-row weight scale and a per-tensor activation scale, plus
-bias. `kernel_bench --bench=mm` gains an `int8` row where the adapter has the
-configuration.
+bias. `kernel_bench --bench=mmi8` runs it where the adapter has the configuration
+(`Device.subgroupInt8`, read from the configurations the way `subgroupMatrix` is).
 
 - **Gate**: exact against a CPU int32 reference on three shapes; ≥ 1.5× the scalar tile
   on 1024³ on the 5080 (the probe's 1.75× less the epilogue).
+- **Measured** (RTX 5080, commit 64e1f78): **exact on every entry** of 256³, 512 × 1024 ×
+  256, 1024³ and 2048³ (the raw i32 store), the dequantising store within 1.1e-7 of the
+  scaled reference; 1024³ **0.038 ms, 3.59× the scalar tile** (0.136); 2048³ 0.273 ms,
+  3.0× (0.821); the dequantising store costs 0.011–0.077 ms over the raw one. The small
+  shapes are launch-bound at 1.03–1.27×. The gate is met with room; the ceiling of §0 was
+  stall-inflated and is revised there.
 
 ### Step 2 — Activation quantisation · size S
 
@@ -127,8 +134,9 @@ the readback resolves brings the wall to the GPU's time. With that in the librar
 (`Device.readbackKicks`, calibrated per adapter), the 5080's captured forward is **2.66 ms
 at batch 16 against ORT's 3.63–3.89, and 0.99 at batch 1 against 3.88** — ahead at both,
 with no int8 kernel. The premise of §0's arithmetic (4.3 → ~3.4 against ORT's 3.6) is
-gone; the 2.9 ms of GPU that remains is now the whole wall, and int8's 1.75× on the GEMM
-core would apply to the convolutions' share of it.
+gone; the 2.9 ms of GPU that remains is now the whole wall, and int8's 3–3.6× on the GEMM
+core (Step 1, measured under the profiler — the probe's 1.75× carried the same stall)
+would apply to the convolutions' share of it.
 
 ## 4. Order and verdict
 
@@ -145,11 +153,12 @@ remaining lever on that card and this plan is ready.
 
 **The verdict's condition was met the same night** (§3): the stall was cut and the 5080
 is ahead of ORT at both batches on f32 alone. Int8 is no longer what the card *needs*; it
-is what would take 2.66 ms toward ~1.9 (the convolutions' ~2.5 ms of GPU at 1.75×, less
-the quantise passes), at the accuracy cost §1 names. Step 1 goes ahead as planned — the
-GEMM in the tree, gated on exactness and 1.5× — because it is the kernel any int8 path
-starts from and its gate is a number on a card the tree can reach; Steps 3–6 wait for a
-caller who wants the trade.
+is what would take 2.66 ms toward ~1.3 (the convolutions' ~2.5 ms of GPU at 3–3.6× on the
+shapes that fill the card, less the quantise passes and the launch-bound small layers),
+at the accuracy cost §1 names. Step 1 went ahead as planned — the GEMM in the tree, gated
+on exactness and 1.5×, met at 3.59× — because it is the kernel any int8 path starts from
+and its gate is a number on a card the tree can reach; Steps 2–6 wait for a caller who
+wants the trade.
 
 ## 5. Risks, and the sentence that retires each
 
