@@ -798,7 +798,15 @@ function convForwardRun(
     ? { relu: epilogue.relu, residual: epilogue.residual !== null } : undefined;
   const tag = ep ? `:${ep.relu ? "r" : ""}${ep.residual ? "a" : ""}` : "";
   const tail = [...(bias ? [bias] : []), ...(epilogue?.residual ? [epilogue.residual] : []), out];
-  if (directFits(s)) {
+  // The staged subgroup forward (`convForwardSubgroupSmall`): the 4 × 4-plane layers the
+  // row-of-eight kernel cannot take, and — measured against the direct kernel per shape,
+  // `docs/INFER.md` Step 4 — the wide early layers too, whose band of rows it stages once
+  // for nine taps. Placed before the direct kernel so the measurement can be read here.
+  // Not for a row of exactly eight: there the row-of-eight kernel's tile is the row and
+  // its loads are direct from the padded plane, and it measured faster (256 → 256 on
+  // 8 × 8 at batch 16: 0.75 against 0.85 ms staged).
+  const smallSubgroup = Device.subgroupMatrix && !turned && sgfsFits(s) && (s.outDims[1] ?? 1) !== 8;
+  if (directFits(s) && !smallSubgroup) {
     // The narrow layers go direct — see `convDirect2d` for the measurement.
     dev().run(
       dev().pipeline(`cnd:${key}:${bias ? "b" : "n"}${tag}${turned ? ":t" : ""}`, () => convDirect2d(s, bias !== null, ep, turned)),
@@ -808,15 +816,22 @@ function convForwardRun(
     return;
   }
   if (turned) throw new Error("turned weights are a direct-kernel matter");
-  if (Device.subgroupMatrix && sgfsFits(s)) {
-    // The small-plane subgroup forward — the 512-channel layer on its 4 × 4 plane, which
-    // the row-of-eight kernel cannot take (`convForwardSubgroupSmall`, `docs/INFER.md`).
+  if (smallSubgroup) {
     const pieces = sgfsSplit(s);
     const kSpace = s.kernel.reduce((a, b) => a * b, 1);
     const turnedW = dev().alloc(kSpace * s.O * s.C);
     dev().run1d(
       dev().pipeline(`tmw:${key}:n`, () => tapMajorWeights(s.O, s.C, kSpace, false, false)),
       [w, turnedW], s.O * s.C);
+    if (pieces === 1) {
+      // Unsplit: bias and epilogue at the kernel's own store, no pass over the output.
+      dev().run(
+        dev().pipeline(`cnfs:${key}:${bias ? "b" : "n"}${tag}`, () => convForwardSubgroupSmall(s, 1, bias !== null, ep)),
+        [x, turnedW, ...tail],
+        sgfsGrid(s, 1),
+      );
+      return;
+    }
     const parted = dev().alloc(n * pieces);
     dev().run(
       dev().pipeline(`cnfs:${key}:${pieces}`, () => convForwardSubgroupSmall(s, pieces)),

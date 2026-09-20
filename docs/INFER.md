@@ -303,6 +303,24 @@ prediction is written down so that the ledger can say which step was wrong.
   remains on it is the stride-2 shortcut and the stride-2 3 × 3 (`cnt:…|2,2|…:s`, 0.3 ms),
   and the early wide layers on the direct kernel (Step 4's question, still open).
 
+- **2026-09-20, Step 4 — candidate (i) built, measured per shape, and kept where it wins.**
+  The staged kernel of Step 3 generalised from whole planes to *bands*: a tile of thirty-two
+  pixels is whole images (a plane dividing thirty-two) or a run of rows of one image (a row
+  dividing thirty-two), and the staging holds the padded rows the tile touches plus the
+  kernel's reach — 32 × 32: one row, 816 floats; 16 × 16: two rows, 576 — so the input is
+  read from storage once per channel block and the nine taps read it from workgroup memory.
+  Unsplit, it applies bias and epilogue at its own store (the seven `sumSplitsConv` passes it
+  first added cost the forward what the kernel won: 4.42 → 4.52 ms, measured). Then each shape
+  against the kernel it had, fused, batch 16, metal-3: **128 → 128 on 16 × 16: direct 0.81 →
+  staged ~0.6 ms — kept; 64 → 64 on 32 × 32: direct 1.02 → staged 1.03 — a wash, kept for the
+  dispatch it saves; 256 → 256 on 8 × 8: row-of-eight 0.75 against staged 0.85 — the
+  row-of-eight kernel stays, by a rule on the row.** The gate as written (the 64-channel layer
+  0.5 → ≤ 0.3) is not met: that layer is bandwidth on either kernel, and candidate (ii),
+  half-precision storage of its input and weights, is the one left to it. What the forward
+  gained anyway: **fused + captured at batch 16 4.42 → 4.14 ms (ORT 5.25–5.88, 0.70–0.79×),
+  38 dispatches a replay; batch 1 1.38 → 1.10.** The training step 19.5 → 19.0 at batch 16.
+  Golden 4,057 / 4,057, logits 6.0e-8, replay bit for bit.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

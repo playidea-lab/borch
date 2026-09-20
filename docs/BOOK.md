@@ -2015,6 +2015,9 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused + captured, the 4 × 4-plane layers on the small-plane subgroup kernel, **2026-09-20** (evening) | | **1.38 ms** | **4.42 ms** |
 | ONNX Runtime Web 1.29.0, same run | | 3.07–4.97 ms | 5.25–5.31 ms |
 | ORT is faster than the captured network by | | 0.28–0.45× | **0.83×** — borch ahead |
+| borch.ts fused + captured, the wide layers on the staged kernel too, **2026-09-20** (night) | | **1.10 ms** | **4.14 ms** |
+| ONNX Runtime Web 1.29.0, same run | | 3.29–4.15 ms | 5.25–5.88 ms |
+| ORT is faster than the captured network by | | 0.27–0.33× | **0.70–0.79×** — borch ahead |
 
 The 2026-09-20 rows are `torch.compiled` pointed at the fused network's `noGrad` forward
 (`docs/INFER.md` Step 1): the JavaScript that encodes the thirty-eight dispatches is paid
