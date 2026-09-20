@@ -155,18 +155,25 @@ const NO_ADAPTER =
 /** How many tiny dispatches the kick calibration submits — the count at which the RTX
  *  5080's wall left its GPU time (0.08 ms of GPU, 2.6 of wall). */
 const KICK_PROBE_DISPATCHES = 40;
-/** Repetitions of each wait in the calibration; the median of three is what decides. */
-const KICK_PROBE_REPS = 3;
-/** Plain wait this many times the kicked one, and above `KICK_PROBE_FLOOR_MS`, means the
- *  browser needs kicking: on the 5080 the ratio is 13; on metal-3 it is 0.9. */
+/** Plain waits in the calibration — eight, because the stall is a state of the GPU
+ *  process and not every wait meets it: one run of the probe on the 5080 saw a plain
+ *  wait at 0.1 ms nine times in ten and 2.3 the tenth, and a first calibration of three
+ *  decided "no kicks" on a card that needs them. The **slowest** plain wait decides. */
+const KICK_PROBE_PLAIN_REPS = 8;
+/** Kicked waits — three, the median; they do not vary. */
+const KICK_PROBE_KICKED_REPS = 3;
+/** Slowest plain wait this many times the kicked median, and above `KICK_PROBE_FLOOR_MS`,
+ *  means the browser needs kicking: on the 5080 the ratio is 9–13; on metal-3 the slowest
+*  plain wait of eight is 0.6–0.8 ms, under the floor. */
 const KICK_PROBE_RATIO = 4;
-const KICK_PROBE_FLOOR_MS = 1;
+const KICK_PROBE_FLOOR_MS = 1.5;
 
 /**
  * **Does this browser notice a finished fence on its own?** Forty tiny dispatches
- * behind a 4-byte copy, mapped and waited for plainly, then again with the wire kicked
- * by error-scope round trips until the map resolves; three of each, medians compared.
- * See `Device.readbackKicks` for what it found and why it is measured.
+ * behind a 4-byte copy, mapped and waited for plainly eight times, then with the wire
+ * kicked by error-scope round trips until the map resolves, three times; the slowest
+ * plain wait against the kicked median. See `Device.readbackKicks` for what it found
+ * and why it is measured.
  */
 async function calibrateKicks(device: GPUDevice): Promise<boolean> {
   const module = device.createShaderModule({ code:
@@ -202,15 +209,14 @@ async function calibrateKicks(device: GPUDevice): Promise<boolean> {
     stage.unmap();
     return performance.now() - t0;
   };
-  const median = async (kicks: boolean): Promise<number> => {
+  const sample = async (kicks: boolean, reps: number): Promise<number[]> => {
     const t: number[] = [];
-    for (let i = 0; i < KICK_PROBE_REPS; i++) t.push(await wait(kicks));
-    t.sort((a, b) => a - b);
-    return t[KICK_PROBE_REPS >> 1] ?? 0;
+    for (let i = 0; i < reps; i++) t.push(await wait(kicks));
+    return t.sort((a, b) => a - b);
   };
   await wait(false);                       // warm the pipeline once, unmeasured
-  const plain = await median(false);
-  const kicked = await median(true);
+  const plain = (await sample(false, KICK_PROBE_PLAIN_REPS)).at(-1) ?? 0;
+  const kicked = (await sample(true, KICK_PROBE_KICKED_REPS))[KICK_PROBE_KICKED_REPS >> 1] ?? 0;
   for (const b of bufs) b.destroy();
   stage.destroy();
   Device.kickCalibration = { plainMs: plain, kickedMs: kicked };
@@ -935,8 +941,9 @@ export class Device {
    */
   static readbackKicks = false;
 
-  /** What `calibrateKicks` measured, ms — so a table can print the two numbers the
-   *  decision came from rather than only the decision. */
+  /** What `calibrateKicks` measured, ms — the slowest plain wait and the kicked median —
+   *  so a table can print the two numbers the decision came from rather than only the
+   *  decision. */
   static kickCalibration: { plainMs: number; kickedMs: number } = { plainMs: 0, kickedMs: 0 };
 
   /**
