@@ -232,6 +232,27 @@ prediction is written down so that the ledger can say which step was wrong.
   lift 3 (epilogue in the subgroup kernel) comes first, then Step 2's prepack (only a
   subgroup layer repacks), then lifts 1–2 for the deep layers.
 
+- **2026-09-20, Step 3, first attempt — measured slower, reverted.** A gathered subgroup
+  forward (`cnfg`: one subgroup a workgroup, a 16-channel × 16-pixel tile, the 8 × 16 input
+  block for each channel block and tap gathered by the lanes into workgroup memory with the
+  `(n, oh, ow)` decode and the padded, strided source index computed per element, then
+  `subgroupMatrixLoad` from workgroup storage; partial sums per K piece into a slab and
+  `sumSplitsConv` for bias and epilogue — so any stride, any row length, any epilogue).
+  Correct on every conv the golden asks (4,057 / 4,057, logits 7.45e-8 from torch's). **And
+  slower**: metal-3 batch 16, 512 → 512 on 4 × 4 — 2.00 ms against `cnt`'s 1.38; 256 → 256
+  on 8 × 8 — 1.30 against 1.35; the fused + captured forward 5.57 → 6.79 ms; the training
+  step 21.3 → 24.1 (`cnfg` 4.1 ms where `cnt` had 2.8). Batch 1 was mixed (0.49 vs 0.57 on
+  the 4 × 4 layer, 0.56 vs 0.30 on the 8 × 8) and the weight repack it needs (`tmw`, 0.4
+  ms at batch 1) is a cost of its own. The diagnosis is arithmetic: per channel block and
+  tap the workgroup gathers 128 input values and loads 128 weights for 2,048 multiply-adds
+  — eight per load, with two barriers — where the scalar tiled GEMM's 64 × 16 tile with
+  register blocking reuses each load more and runs many more threads; the hardware
+  multiply is starved. The kernel that would win is the implicit GEMM proper: four
+  subgroups a workgroup sharing a 32 × 64 staged input block, the weight block staged too
+  and reused across pixel tiles, K walked in eights — a different size of work than this
+  step was given. **Reverted** (the attempt is the commit before the revert); the plan's
+  Step 3 stands with that design under it, and the number to beat is `cnt`'s 1.38 ms.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

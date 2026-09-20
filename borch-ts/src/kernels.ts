@@ -4466,6 +4466,142 @@ ${store.join("\n")}
 }`;
 }
 
+/** The pixels one workgroup of the gathered subgroup forward computes: two 8-wide blocks. */
+export const SGFG_TN = 16;
+
+/**
+ * Whether a convolution takes the **gathered** subgroup forward (`convForwardSubgroupGather`):
+ * two spatial dims, one group, no dilation, a kernel no wider than three, the output
+ * channels in whole eights, and an output plane in whole eights — so an 8-pixel block
+ * never straddles two images and the accumulator tile stores with the plane as its row
+ * stride. Any stride, any row length, any input channel count: the input block is
+ * gathered through workgroup memory, which is what lifts `sgfFits`'s three conditions
+ * (`docs/INFER.md` Step 3).
+ */
+export function sgfgFits(s: ConvNDShape): boolean {
+  const [OH = 1, OW = 1] = s.outDims;
+  return s.inDims.length === 2 && (s.groups ?? 1) === 1
+    && (s.dilation ?? s.kernel.map(() => 1)).every((v) => v === 1)
+    && s.kernel.every((k) => k <= 3) && s.O % 8 === 0 && (OH * OW) % 8 === 0;
+}
+
+/**
+ * How many pieces the gathered forward's reduction is split into — the split policy of
+ * `convForwardSplit`, on this kernel's tiles: a deep layer on a small plane (512 → 512
+ * on 4 × 4 at batch 16 is 16 pixel tiles × 32 channel blocks) fills the GPU already;
+ * batch 1 does not, and takes the K-blocks apart until 128 workgroups run.
+ */
+export function sgfgSplit(s: ConvNDShape): number {
+  const [OH = 1, OW = 1] = s.outDims;
+  const tiles = Math.ceil((s.N * OH * OW) / SGFG_TN) * Math.ceil(s.O / SGF_CB);
+  const kBlocks = Math.ceil(s.C / 8);
+  const WANT = 128;
+  if (tiles >= WANT) return 1;
+  return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(kBlocks / 2)));
+}
+
+/** The grid: pixel tiles over `N · OH · OW`, output-channel blocks of sixteen, the K pieces. */
+export function sgfgGrid(s: ConvNDShape, splits: number): [number, number, number] {
+  const [OH = 1, OW = 1] = s.outDims;
+  return [Math.ceil((s.N * OH * OW) / SGFG_TN), Math.ceil(s.O / SGF_CB), splits];
+}
+
+/**
+ * The convolution forward on subgroup matrices **with the input block gathered through
+ * workgroup memory** — `convForwardSubgroup` without its three conditions. For a tile of
+ * sixteen output pixels (in `N · OH · OW` order) and a block of sixteen output channels,
+ * over its share of the input-channel blocks and every tap: the 32 lanes gather the
+ * 8 × 16 block of input values the tap needs — each pixel's `(n, oh, ow)` decoded, the
+ * padded and strided source position computed, zero outside the image or past `C` — into
+ * `xs`, and the subgroup multiplies the tap-major weight block (`tapMajorWeights`) against
+ * it from there. The im2col is never laid out in memory, as in the scalar tiled GEMM, and
+ * the multiply is the hardware's, as in the subgroup forward. Partial sums go to a slab
+ * per K piece; `sumSplitsConv` adds them with the bias and the epilogue, so a fused
+ * `ConvReLU2d` takes this path too. Measured against the scalar `cnt` on the layers that
+ * had it — `docs/INFER.md`'s ledger.
+ */
+export function convForwardSubgroupGather(s: ConvNDShape, splits: number): string {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [OH = 1, OW = 1] = s.outDims;
+  const [KH = 1, KW = 1] = s.kernel;
+  const [PH = 0, PW = 0] = s.pad;
+  const [SH = 1, SW = 1] = s.stride;
+  const kSpace = KH * KW;
+  const Mp = Math.ceil(s.O / 8) * 8, Kp = Math.ceil(s.C / 8) * 8;
+  const plane = OH * OW;
+  const P = s.N * plane;
+  const total = s.N * s.O * plane;
+  const kBlocks = Kp / 8;
+  const perPart = Math.ceil(kBlocks / splits);
+  const TN = SGFG_TN;
+  const mb = SGF_CB / 8, nb = TN / 8;
+  const acc: string[] = [];
+  for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) acc.push(`  var c${i}${j}: subgroup_matrix_result<f32, 8, 8>;`);
+  const mul: string[] = [];
+  for (let i = 0; i < mb; i++) mul.push(`      let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&Wt, wBase + ${i * 8 * Kp}u, false, ${Kp}u);`);
+  for (let j = 0; j < nb; j++) {
+    mul.push(`      { let b = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&xs, ${j * 8}u, false, ${TN}u);`);
+    for (let i = 0; i < mb; i++) mul.push(`        c${i}${j} = subgroupMatrixMultiplyAccumulate(a${i}, b, c${i}${j});`);
+    mul.push("      }");
+  }
+  const store: string[] = [];
+  for (let j = 0; j < nb; j++) {
+    store.push(`  { let pj = p0 + ${j * 8}u;
+    if (pj < ${P}u) {
+      let n = pj / ${plane}u;
+      let q = pj - n * ${plane}u;`);
+    for (let i = 0; i < mb; i++) {
+      store.push(`      if (co0 + ${i * 8}u < ${s.O}u) { subgroupMatrixStore(&Out, part * ${total}u + ((n * ${s.O}u + co0 + ${i * 8}u) * ${plane}u) + q, c${i}${j}, false, ${plane}u); }`);
+    }
+    store.push("    }\n  }");
+  }
+  return `enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Wt: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+var<workgroup> xs: array<f32, ${8 * TN}>;
+@compute @workgroup_size(32)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+  let p0 = wid.x * ${TN}u;
+  let co0 = wid.y * ${SGF_CB}u;
+  let part = wid.z;
+  let kb0 = part * ${perPart}u;
+  let kb1 = min(kb0 + ${perPart}u, ${kBlocks}u);
+${acc.join("\n")}
+  for (var kb = kb0; kb < kb1; kb = kb + 1u) {
+    let ci0 = kb * 8u;
+    for (var tap = 0u; tap < ${kSpace}u; tap = tap + 1u) {
+      let kh = tap / ${KW}u;
+      let kw = tap - kh * ${KW}u;
+      // The 8 × ${TN} input block for this channel block and tap, gathered by the lanes.
+      for (var e = lid; e < ${8 * TN}u; e = e + 32u) {
+        let k = e / ${TN}u;
+        let p = p0 + (e - k * ${TN}u);
+        var v = 0.0;
+        if (p < ${P}u && ci0 + k < ${s.C}u) {
+          let n = p / ${plane}u;
+          let q = p - n * ${plane}u;
+          let oh = q / ${OW}u;
+          let ow = q - oh * ${OW}u;
+          let ih = i32(oh * ${SH}u + kh) - ${PH};
+          let iw = i32(ow * ${SW}u + kw) - ${PW};
+          if (ih >= 0 && ih < ${IH} && iw >= 0 && iw < ${IW}) {
+            v = X[((n * ${s.C}u + ci0 + k) * ${IH}u + u32(ih)) * ${IW}u + u32(iw)];
+          }
+        }
+        xs[e] = v;
+      }
+      workgroupBarrier();
+      let wBase = (tap * ${Mp}u + co0) * ${Kp}u + ci0;
+${mul.join("\n")}
+      workgroupBarrier();
+    }
+  }
+${store.join("\n")}
+}`;
+}
+
 /** A block of ones for the bias product — eight by eight. */
 export function onesBlock(): string {
   return `
