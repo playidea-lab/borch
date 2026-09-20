@@ -86,7 +86,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>) {
     }
     const err = await device.popErrorScope();
     if (err) msgs.push(err.message);
-    return { pipeline: msgs.length === 0 ? p : null, errors: msgs.slice(0, 2) };
+    return { pipeline: msgs.length === 0 ? p : null, errors: msgs.slice(0, 1).map((m) => m.split("\n")[0].slice(0, 160)) };
   };
   const operands = (SZ) => {
     const a8 = new Int8Array(SZ * SZ), b8 = new Int8Array(SZ * SZ);
@@ -175,7 +175,10 @@ def main(argv):
                 context.close()
     finally:
         shutdown()
-    print(json.dumps(got, indent=1, ensure_ascii=False))
+    # The verdict first, the sweep after — a relay that caps its capture keeps the head.
+    head = {k: v for k, v in (got or {}).items() if k != "tried"}
+    print(json.dumps(head, indent=1, ensure_ascii=False))
+    print("tried: " + json.dumps((got or {}).get("tried", []), ensure_ascii=False))
     ok = bool(got) and not got.get("error") and all(c["ok"] for c in got.get("checks", []))
     print("**the int8 subgroup GEMM compiles, is exact, and runs**" if ok else "**no int8 subgroup GEMM on this adapter — see above**")
     return 0 if ok else 1
