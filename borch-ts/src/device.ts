@@ -171,14 +171,21 @@ const KICK_PROBE_WORKGROUPS = 1024;
 const KICK_PROBE_WARMUPS = 6;
 const KICK_PROBE_PLAIN_REPS = 5;
 const KICK_PROBE_KICKED_REPS = 3;
-/** Plain median this many times the kicked median, and above `KICK_PROBE_FLOOR_MS`,
- *  means the browser needs kicking: on the 5080 the ratio is 6–12; on metal-3 it is 1.0
- *  (the wait is the kernel either way). Idle gaps between the waits were tried and
- *  dropped — after 4 ms of idle metal-3 pays ~0.7 ms of wake-up that kicks do not remove
- *  (`roundtrip:probe`, the idle rows), and a first gapped calibration read 9 ms there and
- *  turned kicks on, where they cost the eager forward a third. */
+/** The decision. With `timestamp-query`: the plain median **minus the kernel's GPU time**
+ *  above `KICK_PROBE_FLOOR_MS` is the stall — on the 5080 2.1–3.0 ms of wall for 0.12 of
+ *  GPU; on metal-3 the wall is the kernel plus 0.3–1.2 (the floor sits between the two,
+ *  1.7: half a millisecond above metal-3's worst, a third under the 5080's best). This
+ *  does not depend on how fast a
+ *  kick is, which the ratio below does: three calibrations on the 5080 read the kicked
+ *  median at 0.6–2.0 ms (a kick is 0.03 when the GPU process is idle and more when it is
+ *  not) and said "no kicks" by the ratio while the plain waits stalled in plain sight.
+ *  Without timestamps, the ratio: plain median this many times the kicked median and
+ *  above the floor. Idle gaps between the waits were tried and dropped — after 4 ms of
+ *  idle metal-3 pays ~0.7 ms of wake-up that kicks do not remove (`roundtrip:probe`, the
+ *  idle rows), and a first gapped calibration read 9 ms there and turned kicks on, where
+ *  they cost the eager forward a third. */
 const KICK_PROBE_RATIO = 3;
-const KICK_PROBE_FLOOR_MS = 1.5;
+const KICK_PROBE_FLOOR_MS = 1.7;
 /** Settle before the pairs, ms. Right after `requestDevice` the GPU process is busy —
  *  compiling, allocating — and looks at its fences often; the 5080's first hundred
  *  milliseconds gave plain waits of 0.1–1.3 ms on work that stalls at 2.5 for the rest
@@ -189,12 +196,13 @@ const KICK_PROBE_SETTLE_MS = 150;
 
 /**
  * **Does this browser notice a finished fence on its own?** A short loop kernel behind
- * a 4-byte copy, mapped and waited for plainly in a row, then with the wire kicked by
- * error-scope round trips until the map resolves; the plain median against the kicked
- * median. See `Device.readbackKicks` for what it found and why it is
+ * a 4-byte copy, mapped and waited for plainly in a row with a timestamp query around
+ * it, then with the wire kicked by error-scope round trips until the map resolves; the
+ * plain median against the kernel's GPU time, or against the kicked median where there
+ * are no timestamps. See `Device.readbackKicks` for what it found and why it is
  * measured.
  */
-async function calibrateKicks(device: GPUDevice): Promise<boolean> {
+async function calibrateKicks(device: GPUDevice, canTime: boolean): Promise<boolean> {
   const module = device.createShaderModule({ code:
     "@group(0) @binding(0) var<storage, read_write> X: array<f32>;\n" +
     "@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3<u32>) {\n" +
@@ -205,17 +213,29 @@ async function calibrateKicks(device: GPUDevice): Promise<boolean> {
     size: KICK_PROBE_WORKGROUPS * 256 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
   const bind = device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer } }] });
-  const stage = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  // The staging buffer carries four bytes of the result and, with timestamps, the two
+  // query values behind them — one map reads both.
+  const STAGE_BYTES = 8 + 2 * 8;
+  const stage = device.createBuffer({ size: STAGE_BYTES, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const querySet = canTime ? device.createQuerySet({ type: "timestamp", count: 2 }) : null;
+  const resolved = canTime ? device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC }) : null;
   const submit = (): void => {
     const encoder = device.createCommandEncoder();
-    const pass = encoder.beginComputePass();
+    const pass = encoder.beginComputePass(querySet
+      ? { timestampWrites: { querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } }
+      : {});
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bind);
     pass.dispatchWorkgroups(KICK_PROBE_WORKGROUPS);
     pass.end();
     encoder.copyBufferToBuffer(buffer, 0, stage, 0, 4);
+    if (querySet && resolved) {
+      encoder.resolveQuerySet(querySet, 0, 2, resolved, 0);
+      encoder.copyBufferToBuffer(resolved, 0, stage, 8, 16);
+    }
     device.queue.submit([encoder.finish()]);
   };
+  const gpuTimes: number[] = [];
   const wait = async (kicks: boolean): Promise<number> => {
     const t0 = performance.now();
     submit();
@@ -226,8 +246,15 @@ async function calibrateKicks(device: GPUDevice): Promise<boolean> {
       await device.popErrorScope();
     }
     await mapped;
+    const wall = performance.now() - t0;
+    if (querySet && !kicks) {
+      const q = new BigUint64Array(stage.getMappedRange(8, 16).slice(0));
+      const start = q[0];
+      const end = q[1];
+      if (start !== undefined && end !== undefined && end > start) gpuTimes.push(Number(end - start) / 1e6);
+    }
     stage.unmap();
-    return performance.now() - t0;
+    return wall;
   };
   const sample = async (kicks: boolean, reps: number): Promise<number[]> => {
     const t: number[] = [];
@@ -238,11 +265,16 @@ async function calibrateKicks(device: GPUDevice): Promise<boolean> {
   await wait(false);                       // compile the pipeline, unmeasured
   await new Promise((resolve) => setTimeout(resolve, KICK_PROBE_SETTLE_MS));
   await sample(false, KICK_PROBE_WARMUPS);
+  gpuTimes.length = 0;                     // the warm-ups' GPU times carry the clock ramp
   const plain = median(await sample(false, KICK_PROBE_PLAIN_REPS));
+  const gpu = gpuTimes.length > 0 ? median(gpuTimes) : -1;
   const kicked = median(await sample(true, KICK_PROBE_KICKED_REPS));
   buffer.destroy();
   stage.destroy();
-  Device.kickCalibration = { plainMs: plain, kickedMs: kicked };
+  resolved?.destroy();
+  querySet?.destroy();
+  Device.kickCalibration = { plainMs: plain, kickedMs: kicked, gpuMs: gpu };
+  if (gpu >= 0) return plain - gpu > KICK_PROBE_FLOOR_MS;
   return plain > KICK_PROBE_FLOOR_MS && plain > KICK_PROBE_RATIO * kicked;
 }
 
@@ -943,7 +975,7 @@ export class Device {
       .catch(() => {
         /* lost is not rejected, and even if it were there is nothing more to do here */
       });
-    Device.readbackKicks = await calibrateKicks(device);
+    Device.readbackKicks = await calibrateKicks(device, canTime);
     return made;
   }
 
@@ -964,15 +996,17 @@ export class Device {
    */
   static readbackKicks = false;
 
-  /** What `calibrateKicks` measured, ms — the plain median and the kicked median — so
-   *  a table can print the two numbers the decision came from rather than only the
-   *  decision. */
-  static kickCalibration: { plainMs: number; kickedMs: number } = { plainMs: 0, kickedMs: 0 };
+  /** What `calibrateKicks` measured, ms — the plain median, the kernel's GPU time under
+   *  it (−1 without `timestamp-query`) and the kicked median — so a table can print the
+   *  numbers the decision came from rather than only the decision. */
+  static kickCalibration: { plainMs: number; kickedMs: number; gpuMs: number } =
+    { plainMs: 0, kickedMs: 0, gpuMs: -1 };
 
   /** The kick decision and its numbers on one line, for the adapter line of a table. */
   static get readbackNote(): string {
     const c = Device.kickCalibration;
-    return `readbackKicks ${Device.readbackKicks} (plain ${c.plainMs.toFixed(2)} / kicked ${c.kickedMs.toFixed(2)} ms)`;
+    const gpu = c.gpuMs >= 0 ? ` for ${c.gpuMs.toFixed(2)} of GPU` : "";
+    return `readbackKicks ${Device.readbackKicks} (plain ${c.plainMs.toFixed(2)}${gpu} / kicked ${c.kickedMs.toFixed(2)} ms)`;
   }
 
   /**
