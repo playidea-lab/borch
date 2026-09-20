@@ -23,6 +23,7 @@
 
 import { Tensor, noGrad } from "../src/tensor.js";
 import { Device } from "../src/device.js";
+import { quantizeForInt8 } from "../src/nn.js";
 import { compiled } from "../src/compile.js";
 import { load } from "../src/serialize.js";
 import { exportOnnx } from "../src/onnx.js";
@@ -308,7 +309,11 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     // number that stands beside its time, since this path is held to accuracy, not to
     // torch. How many layers took int8 is printed too; the rest ran f32.
     if (Device.subgroupInt8) {
-      const q = compiled(model, { int8: true });
+      // The model is already folded (its `fuse()` ran for the rows above), so the weights
+      // are quantised here directly and the step is the function form.
+      const layers = await quantizeForInt8(model);
+      const q = compiled((x: Tensor) => noGrad(() => model.forward(x)));
+      q.int8Layers = layers;
       const qOut = await (await q.call(xb)).toArray();
       const qGap = maxAbsDiff(qOut, eagerFused);
       let scale = 0; for (const v of eagerFused) scale = Math.max(scale, Math.abs(v));
