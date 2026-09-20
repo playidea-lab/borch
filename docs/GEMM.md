@@ -159,8 +159,40 @@ else. `tileShape` / `tileDepth` / `scalarMatmulSplit` re-swept for the new tile.
   configurations for every vendor: **128 × 64 r8×4 `vec4`, then 64 × 64 r4×4 `vec4`**;
   the old tile keeps the shapes neither divides.
 
+- **2026-09-21, Step 4 on the 5080 — the convolution's verdict.** `kernel_bench fwd
+  --sweep=tiles`, the deep layers, ms, the slab sum counted:
+
+  | tile | 512 → 512 at 4 × 4, b16 | 256 → 256 at 8 × 8, b16 | 128 → 128 at 16 × 16, b16 | 512 → 512, b1 | 256 → 256, b1 |
+  |---|---|---|---|---|---|
+  | 64 × 64 r4×4 (as it was) | **0.100 + 0.007** | **0.099 + 0.007** | **0.099 + 0.007** | **0.029 + 0.004** | **0.023 + 0.004** |
+  | 128 × 64 r8×4 | 0.114 + 0.008 | 0.111 + 0.008 | 0.111 + 0.008 | 0.034 + 0.004 | 0.031 + 0.004 |
+  | 128 × 128 r8×8 | 0.152 | 0.153 | 0.151 | 0.054 | 0.048 |
+
+  **The micro-tile that wins the plain product loses the convolution, 10–40 %, on the
+  card the plan was for.** The reason is in the kernel: the implicit GEMM's B side is a
+  gather — one bounds-checked scalar load per element with the (batch, position,
+  channel, tap) digits carried — and that is what a K-tile waits on; the FMAs behind it
+  are not the bottleneck, so widening the micro-tile buys nothing and the 128-row tile
+  costs occupancy on a 512 × 256 product. The `vec4` staging that made the plain product
+  1.33× has no purchase on a gather. So `setConvTilesPreferred([])`: the convolutions
+  keep their tiles, the generalised `tiledGemm` stays for a kernel that can use it, and
+  **Step 4's conv prediction (forward 1.8 → ~1.3 on the 5080) is withdrawn** — the plan's
+  gain is the plain product's (every `Linear`, every attention `bmm` off the subgroup
+  path, on every adapter without subgroup matrices), not ResNet's convolutions on the
+  5080. What would move the convolutions on the scalar path is a kernel whose B side is
+  not a gather: the input padded once (`padForGradWeight` exists), a band of rows staged
+  as the subgroup kernels stage it, `vec4` loads along the output row — the
+  `convForwardSubgroupSmall` shape without the subgroup multiply. Size M, its own gate;
+  not taken up here, and named in §4 beside int8 for the decision of what comes next.
+
 ## 4. After this
 
-`docs/INT8.md` Steps 2–6 follow when this plan is done: the int8 configuration's 3–3.6×
-on the GEMM core applies to whatever GPU time this plan leaves on the 5080, on the
-adapters that have the configuration, at the accuracy cost that plan names.
+Two candidates for the 5080's convolutions, which this plan did not move:
+- **A scalar staged conv** — the padded plane, a band of rows in workgroup memory, `vec4`
+  loads along the row, the FMAs of `tiledGemm`'s inner loop: the gather gone. Serves every
+  adapter without subgroup matrices (D3D12, Safari, Firefox). Size M. Predict, from the
+  plain product's 1.33×: the deep layers 0.10 → ~0.07 ms a dispatch.
+- **`docs/INT8.md` Steps 2–6** — the int8 configuration's 3–3.6× on the GEMM core, on the
+  adapters that have it (today: Chrome on NVIDIA over Vulkan), at the accuracy cost that
+  plan names. Its Step 3 is the same staged-band kernel with a subgroup multiply in the
+  middle, so the two share their staging.

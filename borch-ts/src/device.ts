@@ -966,10 +966,14 @@ export class Device {
     Device.workgroupStorage = adapter.limits.maxComputeWorkgroupStorageSize;
     setDirectWeightBytes(Device.workgroupStorage);
     Device.gemmConfigs = gemmConfigsFor(String((adapter.info as Partial<GPUAdapterInfo> | undefined)?.vendor ?? ""));
-    // The convolutions' implicit GEMM prefers the same micro-tile where the plain product
-    // measured it faster — the first configuration, whose loads are scalar there (the B
-    // side is a gather), at equal padding against the tiles as they were.
-    setConvTilesPreferred(Device.gemmConfigs.slice(0, 1).map((c) => ({ TM: c.TM, TN: c.TN, RM: c.RM, RN: c.RN })));
+    // **The convolutions' implicit GEMM keeps the tiles as they were.** The 8 × 4
+    // micro-tile that wins the plain product loses there on the 5080 (`kernel_bench fwd
+    // --sweep=tiles`, 2026-09-21: 512 → 512 at 4 × 4, batch 16, 0.100 → 0.114 ms; batch 1
+    // 0.029 → 0.034) and is a wash on metal-3 — its B side is a gather, scalar and
+    // bounds-checked per element, and that, not the micro-tile, is what the kernel waits
+    // on; a bigger tile only costs occupancy. The mechanism stays for a kernel that stages
+    // the gather (`docs/GEMM.md` §3, the conv verdict); nothing prefers a tile today.
+    setConvTilesPreferred([]);
 
     let device: GPUDevice;
     try {
