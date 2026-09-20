@@ -337,6 +337,26 @@ prediction is written down so that the ledger can say which step was wrong.
   question, not this one's. The forward stands at **4.1–4.2 ms captured at batch 16
   (ORT 5.3–5.9) and 1.1 at batch 1**; golden 4,057 / 4,057, logits 6.0e-8.
 
+- **2026-09-20, Step 6 landed — one call, under the name the library already has.**
+  `torch.compiled(model)` (a module where a function was): eval mode, the folds, and the
+  `noGrad` forward recorded — the repacks hoisted, the intermediates in arenas, every call
+  after the first a replay. Not `torch.compile`: that name is on the list of what this
+  library deliberately does not do, and a training-time graph compiler is still what it
+  would promise; the inference form lives beside `compiled(fn)`, which it is. The fold is
+  `fuseForInference`: a module that defines its own `fuse()` is asked (a residual block's
+  add is in its forward, where no container can see it — the bench's ResNet-18); any other
+  module folds its `Sequential`s (`Conv → BN` into one convolution by `fuseConvBnEval`,
+  then `Conv → ReLU` into `ConvReLU2d`) and recurses. The binding's `compiled(model)`
+  does the same through a model's `fuse()`, a borch.ts-backed child's fold, or its
+  children. **Held: `capture:ts` — on the ResNet-18 the call gives the hand-fused eval
+  forward bit for bit, 38 dispatches a replay; a plain `Sequential` folds to
+  `ConvReLU2d → Conv2d`, replays in 3 dispatches where its eager eval forward took 7, and
+  matches it to the output's scale. `capture:py` — the U-Net (a Python module of binding
+  `Sequential`s) through `torch.compiled(m)`: the plain eval forward exactly (rel 0),
+  replays identical, 52 dispatches.** Two mistakes on the way: the fold before `eval()`
+  ("Fusion only for eval!" — order matters), and a per-element relative gate that read a
+  1e-7 difference on a value near zero as 7e-4.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

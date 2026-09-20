@@ -672,6 +672,15 @@ so what `fn` returns is what is held — return what you want after the step. An
 profiled replay. On the ResNet-18 of `bench.ts` at batch 16 (`npm run capture:ts`): three
 replays bit for bit against eager, 21.3 → 19.1 ms a step, 369 intermediates 342 → 129 MB.
 
+**And for inference, one call: `torch.compiled(model)`** — a module where a function was
+(JavaScript and Python alike). It puts the model in eval mode, folds each batch norm into
+the convolution before it and each relu into that convolution's epilogue (the model's own
+`fuse()` where it defines one — a residual block knows its add — and the `Sequential`
+pass otherwise), and records the `no_grad` forward; every call after the first is a
+replay with the weight repacks hoisted out of it. It is the row in the inference table
+above, and `docs/INFER.md` is the plan it closes. It is not `torch.compile`: that name
+stays on the list below, because for training it would promise a graph compiler.
+
 **One kind hides a few slow shapes among many fast ones.** The profile of a ViT-tiny
 step (`profile:py --model=vit`, batch 8) put 48% of its GPU time in the subgroup matmul,
 147 of them, and the kernel bench said the same products ran at torch's rate. The

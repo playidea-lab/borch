@@ -107,6 +107,10 @@ def main(argv):
     ok = ok and len(plans) == 2 and all(int(m) > 0 and float(a) < float(b) for m, b, a in plans)
     held = re.search(r"held ([0-9.]+)MB→([0-9.]+)MB", done)
     ok = ok and bool(held) and float(held.group(2)) < float(held.group(1))
+    # `torch.compiled(model)` — the inference form: the folded, recorded forward gives the
+    # plain eval forward to a rounding, replays identically, in fewer dispatches.
+    inf = re.search(r"inference compiled\(model\) rel ([0-9.e+-]+) replay-same ([0-9.e+-]+) dispatches (\d+) vs eager (\d+)", done)
+    ok = ok and bool(inf) and float(inf.group(1)) <= 1e-5 and float(inf.group(2)) == 0.0 and int(inf.group(3)) < int(inf.group(4))
     print("**the replayed step is the eager step, bit for bit**" if ok else "**it is not** — see above")
     return 0 if ok else 1
 

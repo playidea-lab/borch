@@ -28,7 +28,8 @@
  * A difference throws and names the worst buffer.
  */
 import { Capture } from "./device.js";
-import { device, scope, Tensor } from "./tensor.js";
+import { fuseForInference, Module } from "./nn.js";
+import { device, noGrad, scope, Tensor } from "./tensor.js";
 
 /** What a compiled function may take: tensors, and plain values that become part of the key. */
 export type CompiledArg = Tensor | number | string | boolean | null | undefined;
@@ -263,7 +264,23 @@ export class Compiled<A extends CompiledArg[], R> {
   }
 }
 
-/** `torch.compiled(fn, opts)` — see `Compiled`. */
-export function compiled<A extends CompiledArg[], R>(fn: (...args: A) => R, opts: CompiledOptions = {}): Compiled<A, R> {
-  return new Compiled(fn, opts);
+/**
+ * `torch.compiled(fn, opts)` — see `Compiled`. Given a **module** instead of a function,
+ * it is the inference form (`docs/INFER.md` Step 6): the module is put in eval mode,
+ * its batch norms folded into the convolutions before them and the relus into their
+ * epilogues (`fuseForInference` — the module's own `fuse()` where it has one, the
+ * `Sequential` pass otherwise), and its `noGrad` forward recorded: the first call for a
+ * shape runs it, every call after replays — the repacks hoisted, the intermediates in
+ * arenas. The returned step takes the input tensor and hands back the logits.
+ */
+export function compiled<A extends CompiledArg[], R>(fn: (...args: A) => R, opts?: CompiledOptions): Compiled<A, R>;
+export function compiled(model: Module, opts?: CompiledOptions): Compiled<[Tensor], Tensor>;
+export function compiled(target: Module | ((...args: never[]) => unknown), opts: CompiledOptions = {}): unknown {
+  if (target instanceof Module) {
+    // Eval first: the fold reads the running statistics and refuses a training module.
+    const model = target.eval();
+    fuseForInference(model);
+    return new Compiled((x: Tensor) => noGrad(() => model.forward(x)), opts);
+  }
+  return new Compiled(target as (...args: CompiledArg[]) => unknown, opts);
 }

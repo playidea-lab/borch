@@ -84,6 +84,24 @@ def replay_once():
     step.replay(); float(loss2.item())
 te, tr = wall(eager_once), wall(replay_once)
 step.dispose()
+# The inference form (docs/INFER.md Step 6): torch.compiled(model) — eval, the folds,
+# the no_grad forward recorded — against the plain eval forward, to a rounding (the
+# fold contracts each batch norm into its convolution) and in fewer dispatches.
+m1.eval()
+with torch.no_grad():
+    ref_inf = m1(xb).numpy().copy()
+d_inf0 = int(js.borch.device().dispatches)
+with torch.no_grad():
+    m1(xb).numpy()
+eager_inf_dispatches = int(js.borch.device().dispatches) - d_inf0
+infer = torch.compiled(m1)
+got_inf = infer(xb).numpy().copy()
+got_inf2 = infer(xb).numpy().copy()
+inf_rel = float(np.abs(ref_inf - got_inf).max() / (np.abs(ref_inf).max() + 1e-6))
+inf_same = float(np.abs(got_inf - got_inf2).max())
+inf_dispatches = infer._records[next(iter(infer._records))][0].dispatches
+infer.dispose()
+m1.train()
 # torch.compiled: the same step as a wrapped function, over batches of two shapes —
 # ninety rows in sixteens leave a batch of ten — against the eager run of the same
 # sequence. Bit for bit (no fusion), two recordings.
@@ -164,6 +182,7 @@ access = f"access unet exact {cov['exact']} declared {cov['declared']} guessed {
 MB = 1048576
 hz = step.horizontal(); ghz = grun_plain_horizontal
 access += f" · horizontal unet runs {hz['runs']} dispatches {hz['dispatches']} largest {hz['largest']} buffers {hz['buffersMax']} · gpt runs {ghz['runs']} dispatches {ghz['dispatches']} largest {ghz['largest']} buffers {ghz['buffersMax']}"
+access += f" · inference compiled(model) rel {inf_rel:.1e} replay-same {inf_same:.1e} dispatches {inf_dispatches} vs eager {eager_inf_dispatches}"
 access += f" · plan unet moved {upl['moved']} released {upl['released']} {upl['bytesBefore']/MB:.1f}MB→{upl['bytesAfter']/MB:.1f}MB in {upl['arenas']} arenas (kept liveIn {upl['kept']['liveIn']} subRange {upl['kept']['subRange']}) held {held0/MB:.1f}MB→{held1/MB:.1f}MB · plan gpt fused moved {gpl['moved']} released {gpl['released']} {gpl['bytesBefore']/MB:.1f}MB→{gpl['bytesAfter']/MB:.1f}MB in {gpl['arenas']} arenas"
 f"capture: {STEPS} steps · max |Δloss| {d_loss:.1e} · max |Δparam| {d_w:.1e} · {step.dispatches} dispatches a replay · {access} · eager {te:.1f} ms · replay {tr:.1f} ms a step · compiled two shapes: recordings {shapes} max |Δloss| {d_compiled:.1e} max |Δparam| {d_cw:.1e} · gpt compiled plain rel|Δloss| {gres[False][0]:.1e} rel|Δparam| {gres[False][1]:.1e} {gres[False][2]} dispatches, fused rel|Δloss| {gres[True][0]:.1e} rel|Δparam| {gres[True][1]:.1e} {gres[True][2]} dispatches · check=True passed on {gres[False][3]} live-ins · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
 \`);

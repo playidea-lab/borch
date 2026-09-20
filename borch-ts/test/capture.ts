@@ -15,7 +15,7 @@ import { SGD } from "../src/optim.js";
 import { type CheckReport, compiled } from "../src/compile.js";
 import { Device } from "../src/device.js";
 import { streamTrainStep, type TrainBlock } from "../src/stream_train.js";
-import { device, keepAlive, scope, Tensor } from "../src/tensor.js";
+import { device, keepAlive, noGrad, scope, Tensor } from "../src/tensor.js";
 import { ResNet18 } from "./bench.js";
 
 interface Check { name: string; ok: boolean; note: string }
@@ -29,6 +29,14 @@ function want(name: string, ok: boolean, note = ""): void {
 function seeded(seed: number): () => number {
   let s = seed >>> 0;
   return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 0x100000000; };
+}
+
+/** `n` seeded values in `(−scale/2, scale/2)`. */
+function array(n: number, seed: number, scale: number): Float32Array {
+  const next = seeded(seed);
+  const a = new Float32Array(n);
+  for (let i = 0; i < n; i++) a[i] = (next() - 0.5) * scale;
+  return a;
 }
 
 function batch(next: () => number, n: number, feats: number, classes: number): { x: Float32Array; y: Float32Array } {
@@ -182,12 +190,6 @@ async function resnet(lines: string[]): Promise<void> {
  */
 async function streamed(lines: string[]): Promise<void> {
   const D = 32, BLOCKS = 4, R = 4, BATCH = 8, STEPS = 3;
-  const array = (n: number, seed: number, scale: number): Float32Array => {
-    const next = seeded(seed);
-    const a = new Float32Array(n);
-    for (let i = 0; i < n; i++) a[i] = (next() - 0.5) * scale;
-    return a;
-  };
   const bases = Array.from({ length: BLOCKS }, (_, i) => array(D * D, 1000 + i, 0.5));
   const inputs = Array.from({ length: STEPS }, (_, s) => array(BATCH * D, 42 + s, 2));
   const make = (): { blocks: TrainBlock[]; params: Tensor[] } => {
@@ -257,11 +259,72 @@ async function streamed(lines: string[]): Promise<void> {
   winE.free(); winC.free();
 }
 
+const maxAbs = (a: Float32Array, b: Float32Array): number => {
+  let m = 0;
+  for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs((a[i] as number) - (b[i] as number)));
+  return m;
+};
+
+/**
+ * `compiled(model)` — the inference form (`docs/INFER.md` Step 6): eval, the folds, the
+ * `noGrad` forward recorded. Held two ways: a model with its own `fuse()` (the ResNet-18)
+ * gives the hand-fused eager forward bit for bit; a plain `Sequential` is folded by the
+ * generic pass — `Conv → BN → ReLU → Conv → BN` becomes `ConvReLU2d → Conv2d` — and gives
+ * the unfused eval forward to a rounding in fewer dispatches.
+ */
+async function inference(lines: string[]): Promise<void> {
+  const x = Tensor.from(array(16 * 3 * 32 * 32, 77, 2), [16, 3, 32, 32]);
+  nn.manualSeed(3);
+  const byHand = new ResNet18();
+  nn.manualSeed(3);
+  const byCall = new ResNet18();
+  byHand.eval();
+  byHand.fuse();
+  const ref = await noGrad(() => byHand.forward(x)).toArray();
+  const step = compiled(byCall);
+  const got = await (await step.call(x)).toArray();
+  const again = await (await step.call(x)).toArray();
+  const rec = step.recordingOf(x);
+  want("compiled(model) on a model with its own fuse() is the hand-fused eval forward, bit for bit",
+    maxAbs(ref, got) === 0 && maxAbs(got, again) === 0, `max |Δ| ${maxAbs(ref, got).toExponential(1)} · ${rec ? rec.dispatches : 0} dispatches a replay`);
+  step.dispose();
+
+  const xs = Tensor.from(array(8 * 3 * 16 * 16, 78, 2), [8, 3, 16, 16]);
+  nn.manualSeed(5);
+  const seq = new nn.Sequential(
+    new nn.Conv2d(3, 8, 3, 1, 1), new nn.BatchNorm2d(8), new nn.ReLU(),
+    new nn.Conv2d(8, 8, 3, 1, 1), new nn.BatchNorm2d(8));
+  // Running statistics worth folding: a few training-mode forwards move them off 0 / 1.
+  for (let i = 0; i < 3; i++) await scope(async () => { await seq.forward(Tensor.from(array(8 * 3 * 16 * 16, 90 + i, 2), [8, 3, 16, 16])).toArray(); });
+  seq.eval();
+  const refSeq = await noGrad(() => seq.forward(xs)).toArray();
+  const d0 = device().dispatches;
+  await noGrad(() => seq.forward(xs)).toArray();
+  const eagerDispatches = device().dispatches - d0;
+  const cs = compiled(seq);
+  const gotSeq = await (await cs.call(xs)).toArray();
+  // Relative to the output's scale, not per element: a fold that rounds once where the
+  // eager path rounded twice differs by 1e-7 on a value near zero, which per element is
+  // not a rounding but a ratio of two small numbers (measured: 7e-4 that way, 0 this way).
+  let scale = 0;
+  for (let i = 0; i < refSeq.length; i++) scale = Math.max(scale, Math.abs(refSeq[i] as number));
+  const rel = maxAbs(refSeq, gotSeq) / (scale + 1e-6);
+  const recSeq = cs.recordingOf(xs);
+  const kinds = seq.children().map((c) => c.constructor.name).join(" → ");
+  want("compiled(model) folds a Sequential's Conv→BN→ReLU into ConvReLU2d and gives the eval forward to a rounding",
+    rel <= 1e-5 && kinds === "ConvReLU2d → Conv2d", `rel ${rel.toExponential(1)} · ${kinds}`);
+  want("the folded Sequential replays in fewer dispatches than its eager eval forward",
+    !!recSeq && recSeq.dispatches < eagerDispatches, `${recSeq ? recSeq.dispatches : 0} a replay against ${eagerDispatches} eager`);
+  lines.push(`compiled(model): ResNet-18 ${rec ? rec.dispatches : 0} dispatches a replay · Sequential ${kinds}, ${recSeq ? recSeq.dispatches : 0} against ${eagerDispatches} eager`);
+  cs.dispose();
+}
+
 export async function report(): Promise<Report> {
   const lines: string[] = [];
   await mlp();
   await resnet(lines);
   await streamed(lines);
+  await inference(lines);
   const faults = device().faults.count;
   want("no WebGPU faults", faults === 0, `${faults}`);
   const failed = checks.filter((c) => !c.ok);

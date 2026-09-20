@@ -200,6 +200,17 @@ export abstract class Module {
   }
 
   /**
+   * Folds this module's eval-only pairs in place — a batch norm into the convolution
+   * before it, a relu into that convolution's epilogue — where the structure makes the
+   * pairing certain: inside a `Sequential`, where the order is the list. A module that
+   * knows its own pairs (a residual block, whose add is in its forward) overrides
+   * `fuse()` instead; `fuseForInference` prefers that. Recurses into the children.
+   */
+  fuseEval(): void {
+    for (const child of this.children()) fuseForInference(child);
+  }
+
+  /**
    * The whole tree with dotted names, **this module first and named `""`.**
    *
    * `children` is one level and this is every level — a difference invisible on a
@@ -550,6 +561,33 @@ export class Sequential extends Module {
   constructor(...layers: readonly (Module | readonly Module[])[]) {
     super();
     this.layers = layers.flatMap((l) => (Array.isArray(l) ? [...l] : [l as Module]));
+  }
+
+  /**
+   * The `Sequential` fold: `Conv → BatchNorm` becomes one convolution
+   * (`fuseConvBnEval`, the norm's affine in the weights), then `Conv → ReLU` becomes
+   * `ConvReLU2d` (the relu in the convolution's epilogue). Eval only — the fold reads
+   * the running statistics — and in place: the list is rewritten. Then the children.
+   */
+  override fuseEval(): void {
+    const out: Module[] = [];
+    for (let i = 0; i < this.layers.length; i++) {
+      let layer = this.layers[i] as Module;
+      const next = this.layers[i + 1];
+      if (layer instanceof ConvND && next instanceof BatchNormND && !layer.training && !next.training) {
+        layer = fuseConvBnEval(layer, next);
+        i++;
+      }
+      const after = this.layers[i + 1];
+      if (layer instanceof ConvND && layer.weight.shape.length === 4 && after instanceof ReLU) {
+        out.push(new ConvReLU2d(layer));
+        i++;
+        continue;
+      }
+      out.push(layer);
+    }
+    this.layers.splice(0, this.layers.length, ...out);
+    for (const child of this.layers) fuseForInference(child);
   }
 
   override children(): Module[] {
@@ -6636,6 +6674,18 @@ export class ConvAddReLU2d extends Module {
     const c = convConfig(this.conv);
     return x.convNDFused(this.conv.weight, this.conv.bias, c.stride, c.padding, c.dilation, c.groups, true, residual);
   }
+}
+
+/**
+ * The whole model folded for inference: a module that defines its own `fuse()` (a
+ * residual block, whose add is in its forward and which no container can see) is
+ * asked; any other module folds its `Sequential`s and recurses (`Module.fuseEval`).
+ * What `torch.compiled(model)` runs before it records (`docs/INFER.md` Step 6).
+ */
+export function fuseForInference(m: Module): void {
+  const own = (m as unknown as { fuse?: () => void }).fuse;
+  if (typeof own === "function") { own.call(m); return; }
+  m.fuseEval();
 }
 
 /** The place `torch.ao.nn.intrinsic` occupies. */

@@ -988,6 +988,36 @@ class compiled:
     """
 
     def __init__(self, fn, fuse=True, plan=True, check=False, tol=1e-5, state_tol=1e-2):
+        from . import _nn                                      # noqa: PLC0415 — `_nn` imports this module
+        if isinstance(fn, _nn.Module):
+            # **A module is the inference form** (docs/INFER.md Step 6): eval mode, the
+            # batch norms folded into their convolutions and the relus into their
+            # epilogues, and its `no_grad` forward recorded. The fold: a module's own
+            # `fuse()` where it defines one (a residual block knows its add), borch.ts's
+            # `Sequential` pass where a module is borch.ts-backed, and otherwise down
+            # into the children — a Python-defined U-Net of binding `Sequential`s folds
+            # each of them.
+            model = fn
+            model.eval()
+
+            def fold(m):
+                if callable(getattr(m, "fuse", None)):
+                    m.fuse()
+                elif getattr(m, "_m", None) is not None:
+                    _ts.nn.fuseForInference(m._m)
+                else:
+                    for child in getattr(m, "_children", lambda: [])():
+                        c = child[1] if isinstance(child, tuple) else child
+                        # A layer, a binding container (`Sequential`, a holder) or a
+                        # Python module — anything with a fold, a handle or children.
+                        if callable(getattr(c, "fuse", None)) or getattr(c, "_m", None) is not None \
+                                or callable(getattr(c, "_children", None)):
+                            fold(c)
+            fold(model)
+
+            def fn(x):
+                with no_grad():
+                    return model(x)
         self._fn = fn
         self._fuse = fuse
         self._plan = plan             # intermediates laid into arenas after recording (`capture.plan`)
