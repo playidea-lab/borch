@@ -33,25 +33,38 @@ PROBE = r"""async (SZ) => {
   const feats = ["subgroups", "chromium-experimental-subgroup-matrix"];
   const device = await adapter.requestDevice({ requiredFeatures: feats });
   const { M, N, K } = cfg;
-  const W = SZ / 4;                      // packed words a row
-  const source = (arr) => `enable subgroups;
+  // **The load semantics are the unknown.** The first run compiled and ran at 26 TOPS and
+  // every entry was wrong (2026-09-20): the proposal's text leaves the offset and stride of
+  // an 8-bit load — words of the packed array, or components — and the order of the type's
+  // dimensions to be read carefully, and a wrong reading is a fast wrong answer. So the
+  // probe sweeps the readings on a small size against a CPU reference, then times the
+  // reading that is exact.
+  const variants = [];
+  for (const arr of ["i32", "u32"]) for (const units of ["words", "elems"]) for (const order of ["KM", "MK"]) variants.push({ arr, units, order });
+  const source = (v, SZ) => {
+    const div = v.units === "words" ? "/ 4u" : "";
+    const stride = v.units === "words" ? SZ / 4 : SZ;
+    const L = v.order === "KM" ? `subgroup_matrix_left<i8, ${K}, ${M}>` : `subgroup_matrix_left<i8, ${M}, ${K}>`;
+    const R = v.order === "KM" ? `subgroup_matrix_right<i8, ${N}, ${K}>` : `subgroup_matrix_right<i8, ${K}, ${N}>`;
+    const Cm = v.order === "KM" ? `subgroup_matrix_result<i32, ${N}, ${M}>` : `subgroup_matrix_result<i32, ${M}, ${N}>`;
+    return `enable subgroups;
 enable chromium_experimental_subgroup_matrix;
-@group(0) @binding(0) var<storage, read> A: array<${arr}>;
-@group(0) @binding(1) var<storage, read> B: array<${arr}>;
+@group(0) @binding(0) var<storage, read> A: array<${v.arr}>;
+@group(0) @binding(1) var<storage, read> B: array<${v.arr}>;
 @group(0) @binding(2) var<storage, read_write> C: array<i32>;
 @compute @workgroup_size(32)
 fn main(@builtin(workgroup_id) wid: vec3<u32>) {
   let col0 = wid.x * 32u;
   let row0 = wid.y * 32u;
-  var c00: subgroup_matrix_result<i32, ${N}, ${M}>;
-  var c01: subgroup_matrix_result<i32, ${N}, ${M}>;
-  var c10: subgroup_matrix_result<i32, ${N}, ${M}>;
-  var c11: subgroup_matrix_result<i32, ${N}, ${M}>;
+  var c00: ${Cm};
+  var c01: ${Cm};
+  var c10: ${Cm};
+  var c11: ${Cm};
   for (var k = 0u; k < ${SZ}u; k = k + ${K}u) {
-    let a0 = subgroupMatrixLoad<subgroup_matrix_left<i8, ${K}, ${M}>>(&A, (row0 * ${SZ}u + k) / 4u, false, ${W}u);
-    let a1 = subgroupMatrixLoad<subgroup_matrix_left<i8, ${K}, ${M}>>(&A, ((row0 + ${M}u) * ${SZ}u + k) / 4u, false, ${W}u);
-    let b0 = subgroupMatrixLoad<subgroup_matrix_right<i8, ${N}, ${K}>>(&B, (k * ${SZ}u + col0) / 4u, false, ${W}u);
-    let b1 = subgroupMatrixLoad<subgroup_matrix_right<i8, ${N}, ${K}>>(&B, (k * ${SZ}u + col0 + ${N}u) / 4u, false, ${W}u);
+    let a0 = subgroupMatrixLoad<${L}>(&A, (row0 * ${SZ}u + k) ${div}, false, ${stride}u);
+    let a1 = subgroupMatrixLoad<${L}>(&A, ((row0 + ${M}u) * ${SZ}u + k) ${div}, false, ${stride}u);
+    let b0 = subgroupMatrixLoad<${R}>(&B, (k * ${SZ}u + col0) ${div}, false, ${stride}u);
+    let b1 = subgroupMatrixLoad<${R}>(&B, (k * ${SZ}u + col0 + ${N}u) ${div}, false, ${stride}u);
     c00 = subgroupMatrixMultiplyAccumulate(a0, b0, c00);
     c01 = subgroupMatrixMultiplyAccumulate(a0, b1, c01);
     c10 = subgroupMatrixMultiplyAccumulate(a1, b0, c10);
@@ -62,11 +75,10 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>) {
   subgroupMatrixStore(&C, (row0 + ${M}u) * ${SZ}u + col0, c10, false, ${SZ}u);
   subgroupMatrixStore(&C, (row0 + ${M}u) * ${SZ}u + col0 + ${N}u, c11, false, ${SZ}u);
 }`;
-  const tried = [];
-  let pipeline = null, used = null;
-  for (const arr of ["i32", "u32"]) {
+  };
+  const compile = async (code) => {
     device.pushErrorScope("validation");
-    const module = device.createShaderModule({ code: source(arr) });
+    const module = device.createShaderModule({ code });
     const msgs = (await module.getCompilationInfo()).messages.filter((m) => m.type === "error").map((m) => `${m.lineNum}:${m.linePos} ${m.message}`);
     let p = null;
     if (msgs.length === 0) {
@@ -74,24 +86,21 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>) {
     }
     const err = await device.popErrorScope();
     if (err) msgs.push(err.message);
-    tried.push({ array: arr, errors: msgs.slice(0, 3) });
-    if (msgs.length === 0 && p) { pipeline = p; used = arr; break; }
-  }
-  if (!pipeline) return { error: "no variant compiled", tried, cfg, adapter: `${info.vendor} / ${info.architecture}` };
-  // Operands: int8 in [-8, 8), packed four to a word, row-major.
-  const words = SZ * SZ / 4;
-  const packA = new Int32Array(words), packB = new Int32Array(words);
-  const a8 = new Int8Array(SZ * SZ), b8 = new Int8Array(SZ * SZ);
-  let s = 12345 >>> 0;
-  const next = () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s; };
-  for (let i = 0; i < SZ * SZ; i++) { a8[i] = (next() % 16) - 8; b8[i] = (next() % 16) - 8; }
-  new Int8Array(packA.buffer).set(a8); new Int8Array(packB.buffer).set(b8);
-  const mk = (data, usage) => { const b = device.createBuffer({ size: data.byteLength, usage }); device.queue.writeBuffer(b, 0, data); return b; };
-  const bufA = mk(packA, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  const bufB = mk(packB, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  const bufC = device.createBuffer({ size: SZ * SZ * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-  const bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: bufA } }, { binding: 1, resource: { buffer: bufB } }, { binding: 2, resource: { buffer: bufC } }] });
-  const run = (n) => {
+    return { pipeline: msgs.length === 0 ? p : null, errors: msgs.slice(0, 2) };
+  };
+  const operands = (SZ) => {
+    const a8 = new Int8Array(SZ * SZ), b8 = new Int8Array(SZ * SZ);
+    let s = 12345 >>> 0;
+    const next = () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s; };
+    for (let i = 0; i < SZ * SZ; i++) { a8[i] = (next() % 16) - 8; b8[i] = (next() % 16) - 8; }
+    const mk = (bytes, usage) => { const b = device.createBuffer({ size: bytes.byteLength, usage }); device.queue.writeBuffer(b, 0, bytes); return b; };
+    return { a8, b8,
+      bufA: mk(a8, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST),
+      bufB: mk(b8, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST),
+      bufC: device.createBuffer({ size: SZ * SZ * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC }) };
+  };
+  const dispatch = (pipeline, op, SZ, n) => {
+    const bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: op.bufA } }, { binding: 1, resource: { buffer: op.bufB } }, { binding: 2, resource: { buffer: op.bufC } }] });
     const enc = device.createCommandEncoder();
     const pass = enc.beginComputePass();
     pass.setPipeline(pipeline); pass.setBindGroup(0, bind);
@@ -100,28 +109,52 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>) {
     device.queue.submit([enc.finish()]);
     return device.queue.onSubmittedWorkDone();
   };
-  device.pushErrorScope("validation");
-  await run(5);
-  const fault = await device.popErrorScope();
-  if (fault) return { error: "dispatch faulted: " + fault.message, used, cfg };
+  const readC = async (op, SZ) => {
+    const stage = device.createBuffer({ size: SZ * SZ * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = device.createCommandEncoder(); enc.copyBufferToBuffer(op.bufC, 0, stage, 0, SZ * SZ * 4); device.queue.submit([enc.finish()]);
+    await stage.mapAsync(GPUMapMode.READ);
+    const C = new Int32Array(stage.getMappedRange().slice(0));
+    stage.unmap(); stage.destroy();
+    return C;
+  };
+  const check = (op, C, SZ) => {
+    const out = [];
+    for (const [r, c] of [[0, 0], [17, 33], [SZ - 1, SZ - 1], [SZ / 2 + 1, SZ / 4 + 1]]) {
+      let acc = 0;
+      for (let k = 0; k < SZ; k++) acc += op.a8[r * SZ + k] * op.b8[k * SZ + c];
+      out.push({ r, c, cpu: acc, gpu: C[r * SZ + c], ok: acc === C[r * SZ + c] });
+    }
+    return out;
+  };
+  // The sweep, small: which reading is exact.
+  const SMALL = 128;
+  const small = operands(SMALL);
+  const tried = [];
+  let exact = null;
+  for (const v of variants) {
+    const { pipeline, errors } = await compile(source(v, SMALL));
+    if (!pipeline) { tried.push({ ...v, errors }); continue; }
+    device.pushErrorScope("validation");
+    await dispatch(pipeline, small, SMALL, 1);
+    const fault = await device.popErrorScope();
+    if (fault) { tried.push({ ...v, fault: fault.message.slice(0, 120) }); continue; }
+    const checks = check(small, await readC(small, SMALL), SMALL);
+    const ok = checks.every((c) => c.ok);
+    tried.push({ ...v, exact: ok, sample: checks.slice(0, 2).map((c) => `${c.cpu}/${c.gpu}`) });
+    if (ok && !exact) exact = v;
+  }
+  if (!exact) return { error: "no reading of the 8-bit load is exact", tried, cfg, adapter: `${info.vendor} / ${info.architecture}` };
+  // The exact reading, timed at the asked size.
+  const { pipeline } = await compile(source(exact, SZ));
+  const op = operands(SZ);
+  await dispatch(pipeline, op, SZ, 5);
   const ITERS = 30;
   const t0 = performance.now();
-  await run(ITERS);
+  await dispatch(pipeline, op, SZ, ITERS);
   const ms = (performance.now() - t0) / ITERS;
   const tops = 2 * SZ * SZ * SZ / (ms / 1000) / 1e12;
-  // Four entries against a CPU reference, exact integers.
-  const stage = device.createBuffer({ size: SZ * SZ * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  const enc = device.createCommandEncoder(); enc.copyBufferToBuffer(bufC, 0, stage, 0, SZ * SZ * 4); device.queue.submit([enc.finish()]);
-  await stage.mapAsync(GPUMapMode.READ);
-  const C = new Int32Array(stage.getMappedRange().slice(0));
-  stage.unmap();
-  const checks = [];
-  for (const [r, c] of [[0, 0], [17, 33], [SZ - 1, SZ - 1], [513, 257]]) {
-    let acc = 0;
-    for (let k = 0; k < SZ; k++) acc += a8[r * SZ + k] * b8[k * SZ + c];
-    checks.push({ r, c, cpu: acc, gpu: C[r * SZ + c], ok: acc === C[r * SZ + c] });
-  }
-  return { adapter: `${info.vendor} / ${info.architecture}`, cfg, used, size: SZ, msPerGemm: Math.round(ms * 1000) / 1000, tops: Math.round(tops * 100) / 100, checks, tried };
+  const checks = check(op, await readC(op, SZ), SZ);
+  return { adapter: `${info.vendor} / ${info.architecture}`, cfg, exact, size: SZ, msPerGemm: Math.round(ms * 1000) / 1000, tops: Math.round(tops * 100) / 100, checks, tried };
 }"""
 
 
