@@ -213,6 +213,7 @@ async function calibrateKicks(device: GPUDevice): Promise<boolean> {
   const kicked = await median(true);
   for (const b of bufs) b.destroy();
   stage.destroy();
+  Device.kickCalibration = { plainMs: plain, kickedMs: kicked };
   return plain > KICK_PROBE_FLOOR_MS && plain > KICK_PROBE_RATIO * kicked;
 }
 
@@ -933,6 +934,10 @@ export class Device {
    * there is only chatter — which is why it is measured rather than assumed.
    */
   static readbackKicks = false;
+
+  /** What `calibrateKicks` measured, ms — so a table can print the two numbers the
+   *  decision came from rather than only the decision. */
+  static kickCalibration: { plainMs: number; kickedMs: number } = { plainMs: 0, kickedMs: 0 };
 
   /**
    * Waits for `pending` — a map or `onSubmittedWorkDone` — kicking the wire until it

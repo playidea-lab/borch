@@ -172,7 +172,8 @@ PROBE = r"""async () => {
     rows["borch matmul 2048³ .sum().toArray()"] = await time(async () => { await A.matmul(B).sum().toArray(); });
     rows["borch matmul 2048³ then keepAlive toArray()"] = await time(async () => { A.matmul(B); await k.toArray(); });
     rows["borch matmul 2048³, synchronize(), keepAlive toArray()"] = await time(async () => { A.matmul(B); await dev.synchronize(); await k.toArray(); });
-    borch = `${bt.Device.adapterInfo} · readbackKicks ${bt.Device.readbackKicks}`;
+    const cal = bt.Device.kickCalibration;
+    borch = `${bt.Device.adapterInfo} · readbackKicks ${bt.Device.readbackKicks} (calibration plain ${cal.plainMs.toFixed(2)} / kicked ${cal.kickedMs.toFixed(2)} ms)`;
   } catch (e) { rows["borch"] = { error: String(e).slice(0, 200) }; }
   return { adapter: `${info.vendor} / ${info.architecture}`, borch, reps: REPS, rows };
 }"""
