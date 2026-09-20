@@ -1947,6 +1947,9 @@ prints the adapter:
 | `nvidia / blackwell`, **2026-09-20 (night)**, the readback kicked — borch.ts | **13.1** | **17.4** | **28.2** |
 | `nvidia / blackwell`, same run — TF.js 4.22.0 | 74.4 | 121.9 | 233.5 |
 | ratio | **5.7×** | **7.0×** | **8.3×** |
+| `nvidia / blackwell`, **2026-09-21**, the scalar conv path swept on the card — borch.ts | **10.6** | **14.7** | **23.2** |
+| `nvidia / blackwell`, same run — TF.js 4.22.0 | 75.4 | 122.0 | 236.7 |
+| ratio | **7.1×** | **8.3×** | **10.2×** |
 
 The 2026-09-19 rows are the same page and the same TF.js bytes sixteen days later: TF.js
 did not move (86.4 → 86.5) and borch.ts went from 38.6 to 21.2 ms at batch 16 — the
@@ -2045,6 +2048,9 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused + captured, `nvidia / blackwell`, **2026-09-20 (night)**, the readback kicked (`Device.readbackKicks`) | | **0.98–0.99 ms** | **2.61–2.66 ms** |
 | ONNX Runtime Web 1.29.0, same runs | | 3.65–3.88 ms | 3.63–3.89 ms |
 | ORT is faster than the captured network by | | 0.26× — borch ahead | **0.68–0.73×** — borch ahead |
+| borch.ts fused + captured, `nvidia / blackwell`, **2026-09-21**, the scalar conv path swept on the card (`docs/INFER.md` ledger) | | **0.65 ms** | **1.74 ms** |
+| ONNX Runtime Web 1.29.0, same run | | 3.51 ms | 3.62 ms |
+| ORT is faster than the captured network by | | 0.19× — borch ahead | **0.48×** — borch ahead |
 
 **The NVIDIA rows are a different kernel set.** On the RTX 5080 through Chrome 151 and
 Vulkan, `chromium-experimental-subgroup-matrix` is present but its configurations are
@@ -2066,9 +2072,13 @@ forward, so the library calibrates it once per device (`Device.readbackKicks`, t
 adapter line of every table carries the decision) and kicks only where the browser needs
 it. The night rows are that: **the captured forward 0.98 ms at batch 1 and 2.61 at batch
 16 on the 5080, ahead of ORT at both**, and the training step 13.1 / 17.4 / 28.2 — the
-batch-64 step had been waiting more than once. What remains on that card is the GPU time
-itself, on scalar kernels; the int8 configuration it has (`docs/INT8.md`) would apply to
-that, no longer to a gap.
+batch-64 step had been waiting more than once. What remained on that card was the GPU
+time itself, on scalar kernels whose every constant had been chosen on the M4 Max; the
+next day's sweep of those constants on the card (`kernel_bench fwd --sweep=all`: the
+reduction split 4 → 32 pieces on the deep layers, the direct kernel's weight slice let
+grow to the card's 48 KiB, small direct grids sent to the split GEMM) took the captured
+forward to **0.65 / 1.74 ms** and the training step to 10.6 / 14.7 / 23.2. The int8
+configuration it has (`docs/INT8.md`) would apply to what is left of that GPU time.
 
 The 2026-09-20 rows are `torch.compiled` pointed at the fused network's `noGrad` forward
 (`docs/INFER.md` Step 1): the JavaScript that encodes the thirty-eight dispatches is paid

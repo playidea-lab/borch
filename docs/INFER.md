@@ -423,6 +423,39 @@ prediction is written down so that the ledger can say which step was wrong.
   the probe where the same call followed by a readback reads 1.2 — not understood, and
   no bench uses that path.
 
+- **2026-09-21, the scalar kernels swept on the second adapter — Step 5's other half.**
+  With the stall gone the 5080's captured forward was 2.61 ms of which 2.9 was GPU, and
+  the two deep layers ran at 1.8 TFLOP/s on `cnt` where the same card's scalar GEMM does
+  15.8: every constant in the scalar conv path had been chosen on the M4 Max. `kernel_bench
+  fwd` gained the tiled kernel and a sweep (`--sweep=splits|tiles|direct|all`, the split
+  and tile forced through globals only the bench sets), and the sweep decided three
+  things, each a number on both adapters:
+  - **The split policy** (`convForwardSplit`): 128 tiles wanted and pieces of 256 → **1024
+    and 128**. 512 → 512 at 4 × 4, batch 16, on the 5080: split 1 0.635 · 2 0.323 · **4
+    0.179 (the policy)** · 8 0.120 · 16 0.110 · 32 0.100 ms; metal-3 4 0.437 → 16 0.315.
+    64 × 64 won every tile sweep. In the step, the two deep layers 0.68 → 0.38 each;
+    forward 2.61 → 2.33, batch 1 0.98 → 0.85, training 13.1 / 17.4 / 28.2 → 11.6 / 15.0 /
+    24.7.
+  - **The direct kernel's weight slice** (`setDirectWeightBytes`): capped at WebGPU's
+    16 KiB floor, a 128-channel layer's slice was three; at the device's 48 KiB it is
+    eight — 128 → 128 at 16 × 16, batch 16: 0.146 → **0.093** on the 5080, a wash on
+    metal-3's 32 KiB (0.264 / 0.272).
+  - **Small direct grids go to the split GEMM** (`directGridFills`, 64 workgroups): at
+    batch 1 the direct kernel's grid is 43 workgroups for 128 → 128 and the tiled kernel
+    split sixteen is 0.027 against 0.042; the stride-2 128 → 256 layer at batch 16 (a grid
+    of 32) 0.33 → 0.08 in the step.
+
+  **Held**: `capture:ts` 18 / 18 on both adapters; `compare:ts` on the 5080: **fused +
+  captured 0.65 ms at batch 1 (ORT 3.51, 0.19×) and 1.74 at batch 16 (ORT 3.62,
+  0.48×)**; training 10.6 / 14.7 / 23.2 ms at batch 16 / 32 / 64 (TF.js 75.4 / 122.0 /
+  236.7 — 7.1× / 8.3× / 10.2×). metal-3 unchanged (4.1 / 1.1; its deep layers are on the
+  subgroup kernels). The prediction written before the sweep was "forward 2.61 → ~1.7";
+  it landed at 1.74. What is left on the 5080's GPU time at batch 16 (1.9 ms): the two
+  deep layers at 0.37 each — now 3.3 TFLOP/s against the card's 15.8, and the in-step
+  profiler reads them at 3.5× the bench's 0.107, a discrepancy the bench's own note
+  ("about twice") no longer covers and that is the next thing to understand; the
+  64-channel layers on the direct kernel at 0.19 each.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |
