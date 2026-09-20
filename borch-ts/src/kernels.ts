@@ -4966,6 +4966,9 @@ ${flatId(n)}
  * split: 1.9 ms for that layer on a 4090, about 1 % of the card's peak.
  */
 export function convForwardSplit(s: ConvNDShape): number {
+  // A bench sweep may force the count (`kernel_bench fwd`); nothing else sets it.
+  const forced = (globalThis as { BORCH_CONV_SPLITS?: number }).BORCH_CONV_SPLITS;
+  if (forced) return forced;
   const { groups, cin, cout } = grouped(s);
   const P = s.N * s.outDims.reduce((a, b) => a * b, 1);
   const tiles = tileCount(cout, P) * groups;
@@ -5072,6 +5075,10 @@ export function isDepthwise(s: ConvNDShape): boolean {
  * padding wins; a tie goes to the square.
  */
 export function tileShape(M: number, N: number): { TM: number; TN: number } {
+  // A bench sweep may force the tile (`kernel_bench fwd`, the `cnt` variants); nothing
+  // else sets it.
+  const forced = (globalThis as { BORCH_CONV_TILE?: string }).BORCH_CONV_TILE;
+  if (forced) { const [tm, tn] = forced.split("x").map(Number); return { TM: tm ?? 64, TN: tn ?? 64 }; }
   let best = { TM: 64, TN: 64 };
   let least = Math.ceil(M / 64) * Math.ceil(N / 64) * 4096;
   for (const [TM, TN] of [[32, 128], [16, 256]] as const) {

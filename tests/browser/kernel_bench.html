@@ -83,6 +83,29 @@ const BENCHES = {
       runs.push({ name: "subgroup (pad + layout counted)", key: `cnf:${sh.name}`, make: () => K.convForwardSubgroup(s, true), extraKeys: [`pdw:${sh.name}`, `tmw:${sh.name}`], outb: Out2,
         run: () => { dev.run1d(dev.pipeline(`pdw:${sh.name}`, () => K.padForGradWeight(s)), [X, Xp], Math.ceil(pn / 4)); dev.run1d(dev.pipeline(`tmw:${sh.name}`, () => K.tapMajorWeights(sh.O, sh.C, 9, false, true)), [W, B, Wt], 9 * Mp * Cp + Mp * 8); dev.run(dev.pipeline(`cnf:${sh.name}`, () => K.convForwardSubgroup(s, true)), [Xp, Wt, One, Out2], K.sgfGrid(s)); } });
     }
+    // **The tiled implicit GEMM (`cnt`), swept.** The path the deep layers take on an
+    // adapter without f32 subgroup matrices (the RTX 5080): the reduction split and the
+    // tile forced through `BORCH_CONV_SPLITS` / `BORCH_CONV_TILE`, which only this bench
+    // sets, so the policy's choice can be read against every other. `--sweep=splits`
+    // adds the split ladder, `--sweep=tiles` the three tile shapes, `--sweep=all` both.
+    const sweep = q.get("sweep") || "";
+    const cnt = (label, splits, tile) => {
+      const set = () => { globalThis.BORCH_CONV_SPLITS = splits; globalThis.BORCH_CONV_TILE = tile; };
+      const unset = () => { delete globalThis.BORCH_CONV_SPLITS; delete globalThis.BORCH_CONV_TILE; };
+      set(); const sp = K.convForwardSplit(s); const grid = K.convTiledGrid(s); unset();
+      const key = `cnt:${sh.name}:${label}`; const Oc = dev.alloc(m); const parts = sp > 1 ? dev.alloc(m * sp) : null;
+      return { name: `cnt ${label} (split ${sp}${sp > 1 ? ", + sum" : ""})`, key, extraKeys: sp > 1 ? [`ssc:${sh.name}:${label}`] : [], outb: Oc,
+        make: () => { set(); try { return K.convNDForwardTiled(s, true); } finally { unset(); } },
+        run: () => {
+          if (sp === 1) { dev.run(dev.pipeline(key, () => { set(); try { return K.convNDForwardTiled(s, true); } finally { unset(); } }), [X, W, B, Oc], grid); return; }
+          dev.run(dev.pipeline(key, () => { set(); try { return K.convNDForwardTiled(s, false); } finally { unset(); } }), [X, W, parts], grid);
+          dev.run1d(dev.pipeline(`ssc:${sh.name}:${label}`, () => K.sumSplitsConv(s, sp, true)), [parts, B, Oc], m);
+        } };
+    };
+    runs.push(cnt("policy", undefined, undefined));
+    if (sweep === "splits" || sweep === "all") for (const sp of [1, 2, 4, 8, 16, 32]) runs.push(cnt(`s${sp}`, sp, undefined));
+    if (sweep === "tiles" || sweep === "all") for (const t of ["64x64", "32x128", "16x256"]) runs.push(cnt(`t${t}`, undefined, t));
+    if (sweep === "all") for (const t of ["32x128", "16x256"]) for (const sp of [4, 8, 16]) runs.push(cnt(`t${t}s${sp}`, sp, t));
     return race(runs, m);
   },
   // BatchNorm's apply with x̂ and ReLU — the pass as it runs.
