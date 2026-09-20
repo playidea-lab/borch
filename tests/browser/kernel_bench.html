@@ -4,7 +4,7 @@
   directly — no wheel, no bundle, a rebuild of the TS emit is all a new variant needs.
 
       npm run build:ts
-      npm run bench:kernels -- [--bench=dw,fwd,bn,pad] [--shapes=16-16@96,32-32@48x8]
+      npm run bench:kernels -- [--bench=dw,fwd,bn,pad,mm,mmi8] [--shapes=16-16@96,32-32@48x8]
 
   Each bench times its kernels round-robin, five rounds of twenty dispatches under the
   device's timestamp profiler, and keeps the minimum; a kernel's answer is compared with
@@ -196,6 +196,57 @@ const BENCHES = {
     if (Device.subgroups && K.reduceRowsFits(1, red)) runs.push({ name: `subgroup (${K.REDUCE_SG_GROUP} a row)`, key: `rdsg:${sh.name}`, make: () => K.reduceRowsSubgroup("sum", rows, red), outb: Out2,
       run: () => dev.run(dev.pipeline(`rdsg:${sh.name}`, () => K.reduceRowsSubgroup("sum", rows, red)), [X, Out2], [rows, 1, 1]) });
     return race(runs, rows);
+  },
+  // **The int8 subgroup GEMM** (`docs/INT8.md` Step 1) on an adapter with the `i8 → i32`
+  // configuration: operands random int8 in [-8, 8) packed four to a word, the raw i32
+  // result held to a CPU int32 reference **on every entry** (a wrong reading of the 8-bit
+  // load is a fast wrong answer), the dequantising store held to the same reference
+  // scaled, and both timed against the f32 scalar tile on the same shape — the gate is
+  // exact and ≥ 1.5× the tile. Shapes `--shapes=1024x1024x1024` (M x K x N, whole 32s).
+  async mmi8(sh) {
+    if (sh.M === undefined) throw new Error(`mmi8 wants MxKxN shapes, not ${sh.name}`);
+    if (!Device.subgroupInt8) return "no int8 subgroup-matrix configuration on this adapter — nothing to measure";
+    const { M, Kd, Nd } = sh;
+    if (!K.int8MatmulFits(M, Kd, Nd)) return `shape is not whole 32s — matmulInt8 does not take it`;
+    // Operands, and the reference.
+    const rnd = (n, seed) => { const a = new Int8Array(n); let st = seed; for (let i = 0; i < n; i++) { st = (Math.imul(st, 1664525) + 1013904223) >>> 0; a[i] = (st >>> 28) - 8; } return a; };
+    const a8 = rnd(M * Kd, 7), b8 = rnd(Kd * Nd, 11);
+    const ref = new Int32Array(M * Nd);
+    for (let r = 0; r < M; r++) for (let k = 0; k < Kd; k++) { const av = a8[r * Kd + k]; if (av === 0) continue; const ro = r * Nd, bo = k * Nd; for (let c = 0; c < Nd; c++) ref[ro + c] += av * b8[bo + c]; }
+    const packed = (bytes) => new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const A = dev.alloc(M * Kd / 4); dev.writeWords(A, packed(a8));
+    const B = dev.alloc(Kd * Nd / 4); dev.writeWords(B, packed(b8));
+    const OutI = dev.alloc(M * Nd), OutF = dev.alloc(M * Nd);
+    // Scales — per-tensor activation, per-row weight — and a bias, all random, for the
+    // dequantising store; the reference is scaled the same way on the CPU.
+    const scale = fill(1 + M, 3).map((v) => 0.5 + v), bias = fill(M, 5);
+    const Scale = dev.alloc(1 + M); dev.writeWords(Scale, new Uint32Array(scale.buffer));
+    const Bias = dev.alloc(M); dev.writeWords(Bias, new Uint32Array(bias.buffer));
+    const grid = K.int8MatmulGrid(M, Nd);
+    // Exactness first, every entry.
+    dev.run(dev.pipeline(`mmi8:${sh.name}`, () => K.matmulInt8(M, Kd, Nd)), [A, B, OutI], grid); dev.flush(); await dev.synchronize();
+    const gotI = new Int32Array((await new Tensor(OutI, [M * Nd]).toArray()).buffer);
+    let wrong = 0; for (let i = 0; i < M * Nd; i++) if (gotI[i] !== ref[i]) wrong++;
+    dev.run(dev.pipeline(`mmi8s:${sh.name}`, () => K.matmulInt8(M, Kd, Nd, true)), [A, B, Scale, Bias, OutF], grid); dev.flush(); await dev.synchronize();
+    const gotF = await new Tensor(OutF, [M * Nd]).toArray();
+    let errF = 0, scaleF = 0;
+    for (let r = 0; r < M; r++) for (let c = 0; c < Nd; c++) { const want = Math.fround(Math.fround(Math.fround(ref[r * Nd + c] * scale[0]) * scale[1 + r]) + bias[r]); errF = Math.max(errF, Math.abs(gotF[r * Nd + c] - want)); scaleF = Math.max(scaleF, Math.abs(want)); }
+    const relF = errF / scaleF;
+    // Then the time — the int8 stores against the f32 scalar tile on the same shape.
+    const Af = upload(M * Kd, 1), Bf = upload(Kd * Nd, 2), Of = dev.alloc(M * Nd);
+    const ssplits = K.scalarMatmulSplit(M, Kd, Nd); const Slab = ssplits > 1 ? dev.alloc(M * Nd * ssplits) : Of;
+    const runs = [
+      { name: "int8 subgroup, i32 out", key: `mmi8:${sh.name}`, make: () => K.matmulInt8(M, Kd, Nd), outb: OutI, run: () => dev.run(dev.pipeline(`mmi8:${sh.name}`, () => K.matmulInt8(M, Kd, Nd)), [A, B, OutI], grid) },
+      { name: "int8 subgroup, dequantised f32 out", key: `mmi8s:${sh.name}`, make: () => K.matmulInt8(M, Kd, Nd, true), outb: OutF, run: () => dev.run(dev.pipeline(`mmi8s:${sh.name}`, () => K.matmulInt8(M, Kd, Nd, true)), [A, B, Scale, Bias, OutF], grid) },
+      { name: `f32 scalar tile${ssplits > 1 ? ` split ${ssplits} (+ sum)` : ""}`, key: `mm:${sh.name}`, make: () => K.matmul(M, Kd, Nd, false, false, ssplits), extraKeys: ssplits > 1 ? [`sss:${sh.name}`] : [], outb: Of,
+        run: () => { dev.run(dev.pipeline(`mm:${sh.name}`, () => K.matmul(M, Kd, Nd, false, false, ssplits)), [Af, Bf, Slab], [Math.ceil(Nd / 64), Math.ceil(M / 64), ssplits]); if (ssplits > 1) dev.run1d(dev.pipeline(`sss:${sh.name}`, () => K.sumSplits(M * Nd, ssplits)), [Slab, Of], M * Nd); } },
+    ];
+    const text = (await race(runs, 1)).replace(/ WRONG\([^)]*\)/g, "");   // different outputs: the reference above is the check
+    const tops = (ms) => (2 * M * Kd * Nd / (ms / 1000) / 1e12).toFixed(1);
+    const ratio = (runs[2].best + runs[2].extra) / runs[0].best;
+    return `${text} · ${tops(runs[0].best)} TOPS int8 / ${tops(runs[2].best + runs[2].extra)} TFLOP/s f32 · int8 over the tile ${ratio.toFixed(2)}×`
+      + (wrong ? ` WRONG(${wrong} of ${M * Nd} entries differ from the CPU int32 reference)` : " · i32 exact")
+      + (relF > 1e-6 ? ` WRONG(dequantised rel ${relF.toExponential(1)})` : ` · dequantised rel ${relF.toExponential(1)}`);
   },
   // The optimizer step: 152 tiny per-parameter dispatches against one dispatch over an
   // arena that gathers the gradients in and scatters the parameters out by copy. The

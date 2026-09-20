@@ -1777,6 +1777,85 @@ ${store.join("\n")}
 }`;
 }
 
+/** The int8 subgroup GEMM's configuration and tile: `i8 × i8 → i32` at 16 × 16 × 32, a
+ *  32 × 32 output block a workgroup (four 16 × 16 results), K walked in 32s. */
+export const I8_M = 16;
+export const I8_N = 16;
+export const I8_K = 32;
+export const I8_TILE = 32;
+
+/** Whether `matmulInt8` can take a shape: rows and columns whole 32s, K whole 32s — the
+ *  configuration's multiples, with no per-element guard on a subgroup-matrix load. */
+export function int8MatmulFits(M: number, K: number, N: number): boolean {
+  return M % I8_TILE === 0 && N % I8_TILE === 0 && K % I8_K === 0;
+}
+
+/**
+ * The matrix product on **int8 subgroup matrices** — the configuration an adapter may
+ * have instead of the f32 one (`docs/INT8.md` Step 1; measured on the RTX 5080, where the
+ * feature exposes `i8 × i8 → i32` only). `A` is (M, K) and `B` is (K, N), both row-major
+ * int8 packed four to a word in `array<i32>`; **offsets and strides are in components,
+ * not words**, and the types name their column count first (`left<i8, K, M>`) — the
+ * reading the probe held to a CPU reference (`int8_subgroup_probe`; offsets in words
+ * compile, run at 26 TOPS and give every entry wrong).
+ *
+ * Two stores. Without `scaled`, the four i32 results go straight to `Out: array<i32>` —
+ * the exactness gate. With it, they go through workgroup memory and each lane writes
+ * `f32(c) · sA · sW[row] + bias[row]` to `Out: array<f32>` — the W8A8 dequantisation of
+ * §1 with a per-tensor activation scale (`Scale[0]`) and per-row weight scales
+ * (`Scale[1 + row]`); `Bias` is per row.
+ */
+export function matmulInt8(M: number, K: number, N: number, scaled = false): string {
+  if (!int8MatmulFits(M, K, N)) throw new Error(`matmulInt8 wants whole 32s, not ${M} × ${K} × ${N}`);
+  const results: string[] = [];
+  const stores: string[] = [];
+  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) {
+    results.push(`  var c${i}${j}: subgroup_matrix_result<i32, ${I8_N}, ${I8_M}>;`);
+    stores.push(scaled
+      ? `  subgroupMatrixStore(&ot, ${i * I8_M * I8_TILE + j * I8_N}u, c${i}${j}, false, ${I8_TILE}u);`
+      : `  subgroupMatrixStore(&Out, (row0 + ${i * I8_M}u) * ${N}u + col0 + ${j * I8_N}u, c${i}${j}, false, ${N}u);`);
+  }
+  const epilogue = scaled ? `  workgroupBarrier();
+  let sA = Scale[0];
+  for (var e = lid; e < ${I8_TILE * I8_TILE}u; e = e + 32u) {
+    let r = e / ${I8_TILE}u;
+    let c = e - r * ${I8_TILE}u;
+    let row = row0 + r;
+    Out[row * ${N}u + col0 + c] = f32(ot[e]) * sA * Scale[1u + row] + Bias[row];
+  }` : "";
+  return `enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+@group(0) @binding(0) var<storage, read> A: array<i32>;
+@group(0) @binding(1) var<storage, read> B: array<i32>;
+${scaled ? `@group(0) @binding(2) var<storage, read> Scale: array<f32>;
+@group(0) @binding(3) var<storage, read> Bias: array<f32>;
+@group(0) @binding(4) var<storage, read_write> Out: array<f32>;
+var<workgroup> ot: array<i32, ${I8_TILE * I8_TILE}>;` : "@group(0) @binding(2) var<storage, read_write> Out: array<i32>;"}
+@compute @workgroup_size(32)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+  let col0 = wid.x * ${I8_TILE}u;
+  let row0 = wid.y * ${I8_TILE}u;
+${results.join("\n")}
+  for (var k = 0u; k < ${K}u; k = k + ${I8_K}u) {
+    let a0 = subgroupMatrixLoad<subgroup_matrix_left<i8, ${I8_K}, ${I8_M}>>(&A, row0 * ${K}u + k, false, ${K}u);
+    let a1 = subgroupMatrixLoad<subgroup_matrix_left<i8, ${I8_K}, ${I8_M}>>(&A, (row0 + ${I8_M}u) * ${K}u + k, false, ${K}u);
+    let b0 = subgroupMatrixLoad<subgroup_matrix_right<i8, ${I8_N}, ${I8_K}>>(&B, k * ${N}u + col0, false, ${N}u);
+    let b1 = subgroupMatrixLoad<subgroup_matrix_right<i8, ${I8_N}, ${I8_K}>>(&B, k * ${N}u + col0 + ${I8_N}u, false, ${N}u);
+    c00 = subgroupMatrixMultiplyAccumulate(a0, b0, c00);
+    c01 = subgroupMatrixMultiplyAccumulate(a0, b1, c01);
+    c10 = subgroupMatrixMultiplyAccumulate(a1, b0, c10);
+    c11 = subgroupMatrixMultiplyAccumulate(a1, b1, c11);
+  }
+${stores.join("\n")}
+${epilogue}
+}`;
+}
+
+/** The grid of `matmulInt8`: one workgroup a 32 × 32 block. */
+export function int8MatmulGrid(M: number, N: number): [number, number, number] {
+  return [N / I8_TILE, M / I8_TILE, 1];
+}
+
 /**
  * **A measurement kernel** (`kernel_bench` `mm`), not a path anything dispatches yet: the matmul on
  * f16 subgroup matrices, to weigh compute-f16 before building it. metal-3 offers only the

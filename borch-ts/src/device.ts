@@ -410,6 +410,21 @@ interface SubgroupMatrixConfig {
   readonly K: number;
 }
 
+/** The int8 subgroup-matrix configuration an adapter offers — `i8 × i8 → i32` at
+ *  16 × 16 × 32 — or `null`. What the RTX 5080 through Chrome 151 / Vulkan has *instead
+ *  of* the f32 one (`docs/INT8.md`); read from the configurations, never from the
+ *  feature name. */
+export interface SubgroupInt8Config { readonly M: number; readonly N: number; readonly K: number }
+function subgroupMatrixInt8(adapter: GPUAdapter): SubgroupInt8Config | null {
+  if (!adapter.features.has("chromium-experimental-subgroup-matrix" as GPUFeatureName)
+    || !adapter.features.has("subgroups" as GPUFeatureName)) return null;
+  const info = adapter.info as unknown as { subgroupMatrixConfigs?: Iterable<SubgroupMatrixConfig> };
+  for (const c of info.subgroupMatrixConfigs ?? []) {
+    if (c.componentType === "i8" && c.resultComponentType === "i32" && c.M === 16 && c.N === 16 && c.K === 32) return { M: c.M, N: c.N, K: c.K };
+  }
+  return null;
+}
+
 /** Whether the adapter offers subgroup matrices with the f32 8 × 8 × 8 configuration. */
 function subgroupMatrixF32(adapter: GPUAdapter): boolean {
   if (!adapter.features.has("chromium-experimental-subgroup-matrix" as GPUFeatureName)
@@ -896,6 +911,10 @@ export class Device {
     // against 4.5 for the scalar tile). D3D12, Safari and Firefox do not have it, and the
     // scalar kernels stay as the path for them — this flag only opens the other one.
     const sgm = subgroupMatrixF32(adapter);
+    // **The int8 configuration is taken where it is the one the adapter has** — the 5080
+    // exposes the feature with int8 configurations only, and the f32 kernels stay off
+    // there; `matmulInt8` (`docs/INT8.md` Step 1) is what runs on it.
+    const sgi8 = subgroupMatrixInt8(adapter);
     const features: GPUFeatureName[] = [];
     if (canTime) features.push("timestamp-query");
     // Subgroups on their own are wider than subgroup matrices: Vulkan without the
@@ -903,7 +922,7 @@ export class Device {
     // them than through workgroup memory and a barrier tree.
     const sg = adapter.features.has("subgroups" as GPUFeatureName);
     if (sg) features.push("subgroups" as GPUFeatureName);
-    if (sgm) features.push("chromium-experimental-subgroup-matrix" as GPUFeatureName);
+    if (sgm || sgi8) features.push("chromium-experimental-subgroup-matrix" as GPUFeatureName);
     // **`shader-f16` is requested where the adapter has it — and it is not everywhere.**
     // Apple's Metal offers it; a recent NVIDIA card (RTX 5080) through Chrome on
     // Linux/Vulkan offers none (measured, `docs/SCALE-MEASURED.md`). So it is an optional
@@ -918,6 +937,7 @@ export class Device {
       requiredFeatures: features,
     };
     Device.subgroupMatrix = sgm;
+    Device.subgroupInt8 = sgi8;
     Device.subgroups = sg;
     Device.f16 = f16;
     Device.workgroupStorage = adapter.limits.maxComputeWorkgroupStorageSize;
@@ -2332,6 +2352,9 @@ export class Device {
   /** Whether the device was built with subgroup matrices (f32, 8 × 8 × 8) — see
    *  `create`. `matmul` asks this before choosing its kernel. */
   static subgroupMatrix = false;
+  /** The int8 subgroup-matrix configuration the device was built with (`i8 × i8 → i32`,
+   *  16 × 16 × 32), or `null` — see `create`. `matmulInt8` runs on it. */
+  static subgroupInt8: SubgroupInt8Config | null = null;
   /** Whether the device has subgroup operations (`subgroupAdd`, `subgroupMax`). */
   static subgroups = false;
   /**
