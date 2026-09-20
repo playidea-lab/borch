@@ -2186,14 +2186,14 @@ export class Device {
    * them.
    */
   async synchronize(): Promise<void> {
-    this.flush();
     if (Device.readbackKicks) {
       // **Where the browser needs kicking, `onSubmittedWorkDone` does not answer to
       // kicks — a mapped four-byte copy does.** Measured on the 5080 (`roundtrip:probe`,
       // 2026-09-20): a 2048³ matmul followed by this method on the queue's promise was
       // 3.0–3.2 ms with kicks for 1.1 of GPU, while a one-element `toArray()` after the
       // same matmul was 1.09. So the wait here is the same wait a readback makes: a copy
-      // of the first word of a scratch buffer into staging, mapped and kicked.
+      // of the first word of a scratch buffer into staging, on the encoder the work is
+      // on, submitted with it, mapped and kicked.
       const free = this.stagingFree.get(BYTES_PER_F32) ?? [];
       this.stagingFree.set(BYTES_PER_F32, free);
       const stage = free.pop() ?? this.device.createBuffer({
@@ -2204,6 +2204,7 @@ export class Device {
       stage.unmap();
       free.push(stage);
     } else {
+      this.flush();
       await this.device.queue.onSubmittedWorkDone();
     }
     await this.drainAllocations();
