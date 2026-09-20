@@ -19,6 +19,7 @@ import {
   Tensor,
   optim,
 } from "../src/index.js";
+import { bindingAccess } from "../src/device.js";
 
 const CROSS_DEVICE = "Expected all tensors to be on the same device";
 
@@ -236,6 +237,33 @@ export async function report(): Promise<Report> {
   want("the padding width still reaches the shader",
     same(await narrowed.pad(1, 4, 0).toArray().then((a) => a.slice(0, 6)),
          Float32Array.from([0, 0, 0, 0, 0, 1])));
+
+  // **What a kernel does to each binding, read off its WGSL** (`bindingAccess`,
+  // docs/COMPILER.md Step 0). The recording's liveness and the fusion graph stand on
+  // this; a binding called write-only that the kernel reads would let a planner alias
+  // a live buffer, so the scan must say `rw` wherever it cannot see the whole use.
+  const access = bindingAccess(`
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Acc: array<f32>;
+@group(0) @binding(3) var<storage, read_write> Ptr: array<f32>;
+@group(0) @binding(4) var<storage, read_write> Cmp: array<f32>;
+@group(0) @binding(5) var<uniform> U: vec4<u32>;
+@group(0) @binding(6) var<storage, read_write> Nest: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x;
+  Out[i] = X[i] * 2.0;
+  Acc[i] += X[i];
+  let n = arrayLength(&Ptr);
+  if (Cmp[i] == 0.0) { Out[i] = 1.0; }
+  Nest[select(0u, 1u, X[i] > 0.0)] = X[U.x];
+}`);
+  want("a read binding and a uniform are reads", access[0] === "r" && access[5] === "r", access.join(","));
+  want("a binding only ever assigned is a write", access[1] === "w" && access[6] === "w", access.join(","));
+  want("a compound assignment is read-and-write", access[2] === "rw", access.join(","));
+  want("a binding taken by address is read-and-write", access[3] === "rw", access.join(","));
+  want("a binding compared is a read", access[4] === "rw", access.join(","));
 
   const failed = checks.filter((c) => !c.ok);
   const lines = checks.map((c) =>

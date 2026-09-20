@@ -239,7 +239,32 @@ state, written down to be contradicted: a captured ResNet-18 CIFAR step at batch
 ≤ 150 MB of pool beside it, ~40 dispatches fewer, and no shape it runs slower than the
 hand rule; the same `compiled` name in JS and Python; the workbench fine-tune under replay.
 
-## 5. Risks, and the sentence that retires each
+## 5. Ledger
+
+- **2026-09-20, Step 0 landed — every dispatch says what it touches.** `bindingAccess`
+  (`device.ts`) reads each pipeline's WGSL once at build: `var<uniform>` and
+  `var<storage, read>` are reads; a `read_write` binding is a write when every use of its
+  name in the body is a plain element assignment, and read-and-write when any use is a
+  read, a compound assignment, or the name is taken by address (a pointer, an atomic,
+  `arrayLength`). `Recorded.access` carries it; `liveIns()` and `fuse.ts`'s graph read it
+  where there is no recipe; `Capture.coverage()` (JS and Python) counts the kinds. Five
+  scanner cases in `device:ts` (read/uniform → r, assigned-only → w, `+=` → rw, `&Name`
+  → rw, compared → rw). **Gate, `capture:py` on metal-3: U-Net step 257 dispatches —
+  20 exact (recipe), 237 declared, 0 guessed; GPT-2blk 388 — 85 exact, 273 declared,
+  30 copies, 0 guessed.** Bit for bit against eager on both, `check=True` clean. Two
+  things the exact graph changed on its own: the GPT step's live-ins 101 → 100 (the
+  over-approximation had counted one buffer a kernel only writes), and its fused
+  recording 371 → 370 dispatches (one more tree could be moved once a kernel that only
+  reads its inputs stopped counting as their writer). What the scan could not call
+  write-only: 189 of the U-Net's declared bindings and 142 of the GPT's are `rw` —
+  conservative, and Step 1's planner will say how many of those matter. Two harness
+  lessons, both cost twenty minutes: the probe's Python lives inside a JS template
+  literal and one backtick in a Python comment ended it (the page never made its worker,
+  and the runner waited its full timeout twice — `capture_py.py` now ends the wait on a
+  page error); and a headless debug run of the same page is SwiftShader (190 s to the
+  first mark against 7 s headed — `launch.py`'s rule, met again).
+
+## 6. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |
 |---|---|---|

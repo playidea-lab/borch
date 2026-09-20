@@ -910,6 +910,15 @@ class capture:
         self.unwritten = int(r.unwritten)
         return int(r.before), int(r.after)
 
+    def coverage(self):
+        """How well the recording knows what each dispatch touches — `exact` (a recipe),
+        `declared` (read off the kernel's WGSL), `guessed` (neither: taken to read and
+        write everything it binds), `copies`, and `readWrite` (declared bindings the
+        scan could only call read-and-write). The gate of `docs/COMPILER.md` Step 0 is
+        `guessed == 0`."""
+        c = self._capture.coverage()
+        return {k: int(getattr(c, k)) for k in ("dispatches", "exact", "declared", "guessed", "copies", "readWrite")}
+
     def dispose(self):
         """Returns the step's memory to the pool. The captured tensors are not to be used after."""
         self._capture.dispose()

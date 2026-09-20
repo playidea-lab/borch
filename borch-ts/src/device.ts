@@ -290,6 +290,9 @@ function subgroupMatrixF32(adapter: GPUAdapter): boolean {
  * trained a GPT to a loss 3e-6 away from eager while Adam's U-Net replayed bit for bit
  * (measured 2026-09-07). A copy has `copy` set and `buffers` as `[src, dst]`.
  */
+/** What a dispatch does to one binding: reads it, writes it, or both. */
+export type Access = "r" | "w" | "rw";
+
 export interface Recorded {
   readonly pipeline?: GPUComputePipeline;
   readonly bindGroup?: GPUBindGroup;
@@ -300,6 +303,15 @@ export interface Recorded {
   /** For an elementwise dispatch, what it computes — see `Elementwise`; for a reduction,
    *  what it reads once — see `Reduce`. */
   readonly meta?: Elementwise | Reduce;
+  /**
+   * Per binding, what the kernel does to it — read off the WGSL when the pipeline was
+   * built (`bindingAccess`). A recipe (`meta`) says the same more precisely for the
+   * kernels that carry one; every other kernel used to be taken to read and write
+   * everything it binds, which made `liveIns` and the fusion graph conservative by
+   * exactly that much (`docs/COMPILER.md` Step 0). Absent only for a pipeline this
+   * device did not build.
+   */
+  readonly access?: readonly Access[];
   /** The pipeline's signature at the time of recording — what the profiler files a
    *  replayed dispatch under. Without it a replay is one kind: the last signature set. */
   readonly sig?: string;
@@ -317,6 +329,49 @@ export type BindSlot = GPUBuffer | { readonly buffer: GPUBuffer; readonly offset
 /** The GPUBuffer behind a slot — for a usage or pool check, never for identity. */
 export function bufOf(s: BindSlot): GPUBuffer {
   return s instanceof GPUBuffer ? s : s.buffer;
+}
+
+const BINDING_DECL = /@group\(0\)\s*@binding\((\d+)\)\s*var<(storage|uniform)(?:\s*,\s*(read|read_write))?>\s*([A-Za-z_][A-Za-z0-9_]*)/g;
+
+/**
+ * What a kernel does to each of its bindings, read off its WGSL. `var<uniform>` and
+ * `var<storage, read>` are reads. A `read_write` binding is a write when every use of
+ * its name in the body is an assignment (`Name[i] = …`) — the common output — and
+ * read-and-write when any use is a read, a compound assignment (`+=`), or the name is
+ * taken by address (`&Name`: a pointer, an atomic, `arrayLength`), where the scan
+ * cannot follow it and says the conservative thing. Never less than the kernel does.
+ */
+export function bindingAccess(code: string): Access[] {
+  const out: Access[] = [];
+  const bodyStart = code.indexOf("fn main");
+  const body = bodyStart >= 0 ? code.slice(bodyStart) : code;
+  for (const m of code.matchAll(BINDING_DECL)) {
+    const index = Number(m[1]);
+    const name = m[4] as string;
+    if (m[2] === "uniform" || m[3] === "read") { out[index] = "r"; continue; }
+    out[index] = writeOnly(body, name) ? "w" : "rw";
+  }
+  return out;
+}
+
+/** True when every use of `name` in `body` is a plain assignment to an element of it. */
+function writeOnly(body: string, name: string): boolean {
+  const uses = new RegExp(`(^|[^A-Za-z0-9_.])(&?)${name}(?![A-Za-z0-9_])`, "g");
+  for (const m of body.matchAll(uses)) {
+    if (m[2] === "&") return false;                       // a pointer — cannot follow
+    let i = (m.index ?? 0) + m[0].length;
+    if (body[i] !== "[") return false;                    // whole-array use (a copy, a length)
+    let depth = 0;
+    for (; i < body.length; i++) {                        // skip the index expression
+      const c = body[i];
+      if (c === "[") depth++;
+      else if (c === "]") { depth--; if (depth === 0) { i++; break; } }
+    }
+    while (i < body.length && (body[i] === " " || body[i] === "\t")) i++;
+    // `= ` assigns; `==`, `+=`, `-=`, `*=`, `/=` and anything else reads.
+    if (body[i] !== "=" || body[i + 1] === "=") return false;
+  }
+  return true;
 }
 
 /**
@@ -362,6 +417,25 @@ export class Capture {
   }
 
   /**
+   * How well the recording knows what its dispatches touch — the gate of
+   * `docs/COMPILER.md` Step 0. `exact`: a recipe says which binding is read and which
+   * written. `declared`: read off the kernel's WGSL. `guessed`: neither — taken to read
+   * and write everything it binds. `copies` are exact by construction. `readWrite` counts
+   * the declared bindings the scan could not call write-only (a pointer, a compound
+   * assignment) — conservative, and a place to look when a planner wants more.
+   */
+  coverage(): { dispatches: number; exact: number; declared: number; guessed: number; copies: number; readWrite: number } {
+    let exact = 0, declared = 0, guessed = 0, copies = 0, readWrite = 0;
+    for (const r of this.records) {
+      if (r.copy) copies++;
+      else if (r.meta) exact++;
+      else if (r.access) { declared++; for (const a of r.access) if (a === "rw") readWrite++; }
+      else guessed++;
+    }
+    return { dispatches: this.records.length, exact, declared, guessed, copies, readWrite };
+  }
+
+  /**
    * The buffers the recording reads before it writes them — the step's inputs and its
    * state: parameters, the optimizer's moments and counters, running statistics. A
    * replay starts from what they hold; snapshot them and the step can be run again from
@@ -382,6 +456,12 @@ export class Capture {
       } else if (r.meta && "input" in r.meta) {
         const input = r.meta.input;
         r.buffers.forEach((b, k) => { if (k === input) reads.push(b); else writes.push(b); });
+      } else if (r.access) {
+        r.buffers.forEach((b, k) => {
+          const a = r.access?.[k] ?? "rw";
+          if (a !== "w") reads.push(b);
+          if (a !== "r") writes.push(b);
+        });
       } else {
         reads.push(...r.buffers); writes.push(...r.buffers);
       }
@@ -435,6 +515,8 @@ export class Device {
    * seven hundred times a step.
    */
   private readonly layouts = new WeakMap<GPUComputePipeline, GPUBindGroupLayout>();
+  /** Pipeline → what it does to each binding, read off its WGSL once at build. */
+  private readonly accesses = new WeakMap<GPUComputePipeline, readonly Access[]>();
   /**
    * The **idle ones** among the staging buffers used for reading back. Several per size.
    *
@@ -754,6 +836,7 @@ export class Device {
       compute: { module, entryPoint: "main" },
     });
     this.pipelines.set(signature, pipeline);
+    this.accesses.set(pipeline, bindingAccess(code));
     return pipeline;
   }
 
@@ -1305,7 +1388,11 @@ export class Device {
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(groups[0], groups[1], groups[2]);
     this.dispatches += 1;
-    this.recording?.push({ pipeline, bindGroup, groups: [groups[0], groups[1], groups[2]], buffers: [...buffers], sig: this.currentSig, ...(meta ? { meta } : {}) });
+    if (this.recording) {
+      const access = this.accesses.get(pipeline);
+      this.recording.push({ pipeline, bindGroup, groups: [groups[0], groups[1], groups[2]], buffers: [...buffers], sig: this.currentSig,
+        ...(meta ? { meta } : {}), ...(access ? { access } : {}) });
+    }
     // **A batch that grows too large is dropped, and nothing says so.**
     //
     // Commands accumulate in one encoder and go out when something is read. The

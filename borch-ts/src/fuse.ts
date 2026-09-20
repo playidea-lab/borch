@@ -104,7 +104,8 @@ interface Graph {
  *  dispatches were folded away, and how many intermediates go unwritten. `held` — the
  *  buffers the caller still holds; see `Capture.fuse`. */
 export function fuseRecords(dev: Device, records: readonly Recorded[], held?: ReadonlySet<BindSlot>): { records: Recorded[]; fused: number; unwritten: number } {
-  // A dispatch without a recipe is taken to read and write every buffer it binds.
+  // A dispatch without a recipe reads what its WGSL declares; one without even that
+  // (a pipeline this device did not build) is taken to read and write every buffer.
   const readers = new Map<BindSlot, number[]>();
   const writers = new Map<BindSlot, number[]>();
   const push = (map: Map<BindSlot, number[]>, b: BindSlot, i: number): void => {
@@ -119,6 +120,14 @@ export function fuseRecords(dev: Device, records: readonly Recorded[], held?: Re
       const input = r.meta.input;
       push(readers, r.buffers[input] as BindSlot, i);
       r.buffers.forEach((b, k) => { if (k !== input) push(writers, b, i); });
+    } else if (r.access) {
+      // `read` bindings read only, write-only `read_write` ones write only, `rw` both
+      // (`bindingAccess` in device.ts).
+      r.buffers.forEach((b, k) => {
+        const a = r.access?.[k] ?? "rw";
+        if (a !== "w") push(readers, b, i);
+        if (a !== "r") push(writers, b, i);
+      });
     } else {
       for (const b of r.buffers) { push(readers, b, i); push(writers, b, i); }
     }

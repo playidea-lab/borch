@@ -61,6 +61,13 @@ def main(argv):
             context = pw.chromium.launch_persistent_context(profile, headless=not headed, channel=channel, args=list(FLAGS), timeout=60_000)
             try:
                 page = context.new_page()
+                # **A page script that does not parse is a ten-minute silence.** The Python
+                # of the probe sits inside a JS template literal, and one backtick in a
+                # Python comment ended the literal — the worker was never made, nothing
+                # was posted, and the runner waited its whole timeout twice (2026-09-20).
+                # An uncaught page error now ends the wait with the error named.
+                page.on("pageerror", lambda e: page.evaluate(
+                    "(m) => { window.__wheel = window.__wheel || { text: 'page error: ' + m, error: m }; }", str(e)))
                 page.goto(url, wait_until="load")
                 page.wait_for_function("window.__wheel !== undefined", timeout=GIVE_UP_MS, polling=200)
                 got = page.evaluate("window.__wheel")
@@ -89,6 +96,10 @@ def main(argv):
     ok = ok and float(gpt.group(4)) <= 1e-5 and float(gpt.group(5)) <= 1e-2 and int(gpt.group(6)) < int(gpt.group(3))
     # `check=True` ran on both recordings and raised on neither.
     ok = ok and bool(re.search(r"check=True passed on \d+ live-ins", done))
+    # Every dispatch of both recordings says what it reads and writes — by recipe or by
+    # its WGSL — and none is guessed (docs/COMPILER.md Step 0's gate).
+    guessed = re.findall(r"guessed (\d+)", done)
+    ok = ok and len(guessed) == 2 and all(int(g) == 0 for g in guessed)
     print("**the replayed step is the eager step, bit for bit**" if ok else "**it is not** — see above")
     return 0 if ok else 1
 
