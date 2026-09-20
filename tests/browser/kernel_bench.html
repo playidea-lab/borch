@@ -371,6 +371,16 @@ const BENCHES = {
     quantise(); runInt8(); dev.flush(); await dev.synchronize();
     const got = await new Tensor(Out, [m]).toArray();
     const maxHost = await new Tensor(Max, [1]).toArray();
+    // The quantised activation itself against the host's — which byte, and what value sat there.
+    const xqGpu = new Int32Array((await new Tensor(Xq, [n / 4]).toArray()).buffer);
+    let qWrong = 0; const qFirst = [];
+    for (let i = 0; i < n; i++) {
+      const b = Math.floor(i / (sh.C * plane)), c = Math.floor(i / plane) % sh.C, pos = i % plane;
+      const word = xqGpu[(b * (sh.C / 4) + (c >> 2)) * plane + pos];
+      const byte = (word >>> ((c & 3) * 8)) & 0xff; const q = byte > 127 ? byte - 256 : byte;
+      if (q !== xq[i]) { qWrong++; if (qFirst.length < 4) qFirst.push(`n${b} c${c} y${Math.floor(pos / H)} x${pos % H}: gpu ${q} host ${xq[i]} (x ${xf[i]}, x·inv ${Math.fround(xf[i] * invA)})`); }
+    }
+    const qNote = qWrong ? ` · quantised activation: ${qWrong} of ${n} differ — ${qFirst.join(" · ")}` : " · quantised activation matches the host";
     // Unsplit the outputs must be bit-exact through the same arithmetic; split, the
     // dequantised partials are summed in f32 and are held to a rounding.
     let wrong = 0, worst = 0; const first = [];
@@ -399,7 +409,7 @@ const BENCHES = {
     const text = (await race(runs, 1)).replace(/ WRONG\([^)]*\)/g, "");
     const r0 = runs[0], r1 = runs[1];
     return `${text} · int8 kernel alone ${r0.best.toFixed(3)} vs f32 ${(r1.best + r1.extra).toFixed(3)} → ${((r1.best + r1.extra) / r0.best).toFixed(2)}× (with quantise ${((r1.best + r1.extra) / (r0.best + r0.extra)).toFixed(2)}×)`
-      + (wrong ? ` WRONG(${wrong} of ${m} outputs differ from the CPU int32 reference, worst ${worst.toExponential(1)})${scaleNote}` : ` · exact against the CPU int32 reference${scaleNote}`);
+      + (wrong ? ` WRONG(${wrong} of ${m} outputs differ from the CPU int32 reference, worst ${worst.toExponential(1)})${scaleNote}` : ` · exact against the CPU int32 reference${scaleNote}`) + qNote;
   },
   // The optimizer step: 152 tiny per-parameter dispatches against one dispatch over an
   // arena that gathers the gradients in and scatters the parameters out by copy. The
