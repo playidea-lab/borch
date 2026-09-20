@@ -19,6 +19,7 @@
 
 import { type Elementwise, grid1d, type Reduce, reduceParts, reduceSum, WORKGROUP } from "./kernels.js";
 import { fuseRecords } from "./fuse.js";
+import { planRecords } from "./plan.js";
 
 const BYTES_PER_F32 = 4;
 
@@ -494,6 +495,51 @@ export class Capture {
     const { records, fused, unwritten } = fuseRecords(this.dev, this.records, held ? new Set(held) : undefined);
     this.records = records;
     return { before, after: records.length, fused, unwritten };
+  }
+
+  /**
+   * Lays the step's intermediates into arenas so that buffers whose lives do not overlap
+   * share bytes, and releases the buffers they replace — see `plan.ts`. Run after
+   * `fuse()` (a fused tree leaves intermediates untouched, and those are released here
+   * too). `held` — the buffers of every tensor the caller still holds, as for `fuse`;
+   * a held buffer stays where it is. Returns what moved and what it saved.
+   */
+  plan(held?: Iterable<GPUBuffer>): { moved: number; released: number; bytesBefore: number; bytesAfter: number; arenas: number; kept: { liveIn: number; subRange: number } } {
+    const heldSet = new Set(held ?? []);
+    const movable = (b: GPUBuffer): boolean => this.pinned.has(b) && !this.uploaded.has(b) && !heldSet.has(b);
+    const plan = planRecords({
+      records: this.records,
+      movable,
+      candidates: this.pinned,
+      sizeOf: (b) => this.dev.bytesOf(b),
+      align: this.dev.offsetAlignment,
+      arenaMax: this.dev.maxBinding,
+    });
+    const arenas = plan.arenas.map((bytes) => {
+      const buf = this.dev.allocOwned(bytes / BYTES_PER_F32);
+      this.pinned.add(buf);
+      return buf;
+    });
+    const slotOf = (b: BindSlot): BindSlot => {
+      if (!(b instanceof GPUBuffer)) return b;
+      const p = plan.placements.get(b);
+      return p ? { buffer: arenas[p.arena] as GPUBuffer, offset: p.offset, size: this.dev.bytesOf(b) } : b;
+    };
+    this.records = this.records.map((r) => {
+      if (!r.buffers.some((b) => b instanceof GPUBuffer && plan.placements.has(b))) return r;
+      const buffers = r.buffers.map(slotOf);
+      if (r.copy) return { ...r, buffers };
+      const pipeline = r.pipeline as GPUComputePipeline;
+      return { ...r, buffers, bindGroup: this.dev.bindGroupFor(pipeline, buffers) };
+    });
+    let bytesBefore = 0;
+    const release: GPUBuffer[] = [];
+    for (const b of plan.placements.keys()) { bytesBefore += this.dev.bytesOf(b); release.push(b); }
+    for (const b of plan.untouched) { bytesBefore += this.dev.bytesOf(b); release.push(b); }
+    for (const b of release) this.pinned.delete(b);
+    this.dev.unpin(release);
+    const bytesAfter = plan.arenas.reduce((a, b) => a + b, 0);
+    return { moved: plan.placements.size, released: plan.untouched.length, bytesBefore, bytesAfter, arenas: arenas.length, kept: plan.kept };
   }
 
   dispose(): void {
@@ -994,11 +1040,15 @@ export class Device {
   replayRecorded(records: readonly Recorded[]): void {
     for (const r of records) {
       if (r.copy) {
-        const [src, dst] = r.buffers as [GPUBuffer, GPUBuffer];  // copies bind whole buffers
-        if (r.copy.srcOff !== undefined || r.copy.dstOff !== undefined) {
-          this.copyRange(dst, r.copy.dstOff ?? 0, src, r.copy.srcOff ?? 0, r.copy.bytes);
+        // A copy is recorded over whole buffers; after `Capture.plan` either end may be
+        // a slot of an arena, whose offset is added to the copy's own.
+        const [s, d] = r.buffers as [BindSlot, BindSlot];
+        const sOff = s instanceof GPUBuffer ? 0 : s.offset;
+        const dOff = d instanceof GPUBuffer ? 0 : d.offset;
+        if (r.copy.srcOff !== undefined || r.copy.dstOff !== undefined || sOff || dOff) {
+          this.copyRange(bufOf(d), dOff + (r.copy.dstOff ?? 0), bufOf(s), sOff + (r.copy.srcOff ?? 0), r.copy.bytes);
         } else {
-          this.copyInto(dst, src, r.copy.bytes / BYTES_PER_F32);
+          this.copyInto(bufOf(d), bufOf(s), r.copy.bytes / BYTES_PER_F32);
         }
         continue;
       }
@@ -1081,9 +1131,44 @@ export class Device {
   unpin(buffers: Iterable<GPUBuffer>): void {
     for (const buf of buffers) {
       this.owned.delete(buf);
+      // A buffer made under a capture is in the scope that was open then as well as
+      // pinned; `endScope` skips it while it is owned. Released here while that scope is
+      // still open — `compiled` records inside the caller's scope, and `Capture.plan`
+      // releases what it laid into arenas — the scope's close would return it a second
+      // time (measured: "returned to the pool while already in it"). It leaves every
+      // open frame as it goes to the pool.
+      for (const frame of this.scopes) frame.delete(buf);
       this.returnToPool(buf);
     }
     if (this.auditPool) this.auditInvariants("unpin");
+  }
+
+  /**
+   * A buffer a capture owns from the start — an arena `Capture.plan` lays intermediates
+   * into. Made outside any scope (a scope closing must not pool it) and marked owned, as
+   * `alloc` under an open capture does; the capture adds it to its pinned set and
+   * `dispose` returns it.
+   */
+  allocOwned(count: number): GPUBuffer {
+    const buf = this.alloc(count, true);
+    this.scopes[this.scopes.length - 1]?.delete(buf);
+    this.owned.add(buf);
+    return buf;
+  }
+
+  /** The bytes a buffer was allocated with — the pool's bucket, and a slot's size. */
+  bytesOf(buf: GPUBuffer): number {
+    return this.sizes.get(buf) ?? buf.size;
+  }
+
+  /** `minStorageBufferOffsetAlignment` — what a bound sub-range's offset must be a multiple of. */
+  get offsetAlignment(): number {
+    return this.limits.minStorageBufferOffsetAlignment;
+  }
+
+  /** `maxStorageBufferBindingSize` — the most one binding, and so one arena, can be. */
+  get maxBinding(): number {
+    return this.limits.maxStorageBufferBindingSize;
   }
 
   /**

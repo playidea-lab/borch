@@ -648,6 +648,20 @@ first dispatched, so the first replay after it pays that — ten milliseconds on
 nothing visible on the small network (measured). What no recording can carry: a step that
 branches in Python on the step's values.
 
+**And the recording plans its memory** (2026-09-20, `plan()`; on by default in
+`compiled`). A capture pins every buffer the step makes, each in its own buffer, because
+the recorded bind groups point at them — so the pool that an eager step recycles between
+scopes sat beside the capture untouched. The recording knows the order each buffer is
+written and read in (every dispatch declares what it reads and writes, off its own WGSL),
+so each intermediate is an interval, and intervals that do not overlap are laid at the same
+offset of an arena and the buffers they replace go back to the pool. Measured
+(`capture:py`, metal-3): the U-Net step's 217 intermediates 380 → 147 MB, the small
+transformer's 256 from 6.1 → 1.5 MB, the replays bit for bit and the replay time unchanged.
+What stays where it is: the inputs the caller writes into, anything Python still holds,
+and any buffer a kernel reads before writing. The one WebGPU rule that shapes it: a buffer
+may not be bound read-only and read-write in the same dispatch even at different offsets,
+so a kernel's inputs and outputs never share an arena — three arenas, not one.
+
 **One kind hides a few slow shapes among many fast ones.** The profile of a ViT-tiny
 step (`profile:py --model=vit`, batch 8) put 48% of its GPU time in the subgroup matmul,
 147 of them, and the kernel bench said the same products ran at torch's rate. The

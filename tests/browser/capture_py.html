@@ -63,6 +63,9 @@ xb, mb = torch.tensor(xs[0]), torch.tensor(ms[0])
 with torch.capture() as step:
     with torch.scope():
         o2.zero_grad(); loss2 = crit(m2(xb), mb); loss2.backward(); o2.step()
+# The recording's intermediates laid into arenas (docs/COMPILER.md Step 1) — what is
+# held drops, and the replays below must still be the eager steps bit for bit.
+held0 = torch.memory()["bytes"]; upl = step.plan(); held1 = torch.memory()["bytes"]
 replayed = [float(loss2.item())]
 for i in range(1, STEPS):
     xb.copy_(torch.tensor(xs[i])); mb.copy_(torch.tensor(ms[i])); step.replay(); replayed.append(float(loss2.item()))
@@ -151,12 +154,15 @@ for fuse in (False, True):
     w = {k: v.numpy().copy() for k, v in gm.state_dict().items()}
     gres[fuse] = (max(abs(a - b) / max(abs(a), 1e-6) for a, b in zip(g_e, ls)), max(float(np.abs(g_w[k] - w[k]).max() / (np.abs(g_w[k]).max() + 1e-6)) for k in g_w), grun._records[next(iter(grun._records))][0].dispatches, grun.checked[0]["buffers"])
     if not fuse: grun_plain_coverage = grun._records[next(iter(grun._records))][0].coverage()
+    if fuse: gpl = grun._records[next(iter(grun._records))][0].planned
     grun.dispose()
 adapter = str(js.borch.Device.adapterInfo)
 # What the recording knows of each dispatch (docs/COMPILER.md Step 0): the U-Net step
 # and the transformer's plain recording — guessed must be 0 on both.
 cov = step.coverage(); gcov = grun_plain_coverage
 access = f"access unet exact {cov['exact']} declared {cov['declared']} guessed {cov['guessed']} copies {cov['copies']} rw {cov['readWrite']} · gpt exact {gcov['exact']} declared {gcov['declared']} guessed {gcov['guessed']} copies {gcov['copies']} rw {gcov['readWrite']}"
+MB = 1048576
+access += f" · plan unet moved {upl['moved']} released {upl['released']} {upl['bytesBefore']/MB:.1f}MB→{upl['bytesAfter']/MB:.1f}MB in {upl['arenas']} arenas (kept liveIn {upl['kept']['liveIn']} subRange {upl['kept']['subRange']}) held {held0/MB:.1f}MB→{held1/MB:.1f}MB · plan gpt fused moved {gpl['moved']} released {gpl['released']} {gpl['bytesBefore']/MB:.1f}MB→{gpl['bytesAfter']/MB:.1f}MB in {gpl['arenas']} arenas"
 f"capture: {STEPS} steps · max |Δloss| {d_loss:.1e} · max |Δparam| {d_w:.1e} · {step.dispatches} dispatches a replay · {access} · eager {te:.1f} ms · replay {tr:.1f} ms a step · compiled two shapes: recordings {shapes} max |Δloss| {d_compiled:.1e} max |Δparam| {d_cw:.1e} · gpt compiled plain rel|Δloss| {gres[False][0]:.1e} rel|Δparam| {gres[False][1]:.1e} {gres[False][2]} dispatches, fused rel|Δloss| {gres[True][0]:.1e} rel|Δparam| {gres[True][1]:.1e} {gres[True][2]} dispatches · check=True passed on {gres[False][3]} live-ins · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
 \`);
         postMessage({ done: text, ms: performance.now() - t1 });

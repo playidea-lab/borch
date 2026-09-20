@@ -910,6 +910,20 @@ class capture:
         self.unwritten = int(r.unwritten)
         return int(r.before), int(r.after)
 
+    def plan(self):
+        """Lay the step's intermediates into arenas so buffers whose lives do not overlap
+        share bytes, and release the buffers they replace (`plan.ts`). Run after `fuse`.
+        Told which buffers Python still holds (as `fuse` is), so a value a tensor keeps —
+        the loss, a prediction — stays where it is. Returns a dict: `moved` buffers,
+        `released` (intermediates no dispatch touches), `bytesBefore` → `bytesAfter`,
+        `arenas`, and `kept` (`liveIn`, `subRange`: candidates left alone, and why)."""
+        held = _to_js([b for b in (_buffer_of(t) for t in list(Tensor._live)) if b is not None])
+        r = self._capture.plan(held)
+        self.planned = {"moved": int(r.moved), "released": int(r.released), "bytesBefore": int(r.bytesBefore),
+                        "bytesAfter": int(r.bytesAfter), "arenas": int(r.arenas),
+                        "kept": {"liveIn": int(r.kept.liveIn), "subRange": int(r.kept.subRange)}}
+        return self.planned
+
     def coverage(self):
         """How well the recording knows what each dispatch touches — `exact` (a recipe),
         `declared` (read off the kernel's WGSL), `guessed` (neither: taken to read and
@@ -957,9 +971,10 @@ class compiled:
     `dispose()` returns every recording's memory.
     """
 
-    def __init__(self, fn, fuse=True, check=False, tol=1e-5, state_tol=1e-2):
+    def __init__(self, fn, fuse=True, plan=True, check=False, tol=1e-5, state_tol=1e-2):
         self._fn = fn
         self._fuse = fuse
+        self._plan = plan             # intermediates laid into arenas after recording (`capture.plan`)
         self._check = check
         self._tol = tol               # fused: the outputs, relative
         self._state_tol = state_tol   # fused: the state — Adam magnifies a rounding on a value near zero
@@ -1000,6 +1015,9 @@ class compiled:
                 cap.__exit__(None, None, None)
             if self._fuse:
                 cap.fuse()
+            # Planned before the check, so the check holds the recording that will replay.
+            if self._plan:
+                cap.plan()
             if self._check:
                 self.checked.append(self._verify(cap, inputs, out))
             self._records[key] = (cap, inputs, out)

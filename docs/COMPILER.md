@@ -264,6 +264,31 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   page error); and a headless debug run of the same page is SwiftShader (190 s to the
   first mark against 7 s headed — `launch.py`'s rule, met again).
 
+- **2026-09-20, Step 1 landed — intermediates share bytes.** `plan.ts`: every movable
+  intermediate is an interval from the dispatch that first writes it to the last that
+  touches it; a first-fit over offsets lays non-overlapping intervals at the same place in
+  an arena; `Capture.plan(held)` allocates the arenas, rebinds the records to
+  `{buffer, offset, size}` slots and releases the buffers they replace. Not moved: uploads,
+  held buffers, sub-range-bound buffers, and any buffer whose first touch is a read (its
+  contents predate the recording — including a fresh buffer a kernel accumulates into, whose
+  zeros are WebGPU's and would not be zeros in a reused slot). `compiled(plan=True)` is the
+  default, run after `fuse` and before `check`. **Gate, `capture:py` on metal-3: U-Net 96 px
+  batch 16 — 217 intermediates moved, 380.1 → 147.1 MB in 3 arenas (2.6×), 30 kept as
+  live-ins; what the device held 595.5 → 362.6 MB. GPT-2blk fused — 256 moved, 6.1 → 1.5 MB
+  (4×), one untouched intermediate released.** Both bit for bit against eager, `check=True`
+  clean on the planned recordings, faults 0; replay 6.3 ms a step, unchanged. Two things
+  the first two runs taught, each a fault with a sentence: (1) **WebGPU validates a
+  buffer's usages per dispatch, not per range** — one arena bound read-only at one offset
+  and read-write at another in the same dispatch is "includes writable usage and another
+  usage in the same synchronization scope", and a copy's two ends may not be one buffer; so
+  the planner colours a conflict graph (read-only vs read-write bindings of each record,
+  copy source vs destination) into arenas before it lays offsets — three arenas came out,
+  not one. (2) A buffer made under a capture sits in the scope that was open as well as in
+  the pinned set; `compiled` records inside the caller's scope, so a buffer the plan
+  released was returned again when that scope closed — `unpin` now takes a buffer out of
+  every open frame as it pools it. The ResNet-18 prediction (517 → ≤ 150 MB of pool at
+  batch 16) waits on Step 6's JS `compiled`; the U-Net's 2.6× is the number to hold it to.
+
 ## 6. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

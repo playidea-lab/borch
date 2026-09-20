@@ -100,6 +100,13 @@ def main(argv):
     # its WGSL — and none is guessed (docs/COMPILER.md Step 0's gate).
     guessed = re.findall(r"guessed (\d+)", done)
     ok = ok and len(guessed) == 2 and all(int(g) == 0 for g in guessed)
+    # The planner laid the intermediates into arenas smaller than the buffers they replace,
+    # and what the device holds after the plan is less than before (docs/COMPILER.md Step 1);
+    # the bit-for-bit gates above ran on the planned recordings.
+    plans = re.findall(r"moved (\d+) released \d+ ([0-9.]+)MB→([0-9.]+)MB", done)
+    ok = ok and len(plans) == 2 and all(int(m) > 0 and float(a) < float(b) for m, b, a in plans)
+    held = re.search(r"held ([0-9.]+)MB→([0-9.]+)MB", done)
+    ok = ok and bool(held) and float(held.group(2)) < float(held.group(1))
     print("**the replayed step is the eager step, bit for bit**" if ok else "**it is not** — see above")
     return 0 if ok else 1
 
