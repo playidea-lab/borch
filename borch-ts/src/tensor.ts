@@ -223,10 +223,6 @@ import {
   laneable,
   convGradWeightSubgroupGlobal,
   convForwardSubgroup,
-  convForwardSubgroupGather,
-  sgfgFits,
-  sgfgGrid,
-  sgfgSplit,
   sgfFits,
   sgfGrid,
   sgiStridedFits,
@@ -808,32 +804,6 @@ function convForwardRun(
     return;
   }
   if (turned) throw new Error("turned weights are a direct-kernel matter");
-  if (Device.subgroupMatrix && sgfgFits(s)) {
-    // The gathered subgroup forward — the deep small-plane layers, the strided ones and
-    // every fused `ConvReLU2d` that the row-of-eight, unsplit, no-epilogue subgroup kernel
-    // could not take (`docs/INFER.md` Step 3). Partial sums per K piece, then
-    // `sumSplitsConv` with the bias and the epilogue, as the scalar split path does.
-    const pieces = sgfgSplit(s);
-    const kSpace = s.kernel.reduce((a, b) => a * b, 1);
-    const Mp = Math.ceil(s.O / 8) * 8, Kp = Math.ceil(s.C / 8) * 8;
-    const wsize = kSpace * Mp * Kp;
-    const turnedW = dev().alloc(wsize);
-    dev().run1d(
-      dev().pipeline(`tmw:${key}:n`, () => tapMajorWeights(s.O, s.C, kSpace, false, false)),
-      [w, turnedW], wsize);
-    const parted = dev().alloc(n * pieces);
-    dev().run(
-      dev().pipeline(`cnfg:${key}:${pieces}`, () => convForwardSubgroupGather(s, pieces)),
-      [x, turnedW, parted],
-      sgfgGrid(s, pieces),
-    );
-    dev().run1d(
-      dev().pipeline(`ssc:${key}:${bias ? "b" : "n"}${tag}:${pieces}`, () => sumSplitsConv(s, pieces, bias !== null, ep)),
-      [parted, ...tail],
-      n,
-    );
-    return;
-  }
   if (splits === 1) {
     dev().run(
       dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}${tag}`, () => convNDForwardTiled(s, bias !== null, ep)),
