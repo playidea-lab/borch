@@ -313,6 +313,13 @@ export interface Recorded {
    * device did not build.
    */
   readonly access?: readonly Access[];
+  /**
+   * A window refill: the host bytes a streamed weight was placed from, written into
+   * `buffers[0]` (its slot) again on every replay. Not a dispatch and not a copy the
+   * device can re-encode — the bytes come from the host through a staging map, which is
+   * why a recording with refills replays through `replayAsync`. `docs/COMPILER.md` Step 7.
+   */
+  readonly refill?: { readonly win: Window; readonly data: Float32Array | Uint16Array | Uint32Array };
   /** The pipeline's signature at the time of recording — what the profiler files a
    *  replayed dispatch under. Without it a replay is one kind: the last signature set. */
   readonly sig?: string;
@@ -408,13 +415,41 @@ export class Capture {
       return n;
     };
     return this.records.map((r) => ({
-      key: r.copy ? "copy" : (r.pipeline && this.dev.keyOf(r.pipeline)) || "?", groups: r.groups,
+      key: r.copy ? "copy" : r.refill ? "refill" : (r.pipeline && this.dev.keyOf(r.pipeline)) || "?", groups: r.groups,
       buffers: r.buffers.map(id), sizes: r.buffers.map((b) => bufOf(b).size),
     }));
   }
 
   replay(): void {
+    if (this.hasRefills) throw new Error("this recording refills a window from the host — replay it with replayAsync()");
     this.dev.replayRecorded(this.records);
+  }
+
+  /** Whether the recording carries window refills (`Recorded.refill`). */
+  get hasRefills(): boolean {
+    return this.records.some((r) => r.refill !== undefined);
+  }
+
+  /**
+   * The replay for a recording that streams: the dispatches between two refills are
+   * encoded as one run and submitted, then the refill writes the block's bytes into the
+   * same slot it had — the queue keeps submit order, so the dispatches already submitted
+   * read the old bytes and the ones after read the new — and the walk goes on. The
+   * window's own bookkeeping is not touched: the slots a replay writes are the slots the
+   * recording chose, and they were free then exactly as they are now.
+   */
+  async replayAsync(): Promise<void> {
+    let from = 0;
+    for (let i = 0; i < this.records.length; i++) {
+      const r = this.records[i] as Recorded;
+      if (!r.refill) continue;
+      if (i > from) this.dev.replayRecorded(this.records.slice(from, i));
+      this.dev.flush();
+      // eslint-disable-next-line no-await-in-loop
+      await r.refill.win.refill(r.buffers[0] as BindSlot, r.refill.data);
+      from = i + 1;
+    }
+    if (from < this.records.length) this.dev.replayRecorded(this.records.slice(from));
   }
 
   /**
@@ -425,15 +460,16 @@ export class Capture {
    * the declared bindings the scan could not call write-only (a pointer, a compound
    * assignment) — conservative, and a place to look when a planner wants more.
    */
-  coverage(): { dispatches: number; exact: number; declared: number; guessed: number; copies: number; readWrite: number } {
-    let exact = 0, declared = 0, guessed = 0, copies = 0, readWrite = 0;
+  coverage(): { dispatches: number; exact: number; declared: number; guessed: number; copies: number; readWrite: number; refills: number } {
+    let exact = 0, declared = 0, guessed = 0, copies = 0, readWrite = 0, refills = 0;
     for (const r of this.records) {
       if (r.copy) copies++;
+      else if (r.refill) refills++;
       else if (r.meta) exact++;
       else if (r.access) { declared++; for (const a of r.access) if (a === "rw") readWrite++; }
       else guessed++;
     }
-    return { dispatches: this.records.length, exact, declared, guessed, copies, readWrite };
+    return { dispatches: this.records.length, exact, declared, guessed, copies, readWrite, refills };
   }
 
   /**
@@ -507,6 +543,8 @@ export class Capture {
       const writes: BindSlot[] = [];
       if (r.copy) {
         reads.push(r.buffers[0] as BindSlot); writes.push(r.buffers[1] as BindSlot);
+      } else if (r.refill) {
+        writes.push(r.buffers[0] as BindSlot);
       } else if (r.meta && "expr" in r.meta) {
         for (const inp of r.meta.inputs) reads.push(r.buffers[inp.binding] as BindSlot);
         writes.push(r.buffers[r.meta.out] as BindSlot);
@@ -1081,6 +1119,12 @@ export class Device {
     return capture;
   }
 
+  /** What a pipeline does to each binding, read off its WGSL at build (`bindingAccess`) —
+   *  for a record made outside `run`, such as a fused kernel's. */
+  accessOf(pipeline: GPUComputePipeline): readonly Access[] | undefined {
+    return this.accesses.get(pipeline);
+  }
+
   /** The key a pipeline was built under, or undefined for one this device did not build. */
   keyOf(pipeline: GPUComputePipeline): string | undefined {
     for (const [key, p] of this.pipelines) if (p === pipeline) return key;
@@ -1093,8 +1137,30 @@ export class Device {
   }
 
   /** Encodes recorded dispatches again, in order. Called by `Capture.replay`. */
+  /**
+   * Runs `fn` with the open capture set aside: nothing it dispatches is recorded and
+   * nothing it allocates is pinned. The window's refill copy takes this — what the
+   * recording keeps of a refill is the host bytes (`Recorded.refill`), not the copy from
+   * a staging buffer whose contents will be another block's by the time of a replay.
+   */
+  unrecorded<T>(fn: () => T): T {
+    const recording = this.recording, pinned = this.pinned, uploaded = this.uploaded;
+    this.recording = null; this.pinned = null; this.uploaded = null;
+    try {
+      return fn();
+    } finally {
+      this.recording = recording; this.pinned = pinned; this.uploaded = uploaded;
+    }
+  }
+
+  /** Records a window refill — see `Recorded.refill`. A no-op outside a capture. */
+  recordRefill(win: Window, slot: BindSlot, data: Float32Array | Uint16Array | Uint32Array): void {
+    this.recording?.push({ refill: { win, data }, groups: [0, 0, 0], buffers: [slot] });
+  }
+
   replayRecorded(records: readonly Recorded[]): void {
     for (const r of records) {
+      if (r.refill) throw new Error("a window refill cannot be re-encoded — replay through replayAsync()");
       if (r.copy) {
         // A copy is recorded over whole buffers; after `Capture.plan` either end may be
         // a slot of an arena, whose offset is added to the copy's own.
@@ -2142,6 +2208,27 @@ export class Window {
       }
       this.cursor = offset + need;
     }
+    await this.write(offset, data);
+    const slot: BindSlot = { buffer: this.buffer, offset, size: bytes };
+    // Under a capture the recording keeps the host bytes and the slot, not the staging
+    // copy (`Recorded.refill`); a replay writes the same bytes into the same slot.
+    this.dev.recordRefill(this, slot, data);
+    this.reserved.set(offset, need);
+    this.tick += 1;
+    this.gens.set(offset, this.tick);
+    return slot;
+  }
+
+  /** The bytes of a weight into the slot a recording placed it in — a replay's refill. */
+  async refill(slot: BindSlot, data: Float32Array | Uint16Array | Uint32Array): Promise<void> {
+    if (slot instanceof GPUBuffer || slot.buffer !== this.buffer) throw new Error("a refill names a slot of this window");
+    await this.write(slot.offset, data);
+  }
+
+  /** Host bytes into the window at `offset`, through the staging map; the copy is never
+   *  recorded (see `recordRefill`), and it is submitted but not waited for. */
+  private async write(offset: number, data: Float32Array | Uint16Array | Uint32Array): Promise<void> {
+    const bytes = data.byteLength;
     if (this.staging === null || this.stagingBytes < bytes) {
       this.staging?.destroy();
       this.staging = this.dev.stagingBuffer(bytes);
@@ -2153,7 +2240,8 @@ export class Window {
     new Uint8Array(this.staging.getMappedRange(0, bytes)).set(
       new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
     this.staging.unmap();
-    this.dev.copyRange(this.buffer, offset, this.staging, 0, bytes);
+    const staging = this.staging;
+    this.dev.unrecorded(() => this.dev.copyRange(this.buffer, offset, staging, 0, bytes));
     // **Submit the copy, but do not block on it.** It only has to be *submitted* here so the
     // staging buffer is not held by an open encoder; it does not have to be *done*, because
     // the block that reads this slot runs in a later submit and the queue keeps submit order
@@ -2163,10 +2251,6 @@ export class Window {
     // ring of staging buffers would overlap two uploads too; this removes the full stall
     // with none of that machinery.)
     this.dev.flush();
-    this.reserved.set(offset, need);
-    this.tick += 1;
-    this.gens.set(offset, this.tick);
-    return { buffer: this.buffer, offset, size: bytes };
   }
 
   /** The current generation of the slot at `offset`, `-1` if nothing was ever placed there.

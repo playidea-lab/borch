@@ -200,6 +200,10 @@ adapter-independent path and runs in CI.
    learns a narrow dtype.
 6. **Streaming and `compiled` are exclusive** until refill-in-place is proven under a
    capture. Until then a window refuses `compiled` loudly, and vice versa.
+   **Proven 2026-09-20** for `streamTrainStep` (`docs/COMPILER.md` Step 7): a recording
+   keeps each placement as a refill of host bytes into the slot it had and replays through
+   `replayAsync`, bit for bit against the eager streamed steps (`capture:ts`). The
+   no-grad `streamSequential` forward is the same mechanism, not yet exercised.
 7. **Measure the wall before building against it.** Step 0 ships a probe and its numbers
    before any window code, in the platform-claims style: a claim about hardware is
    witnessed only by hardware.

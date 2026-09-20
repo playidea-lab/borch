@@ -113,7 +113,9 @@ export function fuseRecords(dev: Device, records: readonly Recorded[], held?: Re
     if (list) list.push(i); else map.set(b, [i]);
   };
   records.forEach((r, i) => {
-    if (elementwise(r.meta)) {
+    if (r.refill) {
+      push(writers, r.buffers[0] as BindSlot, i);
+    } else if (elementwise(r.meta)) {
       for (const inp of r.meta.inputs) push(readers, r.buffers[inp.binding] as BindSlot, i);
       push(writers, r.buffers[r.meta.out] as BindSlot, i);
     } else if (reduction(r.meta)) {
@@ -403,7 +405,10 @@ ${body}
   const key = `fused:${hashOf(code)}:${n}`;
   const pipeline = dev.pipeline(key, () => code);
   fusedCodes.set(key, code);
-  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, e.buffers), groups: [grid.x, grid.y, 1], buffers: e.buffers, sig: key };
+  // The fused kernel carries what it reads and writes as any built pipeline does — without
+  // it a fused record counted as "guessed" (nine a step on the streamed chain, measured).
+  const access = dev.accessOf(pipeline);
+  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, e.buffers), groups: [grid.x, grid.y, 1], buffers: e.buffers, sig: key, ...(access ? { access } : {}) };
 }
 
 /** The reduction `root` rebuilt around the tree feeding it: the tree's bindings first,
@@ -419,5 +424,6 @@ function buildReduce(dev: Device, tree: Node[], root: Recorded, at: number, meta
   const key = `fused:${hashOf(code)}:${meta.n}`;
   const pipeline = dev.pipeline(key, () => code);
   fusedCodes.set(key, code);
-  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, buffers), groups: root.groups, buffers, sig: key.replace("fused:", "fusedr:") };
+  const access = dev.accessOf(pipeline);
+  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, buffers), groups: root.groups, buffers, sig: key.replace("fused:", "fusedr:"), ...(access ? { access } : {}) };
 }

@@ -109,7 +109,7 @@ export { Capture, Device, isAvailable, isSoftwareAdapter, probe } from "./device
 export type { Availability, DeviceKind, InitOptions } from "./device.js";
 // A step recorded once and replayed without the JavaScript that built it — `torch.capture`
 // by hand, `torch.compiled` with the bookkeeping done (`docs/COMPILER.md` Step 6).
-export { capture, compiled, Compiled } from "./compile.js";
+export { capture, captureAsync, compiled, Compiled } from "./compile.js";
 export type { CheckReport, CompiledArg, CompiledOptions, PlanReport } from "./compile.js";
 // The place `torch.manual_seed` occupies — layer initialisation, dropout and
 // `Tensor.randn` all hang on one seed. `nn.manualSeed` gives the same thing (the old name

@@ -12,8 +12,9 @@
  */
 import * as nn from "../src/nn.js";
 import { SGD } from "../src/optim.js";
-import { compiled } from "../src/compile.js";
+import { type CheckReport, compiled } from "../src/compile.js";
 import { Device } from "../src/device.js";
+import { streamTrainStep, type TrainBlock } from "../src/stream_train.js";
 import { device, keepAlive, scope, Tensor } from "../src/tensor.js";
 import { ResNet18 } from "./bench.js";
 
@@ -171,10 +172,96 @@ async function resnet(lines: string[]): Promise<void> {
   want("ResNet-18: dispatches were counted", d1 > d0, `${d1 - d0} dispatches over the compiled section`);
 }
 
+/**
+ * A LoRA chain over a streamed frozen base — `streamTrainStep` under `compiled`
+ * (`docs/COMPILER.md` Step 7). The base weights live on the host and pass through a window
+ * two slots wide; the recording keeps each placement as a refill and replays through
+ * `replayAsync`. Three eager streamed steps against one recording replayed twice, on the
+ * same initial adapters: the losses and the adapters bit for bit, and the window never
+ * wider than it was eagerly.
+ */
+async function streamed(lines: string[]): Promise<void> {
+  const D = 32, BLOCKS = 4, R = 4, BATCH = 8, STEPS = 3;
+  const array = (n: number, seed: number, scale: number): Float32Array => {
+    const next = seeded(seed);
+    const a = new Float32Array(n);
+    for (let i = 0; i < n; i++) a[i] = (next() - 0.5) * scale;
+    return a;
+  };
+  const bases = Array.from({ length: BLOCKS }, (_, i) => array(D * D, 1000 + i, 0.5));
+  const inputs = Array.from({ length: STEPS }, (_, s) => array(BATCH * D, 42 + s, 2));
+  const make = (): { blocks: TrainBlock[]; params: Tensor[] } => {
+    const params: Tensor[] = [];
+    const blocks = bases.map((w, i) => {
+      const a = keepAlive(Tensor.from(array(R * D, 2000 + i, 0.3), [R, D])); a.requiresGrad = true;
+      const b = keepAlive(Tensor.from(array(D * R, 3000 + i, 0.3), [D, R])); b.requiresGrad = true;
+      params.push(a, b);
+      const blk: TrainBlock = {
+        weights: [w], shapes: [[D, D]], params: [a, b],
+        run: (h, windowed) => h.matmul(windowed[0] as Tensor).add(h.matmul(a.transpose(0, 1)).matmul(b.transpose(0, 1))).relu(),
+      };
+      return blk;
+    });
+    return { blocks, params };
+  };
+  const loss = (o: Tensor): Tensor => o.mul(o).mean();
+  const slotBytes = D * D * 4;
+
+  const eager: number[] = [];
+  const e = make();
+  const winE = device().window(2 * slotBytes);
+  const optE = new SGD(e.params, 0.05, 0.9);
+  for (let s = 0; s < STEPS; s++) {
+    eager.push(await scope(async () => {
+      optE.zeroGrad();
+      const l = await streamTrainStep(winE, Tensor.from(inputs[s] as Float32Array, [BATCH, D]), e.blocks, loss);
+      optE.step();
+      return await l.item();
+    }));
+  }
+  const eagerParams = await Promise.all(e.params.map((p) => p.toArray()));
+
+  const c = make();
+  const winC = device().window(2 * slotBytes);
+  const optC = new SGD(c.params, 0.05, 0.9);
+  const step = compiled(async (x: Tensor) => {
+    optC.zeroGrad();
+    const l = await streamTrainStep(winC, x, c.blocks, loss);
+    optC.step();
+    return l;
+  }, { check: true });
+  const replayed: number[] = [];
+  for (let s = 0; s < STEPS; s++) {
+    replayed.push(await scope(async () => {
+      const l = await step.call(Tensor.from(inputs[s] as Float32Array, [BATCH, D]));
+      return await l.item();
+    }));
+  }
+  const compiledParams = await Promise.all(c.params.map((p) => p.toArray()));
+  const worstLoss = Math.max(...eager.map((v, i) => Math.abs(v - (replayed[i] as number))));
+  let worstParam = 0;
+  eagerParams.forEach((a, i) => { const b = compiledParams[i] as Float32Array; for (let k = 0; k < a.length; k++) worstParam = Math.max(worstParam, Math.abs((a[k] as number) - (b[k] as number))); });
+  const rec = step.recordingOf(Tensor.from(inputs[0] as Float32Array, [BATCH, D]));
+  const cov = rec ? rec.coverage() : null;
+  want("streamed: one recording, replayed twice, gives the eager streamed losses bit for bit", worstLoss === 0 && step.shapes === 1, `max |Δloss| ${worstLoss.toExponential(1)}, ${step.shapes} recording`);
+  want("streamed: the adapters agree bit for bit after three steps", worstParam === 0, `max |Δparam| ${worstParam.toExponential(1)}`);
+  want("streamed: the recording carries a refill per placement, forward and backward", !!cov && cov.refills === 2 * BLOCKS, cov ? `${cov.refills} refills` : "no recording");
+  // Every dispatch of the fused recording says what it touches — a fused kernel included
+  // (nine a step were "guessed" before fuse.ts carried the pipeline's access sets).
+  want("streamed: no dispatch of the fused recording is guessed at", !!cov && cov.guessed === 0, cov ? `${cov.guessed} guessed of ${cov.dispatches}` : "no recording");
+  want("streamed: check=true passed on the streamed recording", step.checked.length === 1 && (step.checked[0] as CheckReport).differ === 0, step.checked.map((r) => `${r.buffers} live-ins, ${r.differ} differ`).join(""));
+  want("streamed: the window stayed two slots wide under the recording", winC.used <= 2 * slotBytes, `${winC.used} of ${2 * slotBytes} bytes used`);
+  const plan = step.planned[0];
+  if (plan) lines.push(`streamed LoRA chain (${BLOCKS} blocks, window ${2 * slotBytes / 1024} KB): plan ${plan.moved} intermediates ${(plan.bytesBefore / 1024).toFixed(0)}K → ${(plan.bytesAfter / 1024).toFixed(0)}K in ${plan.arenas} arenas · ${cov?.refills ?? 0} refills a step`);
+  step.dispose();
+  winE.free(); winC.free();
+}
+
 export async function report(): Promise<Report> {
   const lines: string[] = [];
   await mlp();
   await resnet(lines);
+  await streamed(lines);
   const faults = device().faults.count;
   want("no WebGPU faults", faults === 0, `${faults}`);
   const failed = checks.filter((c) => !c.ok);

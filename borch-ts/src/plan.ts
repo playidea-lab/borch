@@ -79,6 +79,8 @@ export function touchesOf(r: Recorded): { reads: GPUBuffer[]; writes: GPUBuffer[
   const slot = (k: number): GPUBuffer => bufOf(r.buffers[k] as BindSlot);
   if (r.copy) {
     reads.push(slot(0)); writes.push(slot(1));
+  } else if (r.refill) {
+    writes.push(slot(0));
   } else if (r.meta && "expr" in r.meta) {
     for (const inp of r.meta.inputs) reads.push(slot(inp.binding));
     writes.push(slot(r.meta.out));

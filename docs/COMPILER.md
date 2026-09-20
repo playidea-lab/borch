@@ -337,6 +337,35 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   the subgroup conv's `pdw` pad and `tmw` weight repack run every step (`docs/INFER.md`
   Step 2 is the eval half of that).
 
+- **2026-09-20, Step 7 landed — a captured step over a streamed backbone.** The window's
+  refill is a staging map (`Window.place`: `mapAsync`, a copy into the slot), which a
+  recording cannot re-encode — by the time of a replay the staging buffer holds another
+  block. So the recording keeps the *host bytes and the slot* (`Recorded.refill`, written
+  by `Window.place` under a capture, the copy itself left out of the recording through
+  `Device.unrecorded`), and `Capture.replayAsync` walks the records: the dispatches between
+  two refills are encoded and submitted as one run, then the block's bytes are written
+  into the slot it had (`Window.refill`) — the queue keeps submit order, so the run before
+  reads the old bytes and the run after the new — and on to the next. The window's own
+  bookkeeping is untouched: the slots a replay writes are the slots the recording chose,
+  free then as now. `torch.captureAsync` and an async `fn` in `compiled` carry it; a
+  recording with refills refuses `replay()` by name. **Gate, `capture:ts` on metal-3: a
+  four-block LoRA chain over a two-slot window — one recording (8 refills a step: four
+  forward, four backward), replayed twice, gives the three eager streamed steps bit for
+  bit on the losses and the adapters; `check: true` clean on 20 live-ins; the window 4,096
+  of 8,192 bytes used under the recording, one block wide as eagerly; the plan laid its 59
+  intermediates 38 → 8 KB.** SCALE decision 6's mutual refusal is lifted for this case —
+  refill-in-place under a capture is now measured, not assumed. What is not covered:
+  `streamSequential`'s no-grad forward (the same mechanism, not yet exercised), and the
+  workbench's Python path, which has no streaming API to record. One fix found on the way:
+  a fused kernel's record carried no access set and counted as "guessed" — nine a step
+  here, zero in the unfused probes that measured Step 0 — `fuse.ts` now carries it.
+- **Step 4 (shape buckets) — deferred, with the reason.** Padding an axis to a bucket is
+  correct only where the model consumes the true length (a key mask, as `bimm`'s ViT does
+  by hand), so it cannot be a property of `compiled` alone; nothing in the tree varies a
+  sequence length under `compiled` today. It comes back with its first caller. **Step 5
+  (autotune) — waits on a second adapter**: its gate is two adapters, and the 4090 is off
+  the bus (2026-09-14) while the 5080 runs another experiment.
+
 ## 6. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

@@ -95,8 +95,27 @@ export function capture<T>(fn: () => T): { step: Capture; result: T } {
   return { step: d.endCapture(), result };
 }
 
+/**
+ * `capture` for a step that awaits — one that streams a frozen backbone through a window
+ * (`streamTrainStep`), whose refills are staging maps. Nothing else may dispatch on the
+ * device while the recording is open across those awaits; the recording carries the
+ * refills (`Recorded.refill`) and replays through `step.replayAsync()`.
+ */
+export async function captureAsync<T>(fn: () => Promise<T>): Promise<{ step: Capture; result: T }> {
+  const d = device();
+  d.beginCapture();
+  let result: T;
+  try {
+    result = await fn();
+  } catch (err) {
+    d.endCapture().dispose();
+    throw err;
+  }
+  return { step: d.endCapture(), result };
+}
+
 export class Compiled<A extends CompiledArg[], R> {
-  private readonly records = new Map<string, Recording<R>>();
+  private readonly records = new Map<string, Recording<Awaited<R>>>();
   private readonly fuse: boolean;
   private readonly plan: boolean;
   private readonly check: boolean;
@@ -130,26 +149,27 @@ export class Compiled<A extends CompiledArg[], R> {
    * arguments back to make the recording's own copies of them; a replay is synchronous
    * underneath and the promise resolves at once.
    */
-  async call(...args: A): Promise<R> {
+  async call(...args: A): Promise<Awaited<R>> {
     const key = keyOf(args);
     const rec = this.records.get(key);
     if (rec) {
       rec.inputs.forEach((held, i) => {
         if (held instanceof Tensor) held.copyFrom(args[i] as Tensor);
       });
-      rec.cap.replay();
+      if (rec.cap.hasRefills) await rec.cap.replayAsync(); else rec.cap.replay();
       return rec.out;
     }
     const datas = await Promise.all(args.map((a) => (a instanceof Tensor ? a.toArray() : Promise.resolve(null))));
     const d = device();
     d.beginCapture();
     let inputs: CompiledArg[];
-    let out: R;
+    let out: Awaited<R>;
     try {
       inputs = args.map((a, i) => (a instanceof Tensor
         ? Tensor.from(datas[i] as Float32Array, a.shape, { dtype: a.dtype })
         : a));
-      out = this.fn(...(inputs as A));
+      // A step that awaits (a streamed backbone's refills) is recorded across its awaits.
+      out = await this.fn(...(inputs as A));
     } catch (err) {
       d.endCapture().dispose();
       throw err;
@@ -173,7 +193,7 @@ export class Compiled<A extends CompiledArg[], R> {
     this.records.clear();
   }
 
-  private async verify(cap: Capture, inputs: readonly CompiledArg[], out: R): Promise<CheckReport> {
+  private async verify(cap: Capture, inputs: readonly CompiledArg[], out: Awaited<R>): Promise<CheckReport> {
     const d = device();
     const live = cap.liveIns();
     const words = (a: Float32Array): Uint32Array<ArrayBuffer> => {
@@ -186,7 +206,7 @@ export class Compiled<A extends CompiledArg[], R> {
     const outs = tensorsOf(out);
     const before = await snapshot();
     const outBefore = await Promise.all(outs.map((o) => o.toArray()));
-    cap.replay();
+    if (cap.hasRefills) await cap.replayAsync(); else cap.replay();
     const replayedState = await snapshot();
     const replayed = await Promise.all(outs.map((o) => o.toArray()));
     d.flush();
@@ -199,7 +219,7 @@ export class Compiled<A extends CompiledArg[], R> {
     let eager: Float32Array[] = [];
     try {
       await scope(async () => {
-        const eo = tensorsOf(this.fn(...(inputs as A)));
+        const eo = tensorsOf(await this.fn(...(inputs as A)));
         eagerState = await snapshot();
         eager = await Promise.all(eo.map((o) => o.toArray()));
       });
