@@ -17,7 +17,7 @@
  * looked at, so here the limits are **measured in advance and exceeding one throws.**
  */
 
-import { type Elementwise, grid1d, type Reduce, reduceParts, reduceSum, setDirectWeightBytes, WORKGROUP } from "./kernels.js";
+import { type Elementwise, grid1d, type Reduce, reduceParts, reduceSum, setDirectWeightBytes, type TiledConfig, WORKGROUP } from "./kernels.js";
 import { fuseRecords } from "./fuse.js";
 import { planRecords, touchesOf } from "./plan.js";
 
@@ -287,6 +287,27 @@ async function calibrateKicks(device: GPUDevice, canTime: boolean): Promise<bool
   querySet?.destroy();
   Device.kickCalibration = worst;
   return verdict;
+}
+
+/**
+ * **The re-tiled scalar GEMM's configurations for an adapter, best first** (`docs/GEMM.md`
+ * Step 4). `matmul` takes the first that fits the shape (`tiledConfigFits`) and the
+ * device's workgroup storage; a shape none fits stays on the tile as it was. Measured,
+ * not chosen (`kernel_bench mm --sweep=gemm`, 2026-09-21):
+ * - **Apple**: the 8 × 4 micro-tile on a 128 × 64 tile with `vec4` staging, 1.46× the old
+ *   tile on 2048³ (3.55 → 2.43 ms) and 1.42× on the deep ResNet GEMM shapes; the 8 × 8
+ *   micro-tile gains nothing there (the register file), double buffering loses 3–10 %.
+ *   Then 64 × 64 r4×4 `vec4` for shapes the first does not divide — 1.34× on its own.
+ * - **Everything else**: none yet — the 5080 sweep decides, and until it is measured an
+ *   adapter runs the tile as it was. An empty list is the old tile.
+ */
+function gemmConfigsFor(vendor: string): readonly TiledConfig[] {
+  const APPLE: readonly TiledConfig[] = [
+    { TM: 128, TN: 64, RM: 8, RN: 4, KT: 16, vec4: true, dbuf: false },
+    { TM: 64, TN: 64, RM: 4, RN: 4, KT: 16, vec4: true, dbuf: false },
+  ];
+  if (vendor === "apple") return APPLE;
+  return [];
 }
 
 /** Which adapter, on one line. Empty fields are dropped — the browser hides most of
@@ -942,6 +963,7 @@ export class Device {
     Device.f16 = f16;
     Device.workgroupStorage = adapter.limits.maxComputeWorkgroupStorageSize;
     setDirectWeightBytes(Device.workgroupStorage);
+    Device.gemmConfigs = gemmConfigsFor(String((adapter.info as Partial<GPUAdapterInfo> | undefined)?.vendor ?? ""));
 
     let device: GPUDevice;
     try {
@@ -2370,6 +2392,10 @@ export class Device {
   /** The adapter's workgroup storage in bytes — 16 KB is the guaranteed floor, Apple
    *  gives 32 KB. A kernel that stages more than the floor asks this first. */
   static workgroupStorage = 16384;
+
+  /** The re-tiled scalar GEMM's configurations for this adapter, best first — see
+   *  `gemmConfigsFor`. Empty is the tile as it was. Settable, so a test can force a path. */
+  static gemmConfigs: readonly TiledConfig[] = [];
 
   /** How many storage buffers one compute stage may bind — 8 is the guaranteed floor.
    *  The fusion pass sizes its trees by this. */

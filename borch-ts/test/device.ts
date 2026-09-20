@@ -19,7 +19,8 @@ import {
   Tensor,
   optim,
 } from "../src/index.js";
-import { bindingAccess } from "../src/device.js";
+import { bindingAccess, Device } from "../src/device.js";
+import { tiledConfigFits as K_fits } from "../src/kernels.js";
 
 const CROSS_DEVICE = "Expected all tensors to be on the same device";
 
@@ -199,6 +200,32 @@ export async function report(): Promise<Report> {
   const leaf = Tensor.from([1, 2], [2], { requiresGrad: true });
   const dropped = await leaf.cpu();
   want("cpu() cuts the graph", !dropped.requiresGrad);
+
+  // ── The re-tiled scalar GEMM against the tile as it was ─────────────────────
+  // `docs/GEMM.md` Step 4: with subgroup matrices off (so the scalar path is taken on
+  // every adapter) a product on the adapter's configurations must match the old tile to
+  // a rounding, on a shape the big tile divides and on one only the 64 × 64 fits, and
+  // then on a shape neither divides — which must fall through to the old tile unchanged.
+  {
+    const sgm = Device.subgroupMatrix; const cfgs = Device.gemmConfigs;
+    Device.subgroupMatrix = false;
+    const shapes: [number, number, number][] = [[256, 512, 128], [64, 320, 192], [100, 96, 40]];
+    const configs = cfgs.length > 0 ? cfgs : [{ TM: 128, TN: 64, RM: 8, RN: 4, KT: 16, vec4: true, dbuf: false }, { TM: 64, TN: 64, RM: 4, RN: 4, KT: 16, vec4: true, dbuf: false }];
+    for (const [M, K, N] of shapes) {
+      const a = keepAlive(Tensor.randn([M, K])), b = keepAlive(Tensor.randn([K, N]));
+      Device.gemmConfigs = [];
+      const old = await a.matmul(b).toArray();
+      Device.gemmConfigs = configs;
+      const pipelinesBefore = device().pipelineCount;
+      const fresh = await a.matmul(b).toArray();
+      let err = 0, scale = 0;
+      for (let i = 0; i < old.length; i++) { const o = old[i] ?? 0, f = fresh[i] ?? 0; err = Math.max(err, Math.abs(o - f)); scale = Math.max(scale, Math.abs(o)); }
+      want(`re-tiled GEMM ${M}x${K}x${N} matches the old tile to a rounding`, err / scale < 1e-5, `rel ${(err / scale).toExponential(1)}`);
+      const fits = configs.some((c) => K_fits(M, K, N, c, Device.workgroupStorage));
+      want(`re-tiled GEMM ${M}x${K}x${N} ${fits ? "took a new pipeline" : "stayed on the old tile"}`, (device().pipelineCount > pipelinesBefore) === fits, `pipelines ${pipelinesBefore} → ${device().pipelineCount}`);
+    }
+    Device.subgroupMatrix = sgm; Device.gemmConfigs = cfgs;
+  }
 
   // ── Synchronising ───────────────────────────────────────────────────
   // It has to be possible to wait for completion without reading a value. Without this

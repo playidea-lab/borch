@@ -280,6 +280,10 @@ import {
   maskedScatterKernel,
   maskedScatterSourceBackward,
   matmul,
+  matmulTiled,
+  tiledConfigFits,
+  tiledGrid,
+  tiledSplit,
   matmulSubgroup,
   subgroupMatmulFits,
   subgroupMatmulSplit,
@@ -2453,6 +2457,23 @@ export class Tensor implements Node<Tensor> {
       );
       if (splits > 1) {
         // `target` is the scope's to reclaim, as every `alloc` here is.
+        dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
+      }
+    } else if (!transA && !transB && Device.gemmConfigs.some((c) => tiledConfigFits(M, K, N, c, Device.workgroupStorage))) {
+      // **The re-tiled scalar GEMM** (`docs/GEMM.md`): the adapter's best configuration
+      // that the shape divides; untransposed operands only (the transposed reads stay
+      // on the tile below, whose staging reads along either layout).
+      const cfg = Device.gemmConfigs.find((c) => tiledConfigFits(M, K, N, c, Device.workgroupStorage));
+      if (cfg === undefined) throw new Error("unreachable: a configuration fit a moment ago");
+      const splits = tiledSplit(M, K, N, cfg);
+      const target = splits > 1 ? dev().alloc(M * N * splits) : out;
+      const label = `${cfg.TM}x${cfg.TN}r${cfg.RM}x${cfg.RN}k${cfg.KT}${cfg.vec4 ? "v" : ""}${cfg.dbuf ? "d" : ""}`;
+      dev().run(
+        dev().pipeline(`mmt:${M}:${K}:${N}:${label}:${splits}`, () => matmulTiled(M, K, N, cfg, splits)),
+        [this.buffer, mat2.weightBinding(), target],
+        tiledGrid(M, N, cfg, splits),
+      );
+      if (splits > 1) {
         dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
       }
     } else {
