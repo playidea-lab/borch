@@ -10,6 +10,9 @@
     import { why } from "./why.js";
 
     const out = document.getElementById("out");
+    // `?noretile=1` switches the re-tiled scalar GEMM off before the device comes up — a
+    // bisection tool (`capture.py --noretile`), nothing a user sets.
+    if (new URLSearchParams(location.search).get("noretile") === "1") globalThis.BORCH_NO_RETILE = true;
     try {
       await init();
       // The adapter before anything is timed — the runner refuses a software rasteriser here.

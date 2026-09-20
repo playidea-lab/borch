@@ -1,7 +1,7 @@
 """`torch.compiled` in JavaScript, held to the eager step — and the ResNet-18 memory number.
 
     npm run build:ts
-    uv run --with playwright python borch-ts/test/capture.py [--headed]
+    uv run --with playwright python borch-ts/test/capture.py [--headed] [--noretile]
 
 The binding's `capture:py` for borch.ts (`docs/COMPILER.md` Step 6): an MLP over two batch
 shapes, bit for bit with `check: true` on both recordings; then the ResNet-18 of `bench.ts`
@@ -38,7 +38,7 @@ def main(argv):
             page.on("console", lambda m: print(f"  [browser] {m.text}")
                     if m.type == "error" else None)
             page.on("pageerror", lambda e: print(f"  [browser exception] {e}"))
-            page.goto(f"http://127.0.0.1:{port}{PAGE}")
+            page.goto(f"http://127.0.0.1:{port}{PAGE}" + ("?noretile=1" if "--noretile" in argv else ""))
             page.wait_for_function("window.__borchAdapter !== undefined || window.__borchCaptureTs !== undefined",
                                    timeout=ADAPTER_MS)
             early = page.evaluate("window.__borchAdapter")

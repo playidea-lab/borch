@@ -306,6 +306,8 @@ async function calibrateKicks(device: GPUDevice, canTime: boolean): Promise<bool
  * gets the same list: the old tile stays for every shape the list does not divide.
  */
 function gemmConfigsFor(_vendor: string): readonly TiledConfig[] {
+  // A bench or a bisection may switch the re-tiled GEMM off; nothing else sets this.
+  if ((globalThis as { BORCH_NO_RETILE?: boolean }).BORCH_NO_RETILE) return [];
   return [
     { TM: 128, TN: 64, RM: 8, RN: 4, KT: 16, vec4: true, dbuf: false },
     { TM: 64, TN: 64, RM: 4, RN: 4, KT: 16, vec4: true, dbuf: false },
