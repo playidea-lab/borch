@@ -57,6 +57,7 @@
     "compare-peers:ts": "uv run --with playwright python borch-ts/test/compare_peers.py",
     "capture:ts": "uv run --with playwright python borch-ts/test/capture.py",
     "int8-sg:probe": "uv run --with playwright python tests/browser/int8_subgroup_probe.py",
+    "roundtrip:probe": "uv run --with playwright python tests/browser/roundtrip_probe.py",
     "cpu:ts": "uv run --with playwright python borch-ts/test/cpu.py",
     "cpu:py": "uv run --with playwright python tests/browser/cpu_py.py",
     "refine:py": "uv run --with playwright python tests/browser/refine_py.py",

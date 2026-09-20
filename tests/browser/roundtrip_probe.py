@@ -1,0 +1,137 @@
+"""Where the milliseconds go between `submit` and a mapped readback — **the round trip.**
+
+    uv run --with playwright python tests/browser/roundtrip_probe.py [--headless]
+
+The captured ResNet-18 forward on the RTX 5080 is 4.32 ms for 2.9 ms of GPU time; on
+metal-3 the same recording is 4.1 ms for 3.9 of GPU (`docs/BOOK.md`, 2026-09-20). The
+difference is not a kernel: it is what a forward pays once, between the last dispatch and
+the value in JavaScript. This page takes that apart with raw WebGPU, forty repetitions
+each, the median and the minimum in ms:
+
+- `submit` of an empty command buffer, then `onSubmittedWorkDone` — the queue's round
+  trip through the GPU process, nothing to run;
+- a 4-byte copy, `submit`, `mapAsync(READ)`, `getMappedRange` — the readback pattern;
+- the same behind one tiny dispatch;
+- `pushErrorScope` / `popErrorScope` — what an allocation's out-of-memory scope costs to
+  drain, since `Device.read` drains those before it maps;
+- and borch's own `Tensor.toArray()` on one element, eagerly (drain, then map, in series)
+  — the number the library pays.
+
+Two adapters give the same answer for the GPU's part and different ones for the trip;
+the rows say which part it is. Refuses a software adapter: a CPU's round trip is nobody's.
+"""
+import json
+import os
+import pathlib
+import sys
+import tempfile
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from first_run import FLAGS, ROOT, serve  # noqa: E402
+from launch import _headed, refuse_if_software  # noqa: E402
+
+PROBE = r"""async () => {
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+  if (!adapter) return { error: "no adapter" };
+  const info = adapter.info || {};
+  const device = await adapter.requestDevice();
+  const REPS = 40;
+  const stat = (xs) => { const s = [...xs].sort((a, b) => a - b); return { median: +s[s.length >> 1].toFixed(3), min: +s[0].toFixed(3) }; };
+  const time = async (fn) => { const t = []; for (let i = 0; i < 5; i++) await fn(); for (let i = 0; i < REPS; i++) { const t0 = performance.now(); await fn(); t.push(performance.now() - t0); } return stat(t); };
+  const rows = {};
+  // 1. The queue's round trip, nothing to run.
+  rows["submit + onSubmittedWorkDone (empty)"] = await time(async () => {
+    device.queue.submit([device.createCommandEncoder().finish()]);
+    await device.queue.onSubmittedWorkDone();
+  });
+  // 2. The readback pattern: a copy, a submit, a map.
+  const src = device.createBuffer({ size: 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(src, 0, new Float32Array([1]));
+  const stage = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  rows["copy 4 B + submit + mapAsync"] = await time(async () => {
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(src, 0, stage, 0, 4);
+    device.queue.submit([enc.finish()]);
+    await stage.mapAsync(GPUMapMode.READ);
+    stage.getMappedRange(); stage.unmap();
+  });
+  // 3. The same behind one tiny dispatch.
+  const module = device.createShaderModule({ code: `@group(0) @binding(0) var<storage, read_write> X: array<f32>;
+@compute @workgroup_size(1) fn main() { X[0] = X[0] + 1.0; }` });
+  const pipeline = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
+  const bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: src } }] });
+  rows["1 dispatch + copy + submit + mapAsync"] = await time(async () => {
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass(); pass.setPipeline(pipeline); pass.setBindGroup(0, bind); pass.dispatchWorkgroups(1); pass.end();
+    enc.copyBufferToBuffer(src, 0, stage, 0, 4);
+    device.queue.submit([enc.finish()]);
+    await stage.mapAsync(GPUMapMode.READ);
+    stage.getMappedRange(); stage.unmap();
+  });
+  // 4. An error scope drained.
+  rows["pushErrorScope + popErrorScope"] = await time(async () => {
+    device.pushErrorScope("out-of-memory");
+    await device.popErrorScope();
+  });
+  // 5. Both awaited in series, as Device.read does eagerly, and concurrently.
+  rows["popErrorScope then mapAsync (series)"] = await time(async () => {
+    device.pushErrorScope("out-of-memory");
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(src, 0, stage, 0, 4);
+    device.queue.submit([enc.finish()]);
+    await device.popErrorScope();
+    await stage.mapAsync(GPUMapMode.READ);
+    stage.getMappedRange(); stage.unmap();
+  });
+  rows["popErrorScope and mapAsync (concurrent)"] = await time(async () => {
+    device.pushErrorScope("out-of-memory");
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(src, 0, stage, 0, 4);
+    device.queue.submit([enc.finish()]);
+    await Promise.all([device.popErrorScope(), stage.mapAsync(GPUMapMode.READ)]);
+    stage.getMappedRange(); stage.unmap();
+  });
+  // 6. borch's own readback on one element — the library's number.
+  let borch = null;
+  try {
+    const bt = await import("/borch-ts/dist/src/index.js");
+    await bt.init();
+    const t = bt.Tensor.from(new Float32Array([1]), [1]);
+    rows["borch Tensor.toArray() (1 element, eager)"] = await time(async () => { await t.add(t).toArray(); });
+    const k = bt.keepAlive(bt.Tensor.from(new Float32Array([2]), [1]));
+    rows["borch keepAlive tensor toArray() (no alloc)"] = await time(async () => { await k.toArray(); });
+    borch = String(bt.Device.adapterInfo);
+  } catch (e) { rows["borch"] = { error: String(e).slice(0, 200) }; }
+  return { adapter: `${info.vendor} / ${info.architecture}`, borch, reps: REPS, rows };
+}"""
+
+
+def main(argv):
+    from playwright.sync_api import sync_playwright
+    headed = _headed("--headless" not in argv)
+    channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
+    port, shutdown = serve(ROOT)
+    try:
+        with sync_playwright() as pw:
+            context = pw.chromium.launch_persistent_context(tempfile.mkdtemp(prefix="borch-rt-"), headless=not headed, channel=channel, args=list(FLAGS), timeout=60_000)
+            try:
+                page = context.new_page()
+                page.goto(f"http://127.0.0.1:{port}/tests/browser/kernel_bench.html?bench=none", wait_until="commit")
+                got = page.evaluate(PROBE)
+            finally:
+                context.close()
+    finally:
+        shutdown()
+    if not got or got.get("error"):
+        print(json.dumps(got, indent=1)); return 1
+    if refuse_if_software(got.get("adapter"), "the round trip"):
+        return 1
+    print(f"adapter: {got['adapter']} · {got['reps']} repetitions, median / min ms")
+    for name, v in got["rows"].items():
+        if "error" in v: print(f"  {name:<46} error: {v['error']}")
+        else: print(f"  {name:<46} {v['median']:7.3f} / {v['min']:7.3f}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
