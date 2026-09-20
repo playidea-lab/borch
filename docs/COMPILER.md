@@ -376,6 +376,16 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   dispatches (the three subgroup layers' `tmw` gone), the training step untouched (257,
   bit for bit; the optimizer writes the weights, so nothing is constant).
 
+- **2026-09-20, the second adapter — every pass held on NVIDIA.** `capture:ts` through cq on
+  the RTX 5080 (`nvidia / blackwell`, Chrome 151, Vulkan): 18 / 18 — the MLP's two
+  recordings bit for bit with `check`; the ResNet-18 step bit for bit, eager 13.4 →
+  replay 11.6 ms, the plan 398 intermediates 415 → 161 MB in four arenas; the streamed
+  chain with its eight refills; `compiled(model)` on both networks. The passes are
+  layout- and feature-independent, as Step 5 assumed; what that card lacks is the f32
+  subgroup configuration (int8 only, `docs/SCALE-MEASURED.md`), so Step 5's autotune
+  would there choose among scalar tiles only — a smaller question than the plan set, and
+  one an int8 subgroup path would reopen.
+
 ## 6. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

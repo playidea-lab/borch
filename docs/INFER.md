@@ -357,6 +357,25 @@ prediction is written down so that the ledger can say which step was wrong.
   ("Fusion only for eval!" — order matters), and a per-element relative gate that read a
   1e-7 difference on a value near zero as 7e-4.
 
+- **2026-09-20, Step 5 — the second adapter measured, through cq on the RTX 5080.**
+  `features_probe` on `nvidia / blackwell` (driver 580, Chrome 151, Vulkan):
+  `chromium-experimental-subgroup-matrix` **is** exposed, with configurations `u8`/`i8` →
+  `u32`/`i32` at 16 × 16 × 32 and 16 × 8 × 32 — **no f32 8 × 8 × 8**. `subgroupMatrixF32`
+  reads the configurations, not the feature name, so the device came up with
+  `subgroupMatrix` off and every convolution on the scalar kernels; nothing faulted,
+  nothing read as zeros. So Steps 3–4 give this card nothing today, as the plan said, and
+  Steps 1–2 are its whole gain: **fused + captured forward 3.00 ms at batch 1 (ORT 3.98,
+  0.75×) and 4.32 at batch 16 (ORT 3.58, 1.21×)**, GPU 2.9 ms of the 4.32 — the
+  submit-and-readback round trip is 1.3–1.4 ms on Linux/Vulkan against 0.3 on metal-3,
+  and that, not a kernel, is the batch-16 gap there. The rest of the day's work held on
+  the card: `capture:ts` 18 / 18 (ResNet-18 replay bit for bit, 13.4 → 11.6 ms; the plan
+  415 → 161 MB in 4 arenas; the streamed chain; `compiled(model)`); training 13.5 / 24.4 /
+  37.4 ms at batch 16 / 32 / 64 against TF.js's 75.1 / 123.8 / 235.7 (5.6× / 5.1× / 6.3×)
+  and jax-js's 78.5 / 86.2 / 118.7. The 4090 stays off the bus; the 5080's cq worker was
+  held by a run whose process had ended (the harness took a debug run regardless). What
+  the card asks for next is an int8 subgroup path — the configuration it has — which is
+  a plan of its own, not a lift of this one.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

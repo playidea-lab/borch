@@ -1941,6 +1941,9 @@ prints the adapter:
 | `apple / metal-3`, **2026-09-19** — borch.ts | **21.2** | **36.2** | **62.3** |
 | `apple / metal-3`, 2026-09-19 — TF.js 4.22.0 | 86.5 | 170.2 | 348.7 |
 | ratio | **4.1×** | **4.7×** | **5.6×** |
+| `nvidia / blackwell` (RTX 5080, driver 580, Chrome 151, Vulkan), **2026-09-20** — borch.ts | **13.5** | **24.4** | **37.4** |
+| `nvidia / blackwell`, 2026-09-20 — TF.js 4.22.0 | 75.1 | 123.8 | 235.7 |
+| ratio | **5.6×** | **5.1×** | **6.3×** |
 
 The 2026-09-19 rows are the same page and the same TF.js bytes sixteen days later: TF.js
 did not move (86.4 → 86.5) and borch.ts went from 38.6 to 21.2 ms at batch 16 — the
@@ -1967,6 +1970,9 @@ borch's page, after borch:
 | Burn 0.21 (Rust → wasm, wgpu backend, autodiff, autotune on) | 262.8 | 512.0 | 1014.7 |
 | ratio | 12.1× | 14.2× | 16.2× |
 | TF.js 4.22.0, same day, for the eye | 86.5 | 170.2 | 348.7 |
+| `nvidia / blackwell` (RTX 5080, Chrome 151, Vulkan), **2026-09-20** — borch.ts | **13.4** | **22.3** | **34.1** |
+| `nvidia / blackwell` — jax-js 0.1.25 + optax 0.1.2 | 78.5 | 86.2 | 118.7 |
+| ratio | 5.9× | 3.9× | 3.5× |
 
 Read with these attached. **jax-js**: it has no BatchNorm module and no cross-entropy, so
 both are written from its primitives the way its own MNIST example writes them; the
@@ -2027,6 +2033,21 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused + captured, the wide layers on the staged kernel too, **2026-09-20** (night) | | **1.10 ms** | **4.14 ms** |
 | ONNX Runtime Web 1.29.0, same run | | 3.29–4.15 ms | 5.25–5.88 ms |
 | ORT is faster than the captured network by | | 0.27–0.33× | **0.70–0.79×** — borch ahead |
+| borch.ts fused + captured, `nvidia / blackwell` (RTX 5080, Chrome 151, Vulkan), **2026-09-20** | | **3.00 ms** | 4.32 ms |
+| ONNX Runtime Web 1.29.0, `nvidia / blackwell`, same run | | 3.98 ms | **3.58 ms** |
+| ORT is faster than the captured network by | | 0.75× — borch ahead | **1.21×** — ORT ahead |
+
+**The NVIDIA rows are a different kernel set.** On the RTX 5080 through Chrome 151 and
+Vulkan, `chromium-experimental-subgroup-matrix` is present but its configurations are
+**int8 only** (16 × 16 × 32 and 16 × 8 × 32, `u8`/`i8` → `u32`/`i32`; no f32 8 × 8 × 8),
+so `Device.subgroupMatrix` is off there and every convolution runs on the scalar tiled
+and direct kernels — the day's subgroup-conv work (`docs/INFER.md` Step 3) gives that card
+nothing yet. Its scalar GEMM is good (the two deep layers 0.68 ms each at batch 16, where
+metal-3's scalar kernel took 1.38), and what keeps the captured forward at 4.32 ms against
+a 2.9 ms GPU is the submit-and-readback round trip on Linux/Vulkan — 1.3–1.4 ms where
+metal-3 pays 0.3. Batch 1 is ahead of ORT on both cards; batch 16 is ahead on metal-3 and
+behind on blackwell, and the plan for the second is an int8 path or Chrome shipping the
+f32 configuration on Vulkan, whichever comes first.
 
 The 2026-09-20 rows are `torch.compiled` pointed at the fused network's `noGrad` forward
 (`docs/INFER.md` Step 1): the JavaScript that encodes the thirty-eight dispatches is paid

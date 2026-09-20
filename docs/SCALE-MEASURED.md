@@ -38,5 +38,7 @@
 | hub load imagenet-efficientnet-b0 (21 MB) | 8.4 s · gpu +145 MB (pool +0) · host peak +43 MB = 2.00× file · faults 0 |
 | hub load imagenet-vit-base-patch16-224 (346 MB) | 21.5 s · gpu +1193 MB (pool +0) · host peak +693 MB = 2.00× file · faults 0 |
 | checkpoint (Step 6) | recomputed backward bit-identical to taped (max \|Δ\| 0.00e0), held 148.6→100.6 KB (68 %), faults 0 |
+| subgroup matrix configurations (2026-09-20 · ef40cb2, `features_probe`) | **int8 only**: u8/i8 → u32/i32 at 16×16×32 and 16×8×32 — no f32 8×8×8, so `Device.subgroupMatrix` is off and every conv runs on the scalar kernels (`docs/INFER.md` Step 5) |
+| captured training step, ResNet-18 CIFAR batch 16 (2026-09-20 · ef40cb2, `capture:ts`) | eager 13.4 → replay 11.6 ms; 398 intermediates 415.3 → 161.3 MB in 4 arenas; 18/18 bit for bit |
 | validation faults | 0 |
 
