@@ -370,13 +370,19 @@ const BENCHES = {
     // Unsplit the outputs must be bit-exact through the same arithmetic; split, the
     // dequantised partials are summed in f32 and are held to a rounding.
     let wrong = 0, worst = 0; const first = [];
+    const hist = { x: new Map(), y: new Map(), o16: new Map(), oBlk: new Map(), n: new Map() };
+    const bump = (mm, k) => mm.set(k, (mm.get(k) ?? 0) + 1);
     for (let i = 0; i < m; i++) {
       const o = Math.floor(i / plane) % sh.O;
       const want = Math.fround(Math.fround(ref[i] * Math.fround(maxHost[0] / 127)) * scales[o]);
       const bad = spI === 1 ? got[i] !== want : Math.abs(got[i] - want) > 1e-5 * Math.max(1, Math.abs(want));
-      if (bad) { wrong++; worst = Math.max(worst, Math.abs(got[i] - want)); if (first.length < 4) { const b = Math.floor(i / (sh.O * plane)), y = Math.floor((i % plane) / H), x = i % H; first.push(`n${b} o${o} y${y} x${x}: got ${got[i].toExponential(3)} want ${want.toExponential(3)} (Δint ${((got[i] - want) / (Math.fround(maxHost[0] / 127) * scales[o])).toFixed(1)})`); } }
+      if (bad) { wrong++; worst = Math.max(worst, Math.abs(got[i] - want)); const b = Math.floor(i / (sh.O * plane)), y = Math.floor((i % plane) / H), x = i % H;
+        bump(hist.x, x); bump(hist.y, y); bump(hist.o16, o % 16); bump(hist.oBlk, Math.floor(o / 128)); bump(hist.n, b);
+        if (first.length < 4) first.push(`n${b} o${o} y${y} x${x}: got ${got[i].toExponential(3)} want ${want.toExponential(3)} (Δint ${((got[i] - want) / (Math.fround(maxHost[0] / 127) * scales[o])).toFixed(1)})`); }
     }
-    const scaleNote = (Math.abs(maxHost[0] - peak) > 1e-6 * peak ? ` (GPU absmax ${maxHost[0]} vs host ${peak})` : "") + (first.length ? ` first: ${first.join(" · ")}` : "");
+    const show = (mm) => [...mm.entries()].sort((a, b) => a[0] - b[0]).map(([k, v]) => `${k}:${v}`).join(",");
+    const scaleNote = (Math.abs(maxHost[0] - peak) > 1e-6 * peak ? ` (GPU absmax ${maxHost[0]} vs host ${peak})` : "")
+      + (first.length ? ` first: ${first.join(" · ")} · by x ${show(hist.x)} · by y ${show(hist.y)} · by o%16 ${show(hist.o16)} · by o/128 ${show(hist.oBlk)} · by n ${show(hist.n)}` : "");
     // Timed: the int8 convolution with its quantise passes as extra, against the f32 tiled kernel.
     const sp = K.convForwardSplit(s); const partsF = sp > 1 ? dev.alloc(m * sp) : null; const Of = dev.alloc(m);
     const runs = [
