@@ -90,7 +90,25 @@ else. `tileShape` / `tileDepth` / `scalarMatmulSplit` re-swept for the new tile.
 
 ## 3. Ledger
 
-(filled as the steps land)
+- **2026-09-21, the sweep on metal-3** (`kernel_bench mm --sweep=gemm`, the minimum of
+  five rounds, ms; the slab sum counted where split). Every configuration exact against
+  the tile as it is.
+
+  | shape | scalar tile | 64 × 64 r4×4 vec4 | 128 × 128 r8×8 vec4 | 128 × 64 r8×4 vec4 | subgroup (for the eye) |
+  |---|---|---|---|---|---|
+  | 1024³ | 0.492 | **0.368** | 0.354 + 0.054 (split 4) | 0.342 + 0.031 (split 2) | 0.229 |
+  | 2048³ | 3.551 | 2.637 | 2.716 | **2.432** | 1.585 |
+  | 512 × 4608 × 256 | 0.280 + 0.009 | 0.209 + 0.009 | 0.211 + 0.024 | **0.197 + 0.009** | 0.132 + 0.008 |
+  | 256 × 2304 × 1024 | 0.284 + 0.015 | 0.210 + 0.017 | 0.209 + 0.023 | **0.196 + 0.015** | 0.134 + 0.015 |
+
+  On Apple the register file decides: the 8 × 8 micro-tile is no faster than 4 × 4 with
+  the same `vec4` staging (Step 1's prediction, "moves less", held — it moves not at
+  all), `vec4` staging alone is **1.34×** on the tile as it is, and the 8 × 4 micro-tile
+  on a 128 × 64 tile is the best of the sweep at **1.46×** (2048³ 3.55 → 2.43). Double
+  buffering loses everywhere on metal-3 (+3–10 %); the deeper K-tile (32) is a wash;
+  the scalar-load 8 × 8 is the slowest of the new ones, so the staging loads matter more
+  than the micro-tile here. The 5080's numbers decide the step; metal-3's say the
+  routing will be per adapter.
 
 ## 4. After this
 
