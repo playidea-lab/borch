@@ -182,8 +182,17 @@ Python binding gets the same call. The workbench's frozen-backbone pass
 ## 4. What this plan does not do
 
 - **A layout switch (NHWC)** — §2; a second kernel set for an unmeasured gain.
-- **A graph compiler** — capture is a recording, not a compiler; the fusions that remain
-  after conv+bn+relu+add are single dispatches each.
+- **A graph compiler of the IR kind** — what exists is half of one: `torch.capture()`
+  records a run and replays it (CUDA-Graph-shaped), and its fusion pass folds elementwise
+  trees into single kernels (`fuse:py`, 2165 → 1699 dispatches on ViT-tiny). What it is
+  not: an IR with shape inference, algebraic rewrites, layout and memory planning, or
+  per-shape kernel selection. Those are not built because the gains they would reach
+  here are already taken by hand where they were measurable (`nn.intrinsic`, the
+  matmul-epilogue fusion tried and refused at 0.72 → 1.69 ms) and the fusions that
+  remain after conv+bn+relu+add are single dispatches each. LLM decode would want
+  dynamic shapes (a growing KV cache) that a recording cannot hold — and decode is out
+  of scope anyway (`docs/SCALE.md` Step 8), because its cost is weight bandwidth and
+  int4 kernels, not the graph.
 - **LLM decode** — int4, KV cache, decode-shaped kernels; `docs/SCALE.md` Step 8 says
   why not, and nothing here changes it.
 - **Safari / Firefox** — unmeasured; the same-page harness runs in Chrome.
