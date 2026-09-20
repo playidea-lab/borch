@@ -330,8 +330,12 @@ const BENCHES = {
     const xf = fill(n, 1), wf = fill(wsize, 2);
     // The host's quantisation, the reference's operands.
     let peak = 0; for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(xf[i]));
-    const sA = Math.fround(peak / 127), invA = 1 / sA;
-    const xq = new Int8Array(n); for (let i = 0; i < n; i++) xq[i] = Math.max(-127, Math.min(127, Math.round(xf[i] * invA)));
+    // The host quantises with the kernel's arithmetic: f32 scale and inverse, and WGSL's
+    // `round` is half-to-even where `Math.round` is half-up — measured, 256 → 256 at 8 × 8
+    // batch 16 had a handful of inputs on a tie and 1,501 outputs off by a few units.
+    const sA = Math.fround(peak / 127), invA = Math.fround(1 / sA);
+    const roundEven = (v) => { const f = Math.floor(v), d = v - f; return d < 0.5 ? f : d > 0.5 ? f + 1 : (f % 2 === 0 ? f : f + 1); };
+    const xq = new Int8Array(n); for (let i = 0; i < n; i++) xq[i] = Math.max(-127, Math.min(127, roundEven(Math.fround(xf[i] * invA))));
     const Q = await import("/borch-ts/dist/src/quant.js");
     const Op = K.convInt8CoPad(sh.O);
     const { packed, scales } = Q.quantizeConvWeightInt8TapMajor(wf, sh.O, sh.C, 9, Op);
