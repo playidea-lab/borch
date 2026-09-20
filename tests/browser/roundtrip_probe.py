@@ -172,7 +172,7 @@ PROBE = r"""async () => {
     rows["borch matmul 2048³ .sum().toArray()"] = await time(async () => { await A.matmul(B).sum().toArray(); });
     rows["borch matmul 2048³ then keepAlive toArray()"] = await time(async () => { A.matmul(B); await k.toArray(); });
     rows["borch matmul 2048³, synchronize(), keepAlive toArray()"] = await time(async () => { A.matmul(B); await dev.synchronize(); await k.toArray(); });
-    borch = String(bt.Device.adapterInfo);
+    borch = `${bt.Device.adapterInfo} · readbackKicks ${bt.Device.readbackKicks}`;
   } catch (e) { rows["borch"] = { error: String(e).slice(0, 200) }; }
   return { adapter: `${info.vendor} / ${info.architecture}`, borch, reps: REPS, rows };
 }"""
@@ -199,6 +199,7 @@ def main(argv):
     if refuse_if_software(got.get("adapter"), "the round trip"):
         return 1
     print(f"adapter: {got['adapter']} · {got['reps']} repetitions, p10 / p50 / p90 ms")
+    if got.get("borch"): print(f"borch: {got['borch']}")
     for name, v in got["rows"].items():
         if name == "__table":
             print("  work · GPU ms by timestamp · wall ms by how the readback is waited for (p10 / p50 / p90)")

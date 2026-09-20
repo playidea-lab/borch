@@ -152,6 +152,70 @@ const NO_ADAPTER =
   "No WebGPU adapter could be obtained — a driver blocklist, a virtual machine, or a " +
   "headless environment with no GPU.";
 
+/** How many tiny dispatches the kick calibration submits — the count at which the RTX
+ *  5080's wall left its GPU time (0.08 ms of GPU, 2.6 of wall). */
+const KICK_PROBE_DISPATCHES = 40;
+/** Repetitions of each wait in the calibration; the median of three is what decides. */
+const KICK_PROBE_REPS = 3;
+/** Plain wait this many times the kicked one, and above `KICK_PROBE_FLOOR_MS`, means the
+ *  browser needs kicking: on the 5080 the ratio is 13; on metal-3 it is 0.9. */
+const KICK_PROBE_RATIO = 4;
+const KICK_PROBE_FLOOR_MS = 1;
+
+/**
+ * **Does this browser notice a finished fence on its own?** Forty tiny dispatches
+ * behind a 4-byte copy, mapped and waited for plainly, then again with the wire kicked
+ * by error-scope round trips until the map resolves; three of each, medians compared.
+ * See `Device.readbackKicks` for what it found and why it is measured.
+ */
+async function calibrateKicks(device: GPUDevice): Promise<boolean> {
+  const module = device.createShaderModule({ code:
+    "@group(0) @binding(0) var<storage, read_write> X: array<f32>;\n" +
+    "@compute @workgroup_size(1) fn main() { X[0] = X[0] + 1.0; }" });
+  const pipeline = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
+  const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC;
+  const bufs = Array.from({ length: KICK_PROBE_DISPATCHES }, () => device.createBuffer({ size: 4, usage }));
+  const binds = bufs.map((buffer) => device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer } }] }));
+  const stage = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const first = bufs[0];
+  if (first === undefined) return false;
+  const submit = (): void => {
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    for (const bind of binds) { pass.setBindGroup(0, bind); pass.dispatchWorkgroups(1); }
+    pass.end();
+    encoder.copyBufferToBuffer(first, 0, stage, 0, 4);
+    device.queue.submit([encoder.finish()]);
+  };
+  const wait = async (kicks: boolean): Promise<number> => {
+    const t0 = performance.now();
+    submit();
+    let done = false;
+    const mapped = stage.mapAsync(GPUMapMode.READ).then(() => { done = true; });
+    while (kicks && !done) {
+      device.pushErrorScope("validation");
+      await device.popErrorScope();
+    }
+    await mapped;
+    stage.unmap();
+    return performance.now() - t0;
+  };
+  const median = async (kicks: boolean): Promise<number> => {
+    const t: number[] = [];
+    for (let i = 0; i < KICK_PROBE_REPS; i++) t.push(await wait(kicks));
+    t.sort((a, b) => a - b);
+    return t[KICK_PROBE_REPS >> 1] ?? 0;
+  };
+  await wait(false);                       // warm the pipeline once, unmeasured
+  const plain = await median(false);
+  const kicked = await median(true);
+  for (const b of bufs) b.destroy();
+  stage.destroy();
+  return plain > KICK_PROBE_FLOOR_MS && plain > KICK_PROBE_RATIO * kicked;
+}
+
 /** Which adapter, on one line. Empty fields are dropped — the browser hides most of
  *  them. */
 function describe(adapter: GPUAdapter): string {
@@ -849,7 +913,41 @@ export class Device {
       .catch(() => {
         /* lost is not rejected, and even if it were there is nothing more to do here */
       });
+    Device.readbackKicks = await calibrateKicks(device);
     return made;
+  }
+
+  /**
+   * **Whether this browser has to be kicked to notice a finished fence.** Measured
+   * once at `create` by `calibrateKicks`, and read by `kicked`, which is what every wait
+   * for the GPU in this class goes through.
+   *
+   * Chrome on Linux over Vulkan (RTX 5080, 2026-09-20, `roundtrip:probe`): forty tiny
+   * dispatches are 0.08 ms of GPU and **2.6 ms of wall** under `onSubmittedWorkDone` or
+   * `mapAsync`; a 1.57 ms kernel is 2.5. Everything past a few hundred microseconds
+   * lands at the same 2.5 — the GPU process polls its fences on a backoff, and a fence
+   * that signals between polls waits for the next one. A cheap round trip on the wire
+   * (`pushErrorScope`/`popErrorScope`, 0.04 ms) makes it look, and a loop of them until
+   * the wait resolves brings the wall to the GPU's time plus 0.1. metal-3 needs none of
+   * it: the wall follows the GPU within 0.2 ms whatever the wait, and a loop of kicks
+   * there is only chatter — which is why it is measured rather than assumed.
+   */
+  static readbackKicks = false;
+
+  /**
+   * Waits for `pending` — a map or `onSubmittedWorkDone` — kicking the wire until it
+   * resolves where `readbackKicks` says the browser needs it. Each kick is a round trip
+   * awaited in turn, so the loop yields to the page between them; it is not a spin.
+   */
+  private async kicked<T>(pending: Promise<T>): Promise<T> {
+    if (!Device.readbackKicks) return pending;
+    let done = false;
+    const watched = pending.then((v) => { done = true; return v; }, (e) => { done = true; throw e; });
+    while (!done) {
+      this.device.pushErrorScope("validation");
+      await this.device.popErrorScope();
+    }
+    return watched;
   }
 
   /**
@@ -1938,7 +2036,7 @@ export class Device {
     encoder.resolveQuerySet(this.querySet, 0, count, resolved, 0);
     encoder.copyBufferToBuffer(resolved, 0, stage, 0, bytes);
     this.device.queue.submit([encoder.finish()]);
-    await stage.mapAsync(GPUMapMode.READ);
+    await this.kicked(stage.mapAsync(GPUMapMode.READ));
     const times = new BigUint64Array(stage.getMappedRange().slice(0));
     stage.unmap();
     stage.destroy();
@@ -1995,7 +2093,7 @@ export class Device {
    */
   async synchronize(): Promise<void> {
     this.flush();
-    await this.device.queue.onSubmittedWorkDone();
+    await this.kicked(this.device.queue.onSubmittedWorkDone());
     await this.drainAllocations();
   }
 
@@ -2060,7 +2158,7 @@ export class Device {
       // upstream makes this readback a value of nothing, and the throw below is what
       // says so. Draining here folds it into `faults` so that throw fires.
       await this.drainAllocations();
-      await stage.mapAsync(GPUMapMode.READ);
+      await this.kicked(stage.mapAsync(GPUMapMode.READ));
       // Mapped memory disappears on unmap. It is always copied before going out.
       const out = new Float32Array(stage.getMappedRange().slice(0));
       stage.unmap();
