@@ -2097,10 +2097,25 @@ export function convInt8Fits(s: ConvNDShape): boolean {
     && band !== null && band.stage <= CI8_STAGE_MAX;   // stage counts 8 channels of floats; here 8 words of 4 channels — the same count
 }
 
-/** The grid: pixel tiles, blocks of 128 output channels. */
-export function convInt8Grid(s: ConvNDShape): [number, number, number] {
+/** How many K pieces the int8 convolution splits into — the small-plane kernel's policy:
+ *  to 128 workgroups, a piece at least one block of 32 channels. The first measurement
+ *  (RTX 5080, 2026-09-21, unsplit): 512 → 512 at 4 × 4, batch 16, is 32 workgroups and
+ *  ran 0.089 ms against the f32 kernel's 0.107; batch 1 is 4 workgroups and 0.086 against
+ *  0.033. Split, each piece writes dequantised partials to a slab and `sumSplitsConv`
+ *  adds them with the bias and the epilogue. */
+export function convInt8Split(s: ConvNDShape): number {
   const [OH = 1, OW = 1] = s.outDims;
-  return [Math.ceil((s.N * OH * OW) / SGFS_TN), Math.ceil(s.O / CI8_CO), 1];
+  const tiles = Math.ceil((s.N * OH * OW) / SGFS_TN) * Math.ceil(s.O / CI8_CO);
+  const kBlocks = s.C / 32;
+  const WANT = 128;
+  if (tiles >= WANT) return 1;
+  return Math.max(1, Math.min(Math.ceil(WANT / tiles), kBlocks));
+}
+
+/** The grid: pixel tiles, blocks of 128 output channels, K pieces. */
+export function convInt8Grid(s: ConvNDShape, splits: number): [number, number, number] {
+  const [OH = 1, OW = 1] = s.outDims;
+  return [Math.ceil((s.N * OH * OW) / SGFS_TN), Math.ceil(s.O / CI8_CO), splits];
 }
 
 /**
@@ -2118,7 +2133,7 @@ export function convInt8Grid(s: ConvNDShape): [number, number, number] {
  * workgroup memory and the lanes write `f32(c) · (Max[0] / 127) · SW[co] + B[co]`, the
  * residual and the relu, in NCHW.
  */
-export function convForwardInt8(s: ConvNDShape, hasBias: boolean, epilogue?: ConvEpilogue): string {
+export function convForwardInt8(s: ConvNDShape, splits: number, hasBias: boolean, epilogue?: ConvEpilogue): string {
   const [IH = 1, IW = 1] = s.inDims;
   const [OH = 1, OW = 1] = s.outDims;
   const [KH = 1, KW = 1] = s.kernel;
@@ -2132,9 +2147,12 @@ export function convForwardInt8(s: ConvNDShape, hasBias: boolean, epilogue?: Con
   const lanes = 32 * CI8_SUBGROUPS;
   const Op = convInt8CoPad(s.O);
   const kBlocks = s.C / 32;
+  const perPart = Math.ceil(kBlocks / splits);
+  const direct = splits === 1;                     // unsplit: bias and epilogue at the store
+  const total = s.N * s.O * plane;
   const localPlane = imgs > 1 ? plane : TN;
   const XS = KW * TN * 8;                           // words: the taps of a kernel row, a tile each
-  const slot = hasBias ? 4 : 3;
+  const slot = direct && hasBias ? 4 : 3;
   const OT = CI8_SUBGROUPS * TN * CI8_CO_SG;
   const mma: string[] = [];
   for (let kw = 0; kw < KW; kw++) {
@@ -2154,9 +2172,9 @@ enable chromium_experimental_subgroup_matrix;
 @group(0) @binding(1) var<storage, read> Wq: array<i32>;
 @group(0) @binding(2) var<storage, read> Max: array<f32>;
 @group(0) @binding(3) var<storage, read> SW: array<f32>;
-${hasBias ? "@group(0) @binding(4) var<storage, read> B: array<f32>;" : ""}
-${residualBinding(epilogue, slot + 1)}
-@group(0) @binding(${epilogue?.residual ? slot + 2 : slot + 1}) var<storage, read_write> Out: array<f32>;
+${direct && hasBias ? "@group(0) @binding(4) var<storage, read> B: array<f32>;" : ""}
+${direct ? residualBinding(epilogue, slot + 1) : ""}
+@group(0) @binding(${direct && epilogue?.residual ? slot + 2 : slot + 1}) var<storage, read_write> Out: array<f32>;
 var<workgroup> pl: array<i32, ${stage}>;
 var<workgroup> xs: array<i32, ${XS}>;
 var<workgroup> ot: array<i32, ${OT}>;
@@ -2170,7 +2188,10 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   var c01: subgroup_matrix_result<i32, 16, 16>;
   var c10: subgroup_matrix_result<i32, 16, 16>;
   var c11: subgroup_matrix_result<i32, 16, 16>;
-  for (var kb = 0u; kb < ${kBlocks}u; kb = kb + 1u) {
+  let part = wid.z;
+  let kb0 = part * ${perPart}u;
+  let kb1 = min(kb0 + ${perPart}u, ${kBlocks}u);
+  for (var kb = kb0; kb < kb1; kb = kb + 1u) {
     let ci0 = kb * 32u;
     // Stage: the band of padded rows of thirty-two channels for the tile's images, eight
     // words a position; zero in the border and past the batch.
@@ -2228,7 +2249,7 @@ ${mma.join("\n")}
       let q = p - n * ${plane}u;
       let idx = (n * ${s.O}u + o) * ${plane}u + q;
       var v = f32(ot[sid * ${TN * CI8_CO_SG}u + e]) * sA * SW[o];
-${hasBias ? "      v = v + B[o];\n" : ""}${epilogueWgsl(epilogue, "v", "idx").split("\n").map((l) => (l ? "    " + l : l)).join("\n")}      Out[idx] = v;
+${direct ? `${hasBias ? "      v = v + B[o];\n" : ""}${epilogueWgsl(epilogue, "v", "idx").split("\n").map((l) => (l ? "    " + l : l)).join("\n")}      Out[idx] = v;` : `      Out[part * ${total}u + idx] = v;`}
     }
   }
 }`;
