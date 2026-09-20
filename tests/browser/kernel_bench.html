@@ -337,6 +337,7 @@ const BENCHES = {
     const roundEven = (v) => { const f = Math.floor(v), d = v - f; return d < 0.5 ? f : d > 0.5 ? f + 1 : (f % 2 === 0 ? f : f + 1); };
     const xqHost = new Int8Array(n); for (let i = 0; i < n; i++) xqHost[i] = Math.max(-127, Math.min(127, roundEven(Math.fround(xf[i] * invA))));
     const xq = new Int8Array(n);                              // filled from the GPU's bytes below
+    const H = sh.H, plane = H * H;
     const Q = await import("/borch-ts/dist/src/quant.js");
     const Op = K.convInt8CoPad(sh.O);
     const { packed, scales } = Q.quantizeConvWeightInt8TapMajor(wf, sh.O, sh.C, 9, Op);
@@ -381,7 +382,6 @@ const BENCHES = {
     }
     const qNote = qBad ? ` WRONG(quantiser: ${qBad} of ${n} differ from the host off a tie — ${qFirst2.join(" · ")})` : ` · quantiser matches the host (${qTies} tie${qTies === 1 ? "" : "s"} within ±1)`;
     // The CPU int32 reference on the GPU's bytes: a 3 × 3, stride 1, pad 1 convolution on the integers.
-    const H = sh.H, plane = H * H;
     const ref = new Int32Array(m);
     for (let b = 0; b < sh.N; b++) for (let o = 0; o < sh.O; o++) for (let y = 0; y < H; y++) for (let x = 0; x < H; x++) {
       let acc = 0;
