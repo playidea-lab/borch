@@ -73,7 +73,7 @@ bias. `kernel_bench --bench=mmi8` runs it where the adapter has the configuratio
   shapes are launch-bound at 1.03–1.27×. The gate is met with room; the ceiling of §0 was
   stall-inflated and is revised there.
 
-### Step 2 — Activation quantisation · size S
+### Step 2 — Activation quantisation · size S · **done 2026-09-21** (§6; its 10 % gate failed as written, one dispatch now)
 
 Per tensor, dynamic: one reduction for the absolute maximum (the reduce kernels exist),
 one elementwise pass to `round(x / scale)` packed four to a word. Two dispatches a layer;
@@ -83,7 +83,7 @@ replay.
 - **Gate**: the packed tensor round-trips within half a step of the scale; the two
   dispatches cost less than 10 % of the int8 layer they feed at batch 16.
 
-### Step 3 — The convolution · size M
+### Step 3 — The convolution · size M · **done 2026-09-21** (§6; exact on nine shapes, 2.1–3.2× the f32 kernel)
 
 The staged kernel's shape (`convForwardSubgroupSmall`): the padded band of eight input
 channels in workgroup memory — but int8, so **four channels a word** and thirty-two
@@ -97,7 +97,7 @@ rules apply here.
 - **Gate**: exact against a CPU int32 reference for every conv shape of ResNet-18; GPU
   time per layer below the scalar tile's on each.
 
-### Step 4 — Accuracy · size S · the gate that decides whether it ships
+### Step 4 — Accuracy · size S · the gate that decides whether it ships · **open: needs a trained network** (§6)
 
 The bench's ResNet-18 with the exported weights, W8A8 through `compiled(model,
 { int8: true })`, against the f32 forward on the same held-out images.
@@ -106,7 +106,7 @@ The bench's ResNet-18 with the exported weights, W8A8 through `compiled(model,
   written into the table beside the time. A path that fails this is not routed to, by
   the same rule that keeps `check=True` honest.
 
-### Step 5 — Routing and the one call · size S
+### Step 5 — Routing and the one call · size S · **done 2026-09-21** (§6)
 
 `Device.subgroupInt8` from the configurations; `compiled(model, { int8: true })` folds,
 quantises the weights once, records the int8 forward. Off by default — the caller asks
@@ -115,7 +115,7 @@ for the accuracy trade — and refused by name on an adapter without the configu
 - **Gate**: the `compare:ts` table gains an int8 row on the 5080 with its accuracy beside
   it; `capture:ts` holds the int8 replay to its eager int8 forward bit for bit.
 
-### Step 6 — The measurement it was for · size S
+### Step 6 — The measurement it was for · size S · **measured 2026-09-21** (§6)
 
 The 5080, batch 1 and 16, int8 against f32 against ORT, same page.
 
@@ -196,6 +196,40 @@ wants the trade.
   batch-16 layer and more than the whole kernel at batch 1. That is the quantiser's bill,
   and the reason a static scale (folded into the producing layer's epilogue) is the next
   thing to want — which needs calibration data, which needs Step 4's trained network.
+
+- **2026-09-21, the one-dispatch quantiser, then Steps 5 and 6.** `absMaxAtomic` in
+  place of two passes: the quantise passes 0.015–0.019 → **0.009–0.012 ms** a layer, and
+  the int8 layer with them 2.29× / 2.32× / 1.71× the f32 kernel at batch 16 (128 → 128,
+  512 → 512, 64 → 64) and 1.41× / 1.03× at batch 1 (512 → 512, 128 → 128). **Step 5**:
+  `torch.compiled(model, { int8: true })` — `ConvND.quantizeInt8` once per layer (a
+  readback, the packed words and scales kept), the intrinsic modules' forwards take
+  `convNDFusedInt8` where the device has the configuration and the shape fits, refused by
+  name where the device has not, `Compiled.int8Layers` says how many layers took it.
+  **Step 6**, `compare:ts` on the RTX 5080 (Chrome 151 / Vulkan), the ResNet-18 (CIFAR)
+  with 13 of its 20 convolutions on int8 (the stem, the three stride-2 layers and the
+  three 1 × 1 downsamples stay f32):
+
+  | batch | f32 fused + captured | **int8 + captured** | ORT Web 1.29.0 | max \|int8 − f32\| |
+  |---|---|---|---|---|
+  | 1 | 0.66 ms · 48 dispatches | 0.66 ms · 87 dispatches | 3.28–3.85 ms | 3.4e-4 (1.8e-3 of the logits' scale) |
+  | 16 | 1.76 ms · 40 dispatches | **1.22 ms** · 79 dispatches | 3.65–4.06 ms | 3.4e-4 |
+
+  **At batch 16 the int8 forward is 1.44× the f32 one and 3× ORT; at batch 1 it is a
+  wash**, and the dispatch count says why: an int8 layer is a zeroing copy, the absolute
+  maximum, the quantise, the convolution and (split) the slab sum — four dispatches where
+  the f32 layer was one — and at batch 1 the replay is launch-bound, so the forty extra
+  launches eat what the kernel saves. Step 6's prediction ("batch 16 4.3 → ~3.4; if the
+  round trip has been cut by then, ~2.0") is beaten at 1.22 — the round trip was cut and
+  the scalar path swept before this plan ran, and the kernel came in at 2.9× rather than
+  1.75×. What would take batch 1 with it is a **static per-layer scale** (calibrated once,
+  folded into the producing layer's epilogue: the copy, the maximum and the quantise gone,
+  the int8 layer one dispatch again) — which needs calibration data, which is Step 4's
+  trained network, which the bench does not have (its weights are torch's seed-0 draw,
+  so its top-1 is meaningless and the accuracy gate cannot be run). **Step 4 is the open
+  item**: a trained ResNet-18 (CIFAR-10, ~10 minutes on the 5080 through cq) exported
+  with a labelled test slice for the browser, then the gate as written, then the static
+  scale. Held on metal-3 (no int8 configuration, the path inert): `parity:ts` 229,
+  `capture:ts` 18 / 18, `device:ts`; `compare:ts` unchanged.
 
 ## 5. Risks, and the sentence that retires each
 

@@ -2054,6 +2054,9 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused + captured, `nvidia / blackwell`, **2026-09-21**, the scalar conv path swept on the card (`docs/INFER.md` ledger; two runs) | | **0.65 ms** | **1.74–1.90 ms** |
 | ONNX Runtime Web 1.29.0, same runs | | 3.51–3.52 ms | 3.62–3.99 ms |
 | ORT is faster than the captured network by | | 0.19× — borch ahead | **0.48×** — borch ahead |
+| borch.ts **int8** + captured, `nvidia / blackwell`, **2026-09-21** — 13 of 20 convolutions on the int8 subgroup configuration (`docs/INT8.md`), max \|int8 − f32\| 3.4e-4 | | 0.66 ms | **1.22 ms** |
+| ONNX Runtime Web 1.29.0, same run | | 3.28–3.85 ms | 3.65–4.06 ms |
+| ORT is faster than the int8 network by | | 0.17–0.20× — borch ahead | **0.30–0.33×** — borch ahead |
 
 **The NVIDIA rows are a different kernel set.** On the RTX 5080 through Chrome 151 and
 Vulkan, `chromium-experimental-subgroup-matrix` is present but its configurations are
@@ -2081,7 +2084,14 @@ next day's sweep of those constants on the card (`kernel_bench fwd --sweep=all`:
 reduction split 4 → 32 pieces on the deep layers, the direct kernel's weight slice let
 grow to the card's 48 KiB, small direct grids sent to the split GEMM) took the captured
 forward to **0.65 / 1.74 ms** and the training step to 10.6 / 14.7 / 23.2. The int8
-configuration it has (`docs/INT8.md`) would apply to what is left of that GPU time.
+configuration it has (`docs/INT8.md`) was then built on — the same night: with 13 of
+the 20 convolutions on `i8 × i8 → i32` subgroup matrices (`torch.compiled(model,
+{ int8: true })`, an accuracy trade a caller asks for, refused by name elsewhere) the
+batch-16 forward is **1.22 ms**, a third of ORT's, with the logits 1.8e-3 of their scale
+from f32; at batch 1 it is a wash, because an int8 layer is four dispatches to the f32
+layer's one and the replay there is launch-bound. The accuracy gate that would let the
+path ship (top-1 within half a point) waits on a trained network — the bench's weights
+are a seed-0 draw.
 
 The 2026-09-20 rows are `torch.compiled` pointed at the fused network's `noGrad` forward
 (`docs/INFER.md` Step 1): the JavaScript that encodes the thirty-eight dispatches is paid
