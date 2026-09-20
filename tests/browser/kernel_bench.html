@@ -15,7 +15,9 @@
   **What the numbers mean.** A minimum over rounds is the GPU's best clock state; the
   same kernel inside a training step has measured about twice this (2026-09-07 — not
   cache, not data, the clock). Compare kernels here; trust the step's wall clock for
-  the step.
+  the step. **And read the step's per-kind time against its count**: a kind's time in
+  `compare`/`bench` is the sum over every dispatch of that kind (the ResNet-18 has three
+  512 → 512 convolutions at 4 × 4, and their sum was read for a day as one slow dispatch).
 -->
 <html lang="en">
 <head><meta charset="utf-8"><title>borch.ts — kernel bench</title>

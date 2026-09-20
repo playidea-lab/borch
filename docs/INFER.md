@@ -450,11 +450,17 @@ prediction is written down so that the ledger can say which step was wrong.
   0.48×)**; training 10.6 / 14.7 / 23.2 ms at batch 16 / 32 / 64 (TF.js 75.4 / 122.0 /
   236.7 — 7.1× / 8.3× / 10.2×). metal-3 unchanged (4.1 / 1.1; its deep layers are on the
   subgroup kernels). The prediction written before the sweep was "forward 2.61 → ~1.7";
-  it landed at 1.74. What is left on the 5080's GPU time at batch 16 (1.9 ms): the two
-  deep layers at 0.37 each — now 3.3 TFLOP/s against the card's 15.8, and the in-step
-  profiler reads them at 3.5× the bench's 0.107, a discrepancy the bench's own note
-  ("about twice") no longer covers and that is the next thing to understand; the
-  64-channel layers on the direct kernel at 0.19 each.
+  it landed at 1.74. What is left on the 5080's GPU time at batch 16 (1.9 ms) was first
+  read as "the two deep layers at 0.37 each — 3.5× the bench's 0.107, a discrepancy to
+  understand". **It was not a discrepancy: a kind's time in the tables is the sum over
+  every dispatch of that kind, and the ResNet-18 has three 512 → 512 convolutions at
+  4 × 4 and three 256 → 256 at 8 × 8.** 0.37 / 3 = 0.12 — the bench's number. The tables
+  now print the count beside the time (`cnt:… 0.37×3`), so that a sum is never again read
+  as a dispatch. Per dispatch, then, every convolution of the forward on the 5080 runs at
+  0.08–0.12 ms — 10–13 TFLOP/s against the scalar tile's own 15.8 on 1024³ — and the
+  1.9 ms is twenty of them. Nothing cheap is left on the scalar path; what would move it
+  is a faster scalar GEMM (the tile itself is at 15.8 of a card that does ~56 f32) or
+  the int8 configuration (`docs/INT8.md`, 3–3.6× on the GEMM core).
 
 ## 7. Risks, and the sentence that retires each
 

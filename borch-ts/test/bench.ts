@@ -151,7 +151,7 @@ export interface StepResult {
   kinds: [string, number][];
   /** **GPU time** (ms) by kind of kernel, largest first. The point is that the order
    * differs from the count's. */
-  hot: [string, number][];
+  hot: [string, number, number][];
   /** The total measured while profiling (ms). Larger than usual, because a pass is
    * opened per dispatch. */
   profiledMs: number;
@@ -316,8 +316,9 @@ export async function runStep(
    * ms/step above.** What to read here is the share, not the absolute figure.
    */
   await device().profile(() => one());
-  const hot: [string, number][] = [];
-  for (const [kind, ns] of device().nsByKind) hot.push([kind, ns / 1e6]);
+  // A kind's time is a sum over its dispatches; the count goes with it (see `compare.ts`).
+  const hot: [string, number, number][] = [];
+  for (const [kind, ns] of device().nsByKind) hot.push([kind, ns / 1e6, device().countByKind.get(kind) ?? 1]);
   hot.sort((a, b) => b[1] - a[1]);
   const profiledMs = hot.reduce((a, [, ms]) => a + ms, 0);
   const profileDropped = device().profileDropped;
@@ -368,7 +369,7 @@ export async function runStep(
     dispatches: Math.round(perStepDispatches),
     usPerDispatch: Math.round((perStep * 1000) / Math.max(1, perStepDispatches)),
     kinds,
-    hot: hot.map(([k, ms]) => [k, Math.round(ms * 100) / 100]),
+    hot: hot.map(([k, ms, n]) => [k, Math.round(ms * 100) / 100, n]),
     profiledMs: Math.round(profiledMs * 10) / 10,
     profileDropped,
     submits: Math.round(perStepSubmits),
@@ -401,13 +402,13 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
       // **The time breakdown is printed per batch.** The counts stay put as the batch
       // grows and the times do not — a superlinear kernel is visible only here.
       const hot = r.hot.slice(0, 8)
-        .map(([kind, ms]) => `${kind} ${ms.toFixed(1)}`).join(" · ");
+        .map(([kind, ms, n]) => `${kind} ${ms.toFixed(2)}${n > 1 ? `×${n}` : ""}`).join(" · ");
       // If it was cut short, say so **beside the total.** Put in a footnote it is read
       // past, with only the table taken in.
       const cut = r.profileDropped > 0
         ? `, ${r.profileDropped} had no query slot and went unmeasured — this is part of it`
         : "";
-      lines.push(`         GPU time (ms, total ${r.profiledMs}${cut}): ${hot}`);
+      lines.push(`         GPU time (ms, total ${r.profiledMs}${cut}, ×count): ${hot}`);
       // The counts by kind are the same for every batch, so they are printed once.
       if (b === batches[0]) {
         const top = r.kinds.slice(0, 8)

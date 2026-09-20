@@ -248,12 +248,15 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     await noGrad(() => model.forward(xb)).toArray();
     const dispatches = d.dispatches - d0;
     await d.profile(() => noGrad(() => model.forward(xb)).toArray());
-    const hot: [string, number][] = [];
-    for (const [kind, ns] of d.nsByKind) hot.push([kind, ns / 1e6]);
+    // **A kind's time is a sum over its dispatches, and the count is printed with it**: the
+    // ResNet-18 has three 512 → 512 convolutions at 4 × 4, and their summed 0.37 ms was read
+    // for a day as one slow dispatch 3.5× the bench's — it was three at the bench's speed.
+    const hot: [string, number, number][] = [];
+    for (const [kind, ns] of d.nsByKind) hot.push([kind, ns / 1e6, d.countByKind.get(kind) ?? 1]);
     hot.sort((p, q) => q[1] - p[1]);
     const total = hot.reduce((a, [, ms]) => a + ms, 0);
-    lines.push(`           borch.ts ${dispatches} dispatches/forward · GPU time (ms, total ${total.toFixed(1)}): `
-      + hot.slice(0, 8).map(([k, ms]) => `${k} ${ms.toFixed(1)}`).join(" · ")
+    lines.push(`           borch.ts ${dispatches} dispatches/forward · GPU time (ms, total ${total.toFixed(1)}, ×count): `
+      + hot.slice(0, 8).map(([k, ms, n]) => `${k} ${ms.toFixed(2)}${n > 1 ? `×${n}` : ""}`).join(" · ")
       + (d.profileDropped ? ` · ${d.profileDropped} dropped` : ""));
   }
 
@@ -281,11 +284,11 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${d.dispatches - d0} dispatches/forward`);
     // The fused forward's GPU time by kind — what of the wall is the GPU's (INFER Step 0).
     await d.profile(() => noGrad(() => model.forward(xb)).toArray());
-    const hot: [string, number][] = [];
-    for (const [kind, ns] of d.nsByKind) hot.push([kind, ns / 1e6]);
+    const hot: [string, number, number][] = [];
+    for (const [kind, ns] of d.nsByKind) hot.push([kind, ns / 1e6, d.countByKind.get(kind) ?? 1]);
     hot.sort((p, q) => q[1] - p[1]);
     const total = hot.reduce((a, [, v]) => a + v, 0);
-    lines.push(`           fused GPU time (ms, total ${total.toFixed(1)}): ` + hot.slice(0, 8).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(" · "));
+    lines.push(`           fused GPU time (ms, total ${total.toFixed(1)}, ×count): ` + hot.slice(0, 8).map(([k, v, n]) => `${k} ${v.toFixed(2)}${n > 1 ? `×${n}` : ""}`).join(" · "));
     // **The eval forward recorded and replayed** (INFER Step 1): `compiled` over the fused
     // network's `noGrad` forward — the intermediates fused, laid into arenas, and the
     // JavaScript that encodes thirty-eight dispatches paid once. The replay's logits are
