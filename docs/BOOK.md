@@ -1944,6 +1944,9 @@ prints the adapter:
 | `nvidia / blackwell` (RTX 5080, driver 580, Chrome 151, Vulkan), **2026-09-20** — borch.ts | **13.5** | **24.4** | **37.4** |
 | `nvidia / blackwell`, 2026-09-20 — TF.js 4.22.0 | 75.1 | 123.8 | 235.7 |
 | ratio | **5.6×** | **5.1×** | **6.3×** |
+| `nvidia / blackwell`, **2026-09-20 (night)**, the readback kicked — borch.ts | **13.1** | **17.4** | **28.2** |
+| `nvidia / blackwell`, same run — TF.js 4.22.0 | 74.4 | 121.9 | 233.5 |
+| ratio | **5.7×** | **7.0×** | **8.3×** |
 
 The 2026-09-19 rows are the same page and the same TF.js bytes sixteen days later: TF.js
 did not move (86.4 → 86.5) and borch.ts went from 38.6 to 21.2 ms at batch 16 — the
@@ -1973,6 +1976,9 @@ borch's page, after borch:
 | `nvidia / blackwell` (RTX 5080, Chrome 151, Vulkan), **2026-09-20** — borch.ts | **13.4** | **22.3** | **34.1** |
 | `nvidia / blackwell` — jax-js 0.1.25 + optax 0.1.2 | 78.5 | 86.2 | 118.7 |
 | ratio | 5.9× | 3.9× | 3.5× |
+| `nvidia / blackwell`, **2026-09-20 (night)**, the readback kicked — borch.ts | **12.9** | **17.4** | **27.6** |
+| `nvidia / blackwell`, same run — jax-js 0.1.25 + optax 0.1.2 | 78.1 | 79.8 | 112.3 |
+| ratio | **6.1×** | **4.6×** | **4.1×** |
 
 Read with these attached. **jax-js**: it has no BatchNorm module and no cross-entropy, so
 both are written from its primitives the way its own MNIST example writes them; the
@@ -2036,6 +2042,9 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused + captured, `nvidia / blackwell` (RTX 5080, Chrome 151, Vulkan), **2026-09-20** | | **3.00 ms** | 4.32 ms |
 | ONNX Runtime Web 1.29.0, `nvidia / blackwell`, same run | | 3.98 ms | **3.58 ms** |
 | ORT is faster than the captured network by | | 0.75× — borch ahead | **1.21×** — ORT ahead |
+| borch.ts fused + captured, `nvidia / blackwell`, **2026-09-20 (night)**, the readback kicked (`Device.readbackKicks`) | | **0.98–0.99 ms** | **2.61–2.66 ms** |
+| ONNX Runtime Web 1.29.0, same runs | | 3.65–3.88 ms | 3.63–3.89 ms |
+| ORT is faster than the captured network by | | 0.26× — borch ahead | **0.68–0.73×** — borch ahead |
 
 **The NVIDIA rows are a different kernel set.** On the RTX 5080 through Chrome 151 and
 Vulkan, `chromium-experimental-subgroup-matrix` is present but its configurations are
@@ -2043,11 +2052,23 @@ Vulkan, `chromium-experimental-subgroup-matrix` is present but its configuration
 so `Device.subgroupMatrix` is off there and every convolution runs on the scalar tiled
 and direct kernels — the day's subgroup-conv work (`docs/INFER.md` Step 3) gives that card
 nothing yet. Its scalar GEMM is good (the two deep layers 0.68 ms each at batch 16, where
-metal-3's scalar kernel took 1.38), and what keeps the captured forward at 4.32 ms against
-a 2.9 ms GPU is the submit-and-readback round trip on Linux/Vulkan — 1.3–1.4 ms where
-metal-3 pays 0.3. Batch 1 is ahead of ORT on both cards; batch 16 is ahead on metal-3 and
-behind on blackwell, and the plan for the second is an int8 path or Chrome shipping the
-f32 configuration on Vulkan, whichever comes first.
+metal-3's scalar kernel took 1.38), and what kept the captured forward at 4.32 ms against
+a 2.9 ms GPU was called, that afternoon, "the submit-and-readback round trip on
+Linux/Vulkan — 1.3–1.4 ms where metal-3 pays 0.3". **Measured that night, it was not a
+round trip** (`npm run roundtrip:probe`, `docs/INFER.md` ledger): on that card every wait
+whose fence is not signalled at the GPU process's first look lands at the same 2.1–2.7 ms
+— forty tiny dispatches are 0.08 ms of GPU and 2.6 of wall — because the GPU process
+looks at its fences on a period of about two milliseconds unless something makes it
+look. A `pushErrorScope`/`popErrorScope` round trip (0.03 ms) does, and a loop of them
+until the readback resolves brings the wall to the GPU's time plus 0.1. metal-3 has no
+such wait (wall = GPU + 0.2 under every way of waiting), and kicks there *cost* the eager
+forward, so the library calibrates it once per device (`Device.readbackKicks`, the
+adapter line of every table carries the decision) and kicks only where the browser needs
+it. The night rows are that: **the captured forward 0.98 ms at batch 1 and 2.61 at batch
+16 on the 5080, ahead of ORT at both**, and the training step 13.1 / 17.4 / 28.2 — the
+batch-64 step had been waiting more than once. What remains on that card is the GPU time
+itself, on scalar kernels; the int8 configuration it has (`docs/INT8.md`) would apply to
+that, no longer to a gap.
 
 The 2026-09-20 rows are `torch.compiled` pointed at the fused network's `noGrad` forward
 (`docs/INFER.md` Step 1): the JavaScript that encodes the thirty-eight dispatches is paid

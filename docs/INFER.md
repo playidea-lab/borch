@@ -367,7 +367,8 @@ prediction is written down so that the ledger can say which step was wrong.
   Steps 1–2 are its whole gain: **fused + captured forward 3.00 ms at batch 1 (ORT 3.98,
   0.75×) and 4.32 at batch 16 (ORT 3.58, 1.21×)**, GPU 2.9 ms of the 4.32 — the
   submit-and-readback round trip is 1.3–1.4 ms on Linux/Vulkan against 0.3 on metal-3,
-  and that, not a kernel, is the batch-16 gap there. The rest of the day's work held on
+  and that, not a kernel, is the batch-16 gap there (measured the same night — it is not
+  a round trip, it is the GPU process's polling schedule; the entry below). The rest of the day's work held on
   the card: `capture:ts` 18 / 18 (ResNet-18 replay bit for bit, 13.4 → 11.6 ms; the plan
   415 → 161 MB in 4 arenas; the streamed chain; `compiled(model)`); training 13.5 / 24.4 /
   37.4 ms at batch 16 / 32 / 64 against TF.js's 75.1 / 123.8 / 235.7 (5.6× / 5.1× / 6.3×)
@@ -375,6 +376,52 @@ prediction is written down so that the ledger can say which step was wrong.
   held by a run whose process had ended (the harness took a debug run regardless). What
   the card asks for next is an int8 subgroup path — the configuration it has — which is
   a plan of its own, not a lift of this one.
+
+- **2026-09-20, the round trip — measured, and it was not a round trip.** The open item
+  above: 4.32 ms of wall for 2.9 of GPU on the 5080, called "the submit-and-readback
+  round trip, 1.3–1.4 ms on Linux/Vulkan against 0.3 on metal-3". `tests/browser/
+  roundtrip_probe.py` (`npm run roundtrip:probe`, census 68) takes it apart with raw
+  WebGPU on both adapters: work of five sizes with a timestamp query around it, then the
+  same work under four ways of waiting for its readback. **On the 5080 every wait whose
+  fence is not signalled at the GPU process's first look lands at the same 2.1–2.7 ms**:
+  forty tiny dispatches are 0.08 ms of GPU and 2.6 of wall under `onSubmittedWorkDone`
+  or `mapAsync`; a 0.12 ms kernel is 2.6; a 1.57 ms kernel is 2.5. That is a polling
+  schedule, not a transfer — the GPU process looks at its fences on a period of about
+  two milliseconds unless something makes it look. **A `pushErrorScope`/`popErrorScope`
+  round trip (0.03 ms) makes it look**, and a loop of them until the map resolves brings
+  the wall to the GPU's time plus 0.1: forty dispatches 0.20, the 1.57 ms kernel 1.66.
+  metal-3 has none of it — wall = GPU + 0.2 under every wait, kicks included — and after
+  an idle gap it pays ~0.7 ms of wake-up that kicks do not remove. So the library kicks
+  where the browser needs it and nowhere else: `Device.readbackKicks`, decided once at
+  `create` by `calibrateKicks`, and `Device.kicked()`, which `read()`, `synchronize()` and
+  the timestamp readback go through. The calibration took seven versions to get right,
+  each retired by a number: forty tiny dispatches (the 5080 sometimes finished them
+  before the first look — "no kicks"); a slowest-of-eight rule (metal-3's clock ramp ran
+  the kernel at 15 ms on its first waits — "kicks"); idle gaps between waits (metal-3
+  read 9 ms once — "kicks"); interleaved pairs (a kicked wait resets the schedule and
+  the plain wait after it is fast — "no kicks"); a runtime detector on an empty submit
+  (a fence wait covers everything queued, and under a bench that queues the next
+  forward it waited for that: the eager fused forward on metal-3 2.9 → 6.1 ms); a
+  kicked-median ratio (a kick is 0.03 ms with the GPU process idle and 0.6–2.0 when it
+  is not — "no kicks" three times on the card that stalls). What stands: a 0.12 ms loop
+  kernel, timestamp-queried, waited for plainly in a run after six warm-ups; **wall
+  minus GPU above 1.7 ms in any of four rounds** (40 ms idle before each) is the stall.
+  metal-3 reads 0.3–1.2 over the GPU in its worst round across every calibration
+  measured; the 5080 reads 2.0–2.9. Kicks are calibrated rather than assumed because on
+  metal-3 they **cost** the eager fused forward — 2.9 → 5.8 ms at batch 1, 6.4 → 12.2 at
+  batch 16 — while the captured and the training step do not move; the mechanism is
+  not known, the cost is. The adapter line of every table now carries the decision and
+  its numbers. **Held: `capture:ts` 18 / 18 on both adapters.** What it bought on the
+  5080, `compare:ts` with kicks on: **fused + captured 0.99 ms at batch 1 (ORT 3.88,
+  0.26×) and 2.66 at batch 16 (ORT 3.63–3.89, 0.68–0.73×) — borch ahead on the second
+  adapter at both batches**, where the day started at 3.00 / 4.32 against 3.98 / 3.58;
+  the training step 12.3 / 17.4 / 27.6 ms at batch 16 / 32 / 64 (was 13.5 / 24.4 / 37.4)
+  against TF.js 75.2 / 123.4 / 234.3 — 6.1× / 7.1× / 8.5×. The batch-64 step lost ten
+  milliseconds: it waited more than once. Two sentences retired: the one that called
+  this a round trip, and `docs/INT8.md`'s premise that int8 was the remaining lever on
+  this card. Open: a `synchronize()` right after a dropped matmul still reads 2.8 ms on
+  the probe where the same call followed by a readback reads 1.2 — not understood, and
+  no bench uses that path.
 
 ## 7. Risks, and the sentence that retires each
 

@@ -115,15 +115,20 @@ The 5080, batch 1 and 16, int8 against f32 against ORT, same page.
 - **Predict**: batch 16 4.3 → ~3.4 ms (ORT 3.6). If the round trip (§3) has been cut by
   then, ~2.0.
 
-## 3. The lever this plan points at instead
+## 3. The lever this plan pointed at instead — taken, 2026-09-20
 
-The captured forward on the 5080 is 4.32 ms for 2.9 ms of GPU; on metal-3 the same
-recording is 4.1 ms for 3.9 of GPU. The difference is the submit-and-readback round trip
-on Linux/Vulkan — 1.3–1.4 ms against 0.3 — and it is paid once per forward regardless of
-kernel. It is not in this plan because it is not int8; it is named here because it is
-larger than what this plan can win, and cheaper: a measurement first (where the
-milliseconds go between `submit` and the mapped readback — the queue, the staging map,
-the fence), then whatever that says. `docs/INFER.md` carries it as its open item.
+The captured forward on the 5080 was 4.32 ms for 2.9 ms of GPU; on metal-3 the same
+recording is 4.1 ms for 3.9 of GPU. The plan called the difference "the submit-and-
+readback round trip on Linux/Vulkan, 1.3–1.4 ms", and said to measure it before building
+anything here. Measured (`roundtrip:probe`, `docs/INFER.md` ledger): **not a round trip —
+the GPU process's polling schedule**, about two milliseconds between looks at its fences
+unless something makes it look; a cheap wire round trip does, and a loop of them until
+the readback resolves brings the wall to the GPU's time. With that in the library
+(`Device.readbackKicks`, calibrated per adapter), the 5080's captured forward is **2.66 ms
+at batch 16 against ORT's 3.63–3.89, and 0.99 at batch 1 against 3.88** — ahead at both,
+with no int8 kernel. The premise of §0's arithmetic (4.3 → ~3.4 against ORT's 3.6) is
+gone; the 2.9 ms of GPU that remains is now the whole wall, and int8's 1.75× on the GEMM
+core would apply to the convolutions' share of it.
 
 ## 4. Order and verdict
 
@@ -137,6 +142,14 @@ after the round trip of §3 is measured, because on today's arithmetic it moves 
 5080's batch-16 forward from behind ORT to level with it, at an accuracy cost, while the
 round trip could move it ahead at none. If the round trip cannot be cut, int8 is the
 remaining lever on that card and this plan is ready.
+
+**The verdict's condition was met the same night** (§3): the stall was cut and the 5080
+is ahead of ORT at both batches on f32 alone. Int8 is no longer what the card *needs*; it
+is what would take 2.66 ms toward ~1.9 (the convolutions' ~2.5 ms of GPU at 1.75×, less
+the quantise passes), at the accuracy cost §1 names. Step 1 goes ahead as planned — the
+GEMM in the tree, gated on exactness and 1.5× — because it is the kernel any int8 path
+starts from and its gate is a number on a card the tree can reach; Steps 3–6 wait for a
+caller who wants the trade.
 
 ## 5. Risks, and the sentence that retires each
 
