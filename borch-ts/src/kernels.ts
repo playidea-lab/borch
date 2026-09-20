@@ -1856,6 +1856,161 @@ export function int8MatmulGrid(M: number, N: number): [number, number, number] {
   return [N / I8_TILE, M / I8_TILE, 1];
 }
 
+/** A configuration of `matmulTiled` — `docs/GEMM.md`. `TM × TN` the workgroup's tile,
+ *  `RM × RN` a thread's micro-tile (so `(TM / RM) · (TN / RN)` threads), `KT` the K-tile,
+ *  `vec4` whether the staging loads are four floats at a time, `dbuf` whether the next
+ *  K-tile's loads are issued before this tile's FMAs into a second buffer. */
+export interface TiledConfig {
+  readonly TM: number; readonly TN: number; readonly RM: number; readonly RN: number;
+  readonly KT: number; readonly vec4: boolean; readonly dbuf: boolean;
+}
+
+/** Workgroup bytes a configuration stages. */
+export function tiledConfigBytes(cfg: TiledConfig): number {
+  return (cfg.dbuf ? 2 : 1) * cfg.KT * (cfg.TM + cfg.TN) * 4;
+}
+
+/** Whether `matmulTiled` takes the shape with the configuration on a device with
+ *  `storage` bytes of workgroup memory: the tile divides M and N, the K-tile divides K,
+ *  RN is a whole four (the output is stored as `vec4`), and the staging fits. */
+export function tiledConfigFits(M: number, K: number, N: number, cfg: TiledConfig, storage: number): boolean {
+  return M % cfg.TM === 0 && N % cfg.TN === 0 && K % cfg.KT === 0 && cfg.RN % 4 === 0 && cfg.TM % cfg.RM === 0
+    && cfg.TN % cfg.RN === 0 && (cfg.TM / cfg.RM) * (cfg.TN / cfg.RN) <= 256 && tiledConfigBytes(cfg) <= storage
+    && (!cfg.vec4 || (K % 4 === 0 && N % 4 === 0));
+}
+
+/** Pieces the reduction of `matmulTiled` is split into: the same policy as
+ *  `scalarMatmulSplit` with the configuration's tile, pieces of at least four K-tiles. */
+export function tiledSplit(M: number, K: number, N: number, cfg: TiledConfig): number {
+  const tiles = (M / cfg.TM) * (N / cfg.TN);
+  const WANT = 256;
+  if (tiles >= WANT) return 1;
+  return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / (4 * cfg.KT))));
+}
+
+/** The grid of `matmulTiled`. */
+export function tiledGrid(M: number, N: number, cfg: TiledConfig, splits: number): [number, number, number] {
+  return [N / cfg.TN, M / cfg.TM, splits];
+}
+
+/**
+ * **The scalar GEMM, re-tiled** (`docs/GEMM.md`) — a measurement kernel until Step 4
+ * puts its winning configuration into `matmul` and `tiledGemm`. `A` is (M, K) and `B` is
+ * (K, N), both row-major, untransposed; the shape divides the tile (`tiledConfigFits`).
+ *
+ * The workgroup stages a `TM × KT` block of A as `[k][m]` scalars and a `KT × TN` block of
+ * B as `[k][n / 4]` vectors, so a thread's inner step reads `RM` scalars and `RN / 4`
+ * vectors of workgroup memory for `RM · RN` FMAs — at 8 × 8, sixty-four FMAs for ten
+ * reads, against the tile as it was (`matmul`: sixteen for eight). The accumulators are
+ * `RM · RN / 4` vectors; the store is `vec4` rows. With `vec4` the staging loads are
+ * four floats a load (A along K, written to four rows of the block; B along N, written
+ * as one vector); with `dbuf` the next K-tile's loads go to registers before this
+ * tile's FMAs and to the other buffer after, one barrier a K-tile.
+ *
+ * Split, each piece writes its own slab of the output (`wid.z`), summed by `sumSplits`.
+ */
+export function matmulTiled(M: number, K: number, N: number, cfg: TiledConfig, splits = 1): string {
+  const { TM, TN, RM, RN, KT } = cfg;
+  const TX = TN / RN, TY = TM / RM, threads = TX * TY;
+  const RN4 = RN / 4;
+  const perSplit = Math.ceil(K / KT / splits) * KT;
+  // Staging: how many loads a thread issues for A and for B per K-tile.
+  const aUnits = cfg.vec4 ? (TM * KT) / 4 : TM * KT;     // vec4s along K, or scalars
+  const bUnits = (KT * TN) / 4;                          // vec4s along N, always
+  const aLoads = Math.ceil(aUnits / threads), bLoads = Math.ceil(bUnits / threads);
+  const aBuf = KT * TM, bBuf = (KT * TN) / 4;
+  const acc: string[] = [], zero: string[] = [], fmas: string[] = [], stores: string[] = [];
+  for (let i = 0; i < RM; i++) for (let j = 0; j < RN4; j++) {
+    acc.push(`  var c${i}_${j}: vec4<f32>;`); zero.push(`  c${i}_${j} = vec4<f32>(0.0);`);
+    fmas.push(`      c${i}_${j} = fma(vec4<f32>(a${i}), b${j}, c${i}_${j});`);
+    stores.push(`  Out[${splits > 1 ? `wid.z * ${(M * N) / 4}u + ` : ""}((row0 + ${i}u) * ${N}u + col0) / 4u + ${j}u] = c${i}_${j};`);
+  }
+  const aReads = Array.from({ length: RM }, (_, i) => `      let a${i} = As[aOff + k * ${TM}u + ly * ${RM}u + ${i}u];`);
+  const bReads = Array.from({ length: RN4 }, (_, j) => `      let b${j} = Bs[bOff + k * ${TN / 4}u + lx * ${RN4}u + ${j}u];`);
+  // The loads of one K-tile at k-base `kb` into registers `ra` / `rb`, and their stores
+  // into the buffer at `sa` / `sb`.
+  const aGuard = (u: string) => aUnits % threads === 0 ? "" : `if (${u} < ${aUnits}u) `;
+  const bGuard = (u: string) => bUnits % threads === 0 ? "" : `if (${u} < ${bUnits}u) `;
+  const loadA = Array.from({ length: aLoads }, (_, s) => cfg.vec4
+    ? `    { let u = ${s * threads}u + tid; ${aGuard("u")}{ let m = u / ${KT / 4}u; let k4 = u % ${KT / 4}u; ra[${s}] = A4[((wrow + m) * ${K}u + kb + k4 * 4u) / 4u]; } }`
+    : `    { let u = ${s * threads}u + tid; ${aGuard("u")}{ let m = u / ${KT}u; let k = u % ${KT}u; ra[${s}] = A[(wrow + m) * ${K}u + kb + k]; } }`);
+  const loadB = Array.from({ length: bLoads }, (_, s) => cfg.vec4
+    ? `    { let u = ${s * threads}u + tid; ${bGuard("u")}{ let k = u / ${TN / 4}u; let n4 = u % ${TN / 4}u; rb[${s}] = B4[((kb + k) * ${N}u + wcol + n4 * 4u) / 4u]; } }`
+    : `    { let u = ${s * threads}u + tid; ${bGuard("u")}{ let k = u / ${TN / 4}u; let n = wcol + (u % ${TN / 4}u) * 4u; let o = (kb + k) * ${N}u + n; rb[${s}] = vec4<f32>(B[o], B[o + 1u], B[o + 2u], B[o + 3u]); } }`);
+  const storeA = Array.from({ length: aLoads }, (_, s) => cfg.vec4
+    ? `    { let u = ${s * threads}u + tid; ${aGuard("u")}{ let m = u / ${KT / 4}u; let k4 = u % ${KT / 4}u; let v = ra[${s}];
+      As[sa + (k4 * 4u) * ${TM}u + m] = v.x; As[sa + (k4 * 4u + 1u) * ${TM}u + m] = v.y; As[sa + (k4 * 4u + 2u) * ${TM}u + m] = v.z; As[sa + (k4 * 4u + 3u) * ${TM}u + m] = v.w; } }`
+    : `    { let u = ${s * threads}u + tid; ${aGuard("u")}{ let m = u / ${KT}u; let k = u % ${KT}u; As[sa + k * ${TM}u + m] = ra[${s}]; } }`);
+  const storeB = Array.from({ length: bLoads }, (_, s) =>
+    `    { let u = ${s * threads}u + tid; ${bGuard("u")}{ let k = u / ${TN / 4}u; let n4 = u % ${TN / 4}u; Bs[sb + k * ${TN / 4}u + n4] = rb[${s}]; } }`);
+  const raType = cfg.vec4 ? "vec4<f32>" : "f32";
+  const compute = `    for (var k = 0u; k < ${KT}u; k = k + 1u) {
+${aReads.join("\n")}
+${bReads.join("\n")}
+${fmas.join("\n")}
+    }`;
+  const body = cfg.dbuf
+    ? `  if (tiles > 0u) {
+    let kb = kFrom;
+${loadA.join("\n")}
+${loadB.join("\n")}
+    let sa = 0u; let sb = 0u;
+${storeA.join("\n")}
+${storeB.join("\n")}
+  }
+  workgroupBarrier();
+  for (var t = 0u; t < tiles; t = t + 1u) {
+    let more = t + 1u < tiles;
+    if (more) {
+      let kb = kFrom + (t + 1u) * ${KT}u;
+${loadA.join("\n")}
+${loadB.join("\n")}
+    }
+    let aOff = (t & 1u) * ${aBuf}u; let bOff = (t & 1u) * ${bBuf}u;
+${compute}
+    if (more) {
+      let sa = ((t + 1u) & 1u) * ${aBuf}u; let sb = ((t + 1u) & 1u) * ${bBuf}u;
+${storeA.join("\n")}
+${storeB.join("\n")}
+    }
+    workgroupBarrier();
+  }`
+    : `  for (var t = 0u; t < tiles; t = t + 1u) {
+    let kb = kFrom + t * ${KT}u;
+${loadA.join("\n")}
+${loadB.join("\n")}
+    let sa = 0u; let sb = 0u;
+${storeA.join("\n")}
+${storeB.join("\n")}
+    workgroupBarrier();
+    let aOff = 0u; let bOff = 0u;
+${compute}
+    workgroupBarrier();
+  }`;
+  return `
+@group(0) @binding(0) var<storage, read> ${cfg.vec4 ? "A4: array<vec4<f32>>" : "A: array<f32>"};
+@group(0) @binding(1) var<storage, read> ${cfg.vec4 ? "B4: array<vec4<f32>>" : "B: array<f32>"};
+@group(0) @binding(2) var<storage, read_write> Out: array<vec4<f32>>;
+var<workgroup> As: array<f32, ${(cfg.dbuf ? 2 : 1) * aBuf}>;
+var<workgroup> Bs: array<vec4<f32>, ${(cfg.dbuf ? 2 : 1) * bBuf}>;
+@compute @workgroup_size(${TX}, ${TY})
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let lx = lid.x; let ly = lid.y;
+  let tid = ly * ${TX}u + lx;
+  let wrow = wid.y * ${TM}u; let wcol = wid.x * ${TN}u;
+  let row0 = wrow + ly * ${RM}u; let col0 = wcol + lx * ${RN}u;
+  let kFrom = wid.z * ${perSplit}u;
+  let kTo = min(kFrom + ${perSplit}u, ${K}u);
+  let tiles = select(0u, (kTo - kFrom) / ${KT}u, kFrom < kTo);
+  var ra: array<${raType}, ${aLoads}>;
+  var rb: array<vec4<f32>, ${bLoads}>;
+${acc.join("\n")}
+${zero.join("\n")}
+${body}
+${stores.join("\n")}
+}`;
+}
+
 /**
  * **A measurement kernel** (`kernel_bench` `mm`), not a path anything dispatches yet: the matmul on
  * f16 subgroup matrices, to weigh compute-f16 before building it. metal-3 offers only the

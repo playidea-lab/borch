@@ -170,7 +170,34 @@ const BENCHES = {
           run: () => { dev.run(dev.pipeline(`mmh:${sh.name}`, () => K.matmulSubgroupF16(M, Kd, Nd)), [Af16, Bf16, Of16], [Nd / t.TN, M / t.TM, 1]); dev.run1d(dev.pipeline(`h2f:${sh.name}`, () => K.castF16ToF32(M * Nd)), [Of16, Of32], M * Nd); } });
       }
     }
-    const text = await race(runs, M * Nd);
+    // **The re-tiled scalar GEMM** (`docs/GEMM.md`): `--sweep=gemm` races the
+    // configurations of `matmulTiled` against the tile as it is; the shape must divide
+    // each (whole tiles, no edge), and the staging must fit the device's workgroup memory.
+    if ((q.get("sweep") || "") === "gemm" && !tA && !tB) {
+      const cfgs = [
+        ["64x64 r4x4 k16 vec4", { TM: 64, TN: 64, RM: 4, RN: 4, KT: 16, vec4: true, dbuf: false }],
+        ["128x128 r8x8 k16 scalar", { TM: 128, TN: 128, RM: 8, RN: 8, KT: 16, vec4: false, dbuf: false }],
+        ["128x128 r8x8 k16 vec4", { TM: 128, TN: 128, RM: 8, RN: 8, KT: 16, vec4: true, dbuf: false }],
+        ["128x128 r8x8 k16 vec4 dbuf", { TM: 128, TN: 128, RM: 8, RN: 8, KT: 16, vec4: true, dbuf: true }],
+        ["128x128 r8x8 k8 vec4 dbuf", { TM: 128, TN: 128, RM: 8, RN: 8, KT: 8, vec4: true, dbuf: true }],
+        ["128x128 r8x8 k32 vec4", { TM: 128, TN: 128, RM: 8, RN: 8, KT: 32, vec4: true, dbuf: false }],
+        ["128x64 r8x4 k16 vec4", { TM: 128, TN: 64, RM: 8, RN: 4, KT: 16, vec4: true, dbuf: false }],
+        ["128x64 r8x4 k16 vec4 dbuf", { TM: 128, TN: 64, RM: 8, RN: 4, KT: 16, vec4: true, dbuf: true }],
+        ["64x128 r4x8 k16 vec4 dbuf", { TM: 64, TN: 128, RM: 4, RN: 8, KT: 16, vec4: true, dbuf: true }],
+        ["64x64 r4x4 k16 vec4 dbuf", { TM: 64, TN: 64, RM: 4, RN: 4, KT: 16, vec4: true, dbuf: true }],
+        ["128x128 r8x8 k16 vec4 unsplit", { TM: 128, TN: 128, RM: 8, RN: 8, KT: 16, vec4: true, dbuf: false }, 1],
+        ["128x128 r8x8 k16 vec4 dbuf unsplit", { TM: 128, TN: 128, RM: 8, RN: 8, KT: 16, vec4: true, dbuf: true }, 1],
+        ["128x64 r8x4 k16 vec4 unsplit", { TM: 128, TN: 64, RM: 8, RN: 4, KT: 16, vec4: true, dbuf: false }, 1],
+      ];
+      for (const [label, cfg, forced] of cfgs) {
+        if (!K.tiledConfigFits(M, Kd, Nd, cfg, Device.workgroupStorage)) { runs.push({ name: `${label} (does not fit)`, key: "none", make: () => "", outb: Out2, run: () => {}, skip: true }); continue; }
+        const sp = forced ?? K.tiledSplit(M, Kd, Nd, cfg); const key = `mmt:${sh.name}:${label}`; const Ot = dev.alloc(M * Nd); const Slab2 = sp > 1 ? dev.alloc(M * Nd * sp) : Ot;
+        runs.push({ name: `${label}${sp > 1 ? ` split ${sp} (+ sum)` : ""}`, key, make: () => K.matmulTiled(M, Kd, Nd, cfg, sp), extraKeys: sp > 1 ? [`sst:${sh.name}:${label}`] : [], outb: Ot,
+          run: () => { dev.run(dev.pipeline(key, () => K.matmulTiled(M, Kd, Nd, cfg, sp)), [A, B, Slab2], K.tiledGrid(M, Nd, cfg, sp)); if (sp > 1) dev.run1d(dev.pipeline(`sst:${sh.name}:${label}`, () => K.sumSplits(M * Nd, sp)), [Slab2, Ot], M * Nd); } });
+      }
+    }
+    const skipped = runs.filter((r) => r.skip).map((r) => r.name); runs.splice(0, runs.length, ...runs.filter((r) => !r.skip));
+    const text = (await race(runs, M * Nd)) + (skipped.length ? ` · ${skipped.join(" · ")}` : "");
     // The best of the runs, as a rate.
     const best = Math.min(...runs.map((r) => r.best));
     return `${text} · ${gflop.toFixed(2)} GFLOP, best ${(gflop / best * 1e3 / 1e3).toFixed(2)} TFLOP/s`;
