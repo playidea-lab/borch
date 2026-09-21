@@ -1327,8 +1327,12 @@ export class Device {
     // on the RTX 5080 (Vulkan) and 3,595 ms on the RTX 5050 Laptop (D3D12) for the fifteen
     // pipelines the rule's picks had not compiled — a serial compile each, DXC's at ~200 ms.
     if (this.prewarming) {
+      const t0 = performance.now();
       this.prewarmPending.push(this.device.createComputePipelineAsync({ layout: "auto", compute: { module, entryPoint: "main" } })
-        .then((pipeline) => { this.pipelines.set(signature, pipeline); this.accesses.set(pipeline, bindingAccess(code)); }));
+        .then((pipeline) => {
+          this.pipelines.set(signature, pipeline); this.accesses.set(pipeline, bindingAccess(code));
+          this.tuneCompiles.push({ sig: signature, ms: performance.now() - t0, bytes: code.length });
+        }));
       throw new PrewarmMiss(signature);
     }
     if (shaderDiagnostics()) {
@@ -2593,6 +2597,9 @@ export class Device {
   /** The last `runTuning`'s warm wave in ms — the candidates' pipelines compiling, and one
    *  wait. Reported apart from the timing, since it is the platform's compile cost. */
   tuneWarmMs = 0;
+  /** The pipelines the last warm wave compiled, each with its wall time (they compile side
+   *  by side, so the times overlap; the order says which are dear) and its WGSL size. */
+  tuneCompiles: { sig: string; ms: number; bytes: number }[] = [];
   private readonly tuneQueue = new Map<string, readonly TuneCandidate[]>();
 
   /** Loads the decisions saved by earlier sessions on this adapter. */
@@ -2652,6 +2659,7 @@ export class Device {
     // and runs again after every pending compile has resolved (a candidate can miss more
     // than once — its convolution, then its split sum).
     const tw = performance.now();
+    this.tuneCompiles = [];
     this.prewarming = true;
     try {
       let pending = all.map((e) => e.cand);

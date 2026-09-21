@@ -183,6 +183,11 @@ async function resnet(lines: string[]): Promise<void> {
   const saved = changed.reduce((a, t) => a + (t.priorMs - t.chosenMs), 0);
   lines.push(`autotune: ${tuned.length} decisions on the first recording, ${changed.length} changed from the rule's pick, ${saved.toFixed(3)} ms of GPU a step saved`
     + (changed.length ? ":\n" + changed.slice(0, 8).map((t) => `    ${t.key.split("|")[1] ?? t.key}: ${t.prior} ${t.priorMs.toFixed(3)} → ${t.chosen} ${t.chosenMs.toFixed(3)} ms`).join("\n") : ""));
+  // **The compile wave, by pipeline** (`docs/FIRST.md` 1a): which candidates' shaders
+  // cost the first load, with their WGSL size — the number a first visit on D3D12 pays.
+  const comp = [...device().tuneCompiles].sort((p, q) => q.ms - p.ms);
+  if (comp.length) lines.push(`compile wave: ${comp.length} pipelines, ${comp.reduce((a, c) => a + c.ms, 0).toFixed(0)} ms summed (overlapping), ${(comp.reduce((a, c) => a + c.bytes, 0) / 1024).toFixed(0)} KB of WGSL — dearest: `
+    + comp.slice(0, 8).map((c) => `${c.sig.split(":").slice(0, 2).join(":")} ${c.ms.toFixed(0)} ms/${(c.bytes / 1024).toFixed(0)}K`).join(" · "));
   want("autotune: no tuned decision is slower than the rule's pick", tuned.every((t) => t.chosenMs <= t.priorMs), `${tuned.length} decisions`);
   want("autotune: decisions were collected where the device can time", !Device.canTime || tuned.length > 0, `${tuned.length} decisions · timestamps ${Device.canTime}`);
   // **What the first call paid** (the Step 5 gate's other number): the recording, the
