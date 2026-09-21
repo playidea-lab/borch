@@ -257,6 +257,35 @@ wants the trade.
   that would make batch 1 a gain: per-layer activation scales from the slice, folded
   into the producing layer's epilogue so an int8 layer is one dispatch again.
 
+- **2026-09-21, the static scale — built and measured.** `calibrateInt8(model, pixels,
+  batch, shape)`: the int8 layers run f32 over the calibration images accumulating
+  `max|x|` and `max|out|` per layer by atomic maximum into two kept words, read back
+  once. With the scales, an int8 layer's input is **the producer's int8 twin** — an int8
+  layer with a static output scale packs its output four channels a word at its own store
+  (`convForwardInt8` / `sumSplitsConv` with `quantOut`) and leaves it on the tensor
+  (`Tensor.int8Twin`), so the layer that reads it next has no quantise pass at all — or,
+  where the producer is f32 (the stem, a stride-2 layer), the layer's own static input
+  scale and one quantise pass. `compare:ts` on the RTX 5080, the same ResNet-18:
+
+  | batch | f32 fused + captured | int8 dynamic | **int8 static** | ORT Web |
+  |---|---|---|---|---|
+  | 1 | 0.65 ms · 48 dispatches | 0.82 · 87 | **0.77 · 52** | 3.32–3.65 |
+  | 16 | 1.75 · 40 | 1.28 · 79 | **1.15 · 44** | 3.67–3.72 |
+
+  Accuracy, the slice split — the scales from one half, the score on the other 1,000
+  images: f32 92.40 %, int8 dynamic 92.60 % (+0.20), **int8 static 92.50 % (+0.10)**;
+  both gates passed. The logits: static 3.0e-4 from f32 (dynamic 3.4e-4). **At batch 16
+  the static int8 forward is 1.52× the f32 one and 3.2× ORT**; the forty extra
+  dispatches of the dynamic path are gone (44 against the f32 forward's 40 — the four
+  that remain are the quantise passes of the layers fed by f32 producers). **At batch 1
+  it is still behind f32** (0.77 against 0.65) with four more dispatches than f32 and
+  thirteen of its layers on a split reduction (a slab and a sum each); at that size the
+  replay is launch-bound and the int8 kernel's GPU time is not what is paid. Two mistakes
+  on the way: a packed word's shifts unparenthesised (WGSL refuses `|` and `<<` mixed),
+  and thirty forwards of a hundred images without a scope, which filled the card and
+  surfaced as "invalid buffer" in a bind group — the allocation's out-of-memory is
+  reported late. Held on metal-3 (the path inert): `capture:ts` 18 / 18, `parity:ts`.
+
 ## 5. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

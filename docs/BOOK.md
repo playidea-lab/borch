@@ -2057,6 +2057,9 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts **int8** + captured, `nvidia / blackwell`, **2026-09-21** — 13 of 20 convolutions on the int8 subgroup configuration (`docs/INT8.md`), max \|int8 − f32\| 3.4e-4; **top-1 on 2,000 CIFAR-10 test images with a trained network: f32 92.70 %, int8 92.75 %** | | 0.66–0.92 ms | **1.22–1.39 ms** |
 | ONNX Runtime Web 1.29.0, same run | | 3.28–3.85 ms | 3.65–4.06 ms |
 | ORT is faster than the int8 network by | | 0.17–0.20× — borch ahead | **0.30–0.33×** — borch ahead |
+| borch.ts **int8 static** + captured, `nvidia / blackwell`, **2026-09-21** — the scales calibrated once, the output packed at the store, the next layer's quantise pass gone (44 dispatches against the f32 forward's 40); top-1 on 1,000 held-out images f32 92.40 %, int8 static 92.50 % | | 0.77 ms | **1.15 ms** |
+| ONNX Runtime Web 1.29.0, same run | | 3.32–3.65 ms | 3.67–3.72 ms |
+| ORT is faster than the static int8 network by | | 0.21–0.23× — borch ahead | **0.31×** — borch ahead |
 
 **The NVIDIA rows are a different kernel set.** On the RTX 5080 through Chrome 151 and
 Vulkan, `chromium-experimental-subgroup-matrix` is present but its configurations are
@@ -2093,7 +2096,10 @@ to the f32 layer's one and the replay there is launch-bound. The accuracy gate t
 the path ship — top-1 within half a point of f32 — was run the same night on a network
 trained for it (`tests/browser/train_resnet18_cifar.py`, 95 s on the 5080, 93.25 %):
 on 2,000 test images the f32 forward is 92.70 %, torch's own number to the image, and
-the int8 forward **92.75 %**. Passed, with room.
+the int8 forward **92.75 %**. Passed, with room. The static scale followed — calibrated
+per layer once, the output packed at the store so the next layer quantises nothing —
+and took batch 16 to **1.15 ms** (a third of ORT, 1.5× the f32 forward) at 92.50 % on
+held-out images; batch 1 stays a launch-bound wash.
 
 The 2026-09-20 rows are `torch.compiled` pointed at the fused network's `noGrad` forward
 (`docs/INFER.md` Step 1): the JavaScript that encodes the thirty-eight dispatches is paid
