@@ -238,7 +238,7 @@ async function resnet(lines: string[]): Promise<void> {
   const second = cached.firstCall[0];
   cached.dispose();
   want("autotune: a second recording of the same step times nothing (the decisions are cached by adapter and key)",
-    !!second && second.candidates === 0 && second.tuning < 5, second ? `${second.candidates} candidates, tuning ${second.tuning.toFixed(1)} ms` : "no first call");
+    !!second && second.candidates === 0 && second.compile === 0, second ? `${second.candidates} candidates, no compile wave, ${second.tuning.toFixed(1)} ms of readback and passes` : "no first call");
   step.dispose();
   const d1 = device().dispatches;
   want("ResNet-18: dispatches were counted", d1 > d0, `${d1 - d0} dispatches over the compiled section`);
