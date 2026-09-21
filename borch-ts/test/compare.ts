@@ -429,7 +429,19 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     const d = dev();
     const d0 = d.dispatches;
     await noGrad(() => model.forward(xb)).toArray();
-    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${d.dispatches - d0} dispatches/forward`);
+    // **Where the eager wall goes** (`docs/FIRST.md` 2a): the JavaScript of the forward
+    // — encoding, bind groups, tensor bookkeeping — timed on its own (the forward is
+    // synchronous; the readback after it is the GPU's), and the bind groups it made.
+    let js = 0; const bg0 = d.bindGroups;
+    for (let i = 0; i < 10; i++) {
+      await scope(async () => {
+        const t = performance.now();
+        const y = noGrad(() => model.forward(xb));
+        js += performance.now() - t;
+        await y.toArray();
+      });
+    }
+    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${d.dispatches - d0} dispatches/forward · JavaScript ${(js / 10).toFixed(2)} ms of it (${Math.round((d.bindGroups - bg0) / 10)} bind groups)`);
     // The fused forward's GPU time by kind — what of the wall is the GPU's (INFER Step 0).
     await d.profile(() => noGrad(() => model.forward(xb)).toArray());
     const hot: [string, number, number][] = [];

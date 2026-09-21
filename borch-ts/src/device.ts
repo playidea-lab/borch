@@ -2112,7 +2112,11 @@ export class Device {
   }
 
   /** A bind group for `pipeline` over `buffers`, in binding order. */
+  /** Bind groups made so far — one a dispatch on the eager path; `docs/FIRST.md` 2a. */
+  bindGroups = 0;
+
   bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly BindSlot[]): GPUBindGroup {
+    this.bindGroups += 1;
     let layout = this.layouts.get(pipeline);
     if (!layout) {
       layout = pipeline.getBindGroupLayout(0);

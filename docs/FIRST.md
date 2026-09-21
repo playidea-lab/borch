@@ -68,3 +68,13 @@ five scenarios prints its sentence once, and none of them prints on correct code
 ## 4. Ledger
 
 (entries follow, newest last)
+- **2026-09-21, 1c — the second session (0c13d4f).** `capture:ts --profile=<dir>`
+  (`BORCH_CHROME_PROFILE`, a persistent context) twice on the laptop: **the compile wave
+  517 → 51 ms, the inference forward's first call 158 → 15 ms** — Chrome keeps D3D12's
+  compiled pipelines in the profile, and the prediction ("under a quarter") held at a
+  tenth. The tuning ran again (850 → 326 ms, 888 → 547) because the runner serves each
+  run on a fresh port and `localStorage` is per origin; a page at one address keeps its
+  decisions, and its second visit pays the 51 and nothing else. So the candidate count
+  stays: what a first visit on D3D12 pays after its first answer is 0.85 s once per
+  origin, of which a third is the timing itself on a card whose replay is 27 ms.
+
