@@ -102,6 +102,7 @@ export {
 } from "./tensor.js";
 // Somebody writing `using s = scope()` has to be able to name the handle's type.
 export type { Scope } from "./tensor.js";
+export { isGradEnabled } from "./autograd.js";
 
 import { Tensor as TensorClass } from "./tensor.js";
 

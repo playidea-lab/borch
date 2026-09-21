@@ -6252,9 +6252,25 @@ export class LinearCrossEntropyLoss extends Module {
 // into this file would be a cycle, so the eight here are **only gathered**, not moved.
 import * as delegated from "./functional.js";
 
+/**
+ * Attention from a packed `qkv` projection, in one kernel — `Tensor.fusedAttention`.
+ * Not a torch name: torch's `scaled_dot_product_attention` takes split heads and this
+ * takes the projection before the split, which is where the copies were. A model whose
+ * attention is written as `qkv → split → sdpa → merge` (timm's, bimm's) calls this under
+ * `noGrad` and keeps the chain for training. **Measured slower than the chain on
+ * metal-3 today** (`docs/INFER.md` ledger, 2026-09-21: the chain's batched products run
+ * on subgroup matrices, and a scalar kernel does not catch them) — bimm does not call it;
+ * it stands for the card where it measures faster, and as the base of a subgroup-matrix
+ * version.
+ */
+export function fusedQkvAttention(qkv: Tensor, heads: number, opts: { scale?: number; keyLen?: number; bias?: Tensor | null } = {}): Tensor {
+  return Tensor.fusedAttention(qkv, heads, opts);
+}
+
 export const functional = {
   ...delegated,
   affineGrid,
+  fusedQkvAttention,
   batchNorm,
   ctcLoss,
   embedding,

@@ -75,6 +75,11 @@ export interface Node<T> {
  */
 export const gradMode = { enabled: true };
 
+/** `torch.is_grad_enabled()` — whether a forward records for backward right now. */
+export function isGradEnabled(): boolean {
+  return gradMode.enabled;
+}
+
 /**
  * `torch.no_grad()`. Restores even if an exception is thrown.
  */

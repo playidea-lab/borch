@@ -14,6 +14,7 @@ import {
   init,
   isAvailable,
   keepAlive,
+  noGrad,
   probe,
   scope,
   Tensor,
@@ -233,6 +234,41 @@ export async function report(): Promise<Report> {
       want(`re-tiled GEMM ${M}x${K}x${N} ${fits ? "took a new pipeline" : "stayed on the old tile"}`, (device().pipelineCount > pipelinesBefore) === fits, `pipelines ${pipelinesBefore} → ${device().pipelineCount}`);
     }
     Device.subgroupMatrix = sgm; Device.gemmConfigs = cfgs;
+  }
+
+  // ── The fused attention against the composed chain ─────────────────────────
+  // `Tensor.fusedAttention` (the inference kernel) must give what the split / permute /
+  // bmm / mask / softmax / bmm / merge chain gives, to a rounding: an odd token count
+  // with padded keys the mask zeroes, a head of 64 and one of 32, with the projection's
+  // bias added in the kernel; and it must refuse a tensor that wants a gradient.
+  {
+    const cases: [number, number, number, number, number][] = [[2, 37, 3, 64, 33], [1, 200, 6, 32, 197]];
+    for (const [B, N, H, D, keyLen] of cases) {
+      const width = 3 * H * D;
+      const qkv = keepAlive(Tensor.randn([B, N, width]));
+      const bias = keepAlive(Tensor.randn([width]));
+      const ref = await noGrad(() => {
+        const parts = qkv.add(bias).reshape([B, N, 3, H, D]).permute([2, 0, 3, 1, 4]);
+        const fold = [B * H, N, D];
+        const q = parts.select(0, 0).reshape(fold).mul(Tensor.owned([], 1 / Math.sqrt(D)));
+        const k = parts.select(0, 1).reshape(fold);
+        const v = parts.select(0, 2).reshape(fold);
+        let scores = q.bmm(k.transpose(-2, -1));
+        if (keyLen < N) {
+          const mask = new Float32Array(N);
+          for (let j = keyLen; j < N; j++) mask[j] = -1e30;
+          scores = scores.add(Tensor.from(mask, [1, 1, N]));
+        }
+        return scores.softmax(-1).bmm(v).reshape([B, H, N, D]).permute([0, 2, 1, 3]).reshape([B, N, H * D]);
+      }).toArray();
+      const got = await noGrad(() => Tensor.fusedAttention(qkv, H, { keyLen, bias })).toArray();
+      let err = 0, scale = 0;
+      for (let i = 0; i < ref.length; i++) { const r = ref[i] ?? 0, g = got[i] ?? 0; err = Math.max(err, Math.abs(r - g)); scale = Math.max(scale, Math.abs(r)); }
+      want(`fused attention [${B}, ${N}, ${H} heads of ${D}] with ${keyLen} keys matches the composed chain to a rounding`, err / scale < 1e-5, `rel ${(err / scale).toExponential(1)}`);
+    }
+    const wants = keepAlive(Tensor.randn([1, 8, 3 * 2 * 16]));
+    wants.requiresGrad = true;
+    wantThrow("fused attention refuses an input that wants a gradient", "inference kernel", () => Tensor.fusedAttention(wants, 2));
   }
 
   // ── Synchronising ───────────────────────────────────────────────────

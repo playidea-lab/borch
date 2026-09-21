@@ -252,6 +252,9 @@ import {
   convTiledGrid,
   convDirect2d,
   type DirectConfig,
+  fusedAttention,
+  fusedAttentionBlock,
+  fusedAttentionGrid,
   directFits,
   directGrid,
   directGridFills,
@@ -6223,6 +6226,39 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // ONNX MatMul broadcasts the leading (batch) dimension itself, so a batched matmul is
     // one MatMul node — the same spelling the 2-D `matmul` records.
     return traced("MatMul", [this, mat2], {}, () => batchedMatmul(this, mat2, false, false));
+  }
+
+  /**
+   * **Attention in one kernel, for inference** — `F.fusedQkvAttention`. `qkv` is the
+   * `[B, N, 3·H·D]` output of a `Linear(dim, 3·dim)` without its bias (`bias` is added
+   * in the kernel), `heads` splits the last axis, keys from `keyLen` on are not visited;
+   * the result is `[B, N, H·D]`, the heads merged as the output projection reads them
+   * — the same values the split / permute / `bmm` / mask / `softmax` / `bmm` / merge
+   * chain gives, to a rounding (`test/device.ts`), in one dispatch instead of nine.
+   * Inference only: it records no backward, and refuses under gradient mode when an
+   * input wants one — a training step keeps the composed chain.
+   */
+  static fusedAttention(qkv: Tensor, heads: number, opts: { scale?: number; keyLen?: number; bias?: Tensor | null } = {}): Tensor {
+    const [B = 1, N = 1, width = 0] = qkv.shape;
+    if (qkv.shape.length !== 3 || width % (3 * heads) !== 0) throw new Error(`fusedAttention: qkv is [B, N, 3·heads·D], got [${qkv.shape}] for ${heads} heads`);
+    const D = width / (3 * heads);
+    if (![16, 32, 64, 128].includes(D)) throw new Error(`fusedAttention: a head of ${D} — 16, 32, 64 or 128`);
+    const bias = opts.bias ?? null;
+    if (bias && bias.size !== width) throw new Error(`fusedAttention: bias of ${bias.size} for a projection of ${width}`);
+    if (gradMode.enabled && (qkv.requiresGrad || (bias?.requiresGrad ?? false))) {
+      throw new Error("fusedAttention is the inference kernel — it records no backward; call it under noGrad or keep the composed attention for a step that trains");
+    }
+    if (!Device.subgroups) throw new Error("fusedAttention needs the device's subgroup operations (the partial scores are summed with shuffles) — this adapter has none");
+    if (D < 16 || (D / 4) % 4 !== 0) throw new Error(`fusedAttention: a head of ${D} — a whole sixteen`);
+    const keyLen = opts.keyLen ?? N;
+    if (keyLen < 1 || keyLen > N) throw new Error(`fusedAttention: keyLen ${keyLen} outside 1..${N}`);
+    const scale = opts.scale ?? 1 / Math.sqrt(D);
+    const BK = fusedAttentionBlock(D, Device.workgroupStorage);
+    const out = dev().alloc(B * N * heads * D);
+    const key = `fa:${N}:${heads}:${D}:${keyLen}:${bias ? "b" : "n"}:${scale}:${BK}`;
+    dev().run(dev().pipeline(key, () => fusedAttention(N, heads, D, keyLen, bias !== null, scale, BK)),
+      bias ? [qkv.buffer, bias.buffer, out] : [qkv.buffer, out], fusedAttentionGrid(B, N, heads));
+    return new Tensor(out, [B, N, heads * D]);
   }
 
   /** See `batchedMatmul` — the module-level function delegates here, where `make` is reachable. */

@@ -5473,6 +5473,170 @@ ${store.join("\n")}
 }`;
 }
 
+/**
+ * **Attention, fused — the inference forward** (`docs/INFER.md` ledger, 2026-09-21).
+ * One kernel from the packed `qkv` projection to the merged heads: no q/k/v split, no
+ * head permute, no scores written, no mask pass, no softmax pass, no merge permute. On the
+ * ViT-Tiny forward those were 3.5 of 10.2 ms of GPU at batch 16 on metal-3 (permute
+ * gathers 1.30, the two batched products 1.25, softmax 0.52, the key-mask add 0.40).
+ *
+ * `qkv` is `[B, N, 3, H, D]` as a `Linear(dim, 3·dim)` writes it (torch's and timm's
+ * layout); `bias` its `3·dim` bias, added here so the projection can run without its add;
+ * the output is `[B, N, H·D]` — the heads merged in the order the output projection
+ * reads them. A workgroup is one head of one sample and `BQ` query rows, a thread a query
+ * row: the row is held in registers, scaled once, and the keys walk by in blocks of `BK`
+ * staged into workgroup memory with their values; the softmax is the online one (a
+ * running max and sum, the accumulator rescaled when the max moves), so the scores never
+ * touch memory. Keys at or past `keyLen` are not visited — the padded tokens of an
+ * aligned row, which a `-inf` mask used to zero after the fact — and a query row past
+ * `N` computes nothing.
+ */
+export function fusedAttention(N: number, H: number, D: number, keyLen: number, hasBias: boolean, scale: number, BK: number): string {
+  // **The thread block, measured into shape** (metal-3, ViT-Tiny, batch 16, per forward
+  // of twelve layers; the composed chain it replaces is 3.5 ms):
+  //   v1  a thread a query row, 64 rows a workgroup            4.33 ms — 12 workgroups at
+  //       batch 1, and every multiply-add reads one operand from workgroup memory;
+  //   v2  four key-splits a row, 16 rows a workgroup             6.18 ms — the parallelism
+  //       came, and the staging of every key block four times over swamped it.
+  // So: a thread owns **four query rows by sixteen channels**, so a staged key or value
+  // feeds four multiply-adds per read; the four threads that share a row's channels sum
+  // their partial scores with two subgroup shuffles; four key-splits keep the grid full at
+  // batch 1; a workgroup is 64 rows, 256 threads, and the splits merge through the
+  // staging arrays in four rounds of sixteen rows.
+  const BQ = 64, KS = 4, CQ = 4, QPT = 4, T = 256;
+  const D4 = D / 4;
+  const CH4 = D4 / CQ;             // vec4s of channels a thread owns
+  const perSplit = BK / KS;
+  const row = 3 * H * D;
+  const bq = hasBias ? (off: string) => ` + vec4<f32>(Bias[${off}], Bias[${off} + 1u], Bias[${off} + 2u], Bias[${off} + 3u])` : () => "";
+  const loadQ: string[] = [];
+  for (let qq = 0; qq < QPT; qq++) for (let i = 0; i < CH4; i++) {
+    loadQ.push(`  { let a = qBase${qq} + ${(i) * 4}u; q[${qq * CH4 + i}] = (vec4<f32>(QKV[a], QKV[a + 1u], QKV[a + 2u], QKV[a + 3u])${bq(`hd + cq * ${CH4 * 4}u + ${i * 4}u`)}) * ${scale}; }`);
+  }
+  const partial = (qq: number): string => Array.from({ length: CH4 }, (_, i) => `dot(q[${qq * CH4 + i}], Ks[kb + ${i}u])`).join(" + ");
+  const pv: string[] = [];
+  for (let qq = 0; qq < QPT; qq++) for (let i = 0; i < CH4; i++) pv.push(`        acc[${qq * CH4 + i}] = acc[${qq * CH4 + i}] + p[${qq}] * Vs[kb + ${i}u];`);
+  const rescale: string[] = [];
+  for (let qq = 0; qq < QPT; qq++) for (let i = 0; i < CH4; i++) rescale.push(`    acc[${qq * CH4 + i}] = acc[${qq * CH4 + i}] * alpha[${qq}];`);
+  return `enable subgroups;
+@group(0) @binding(0) var<storage, read> QKV: array<f32>;
+${hasBias ? "@group(0) @binding(1) var<storage, read> Bias: array<f32>;" : ""}
+@group(0) @binding(${hasBias ? 2 : 1}) var<storage, read_write> Out: array<f32>;
+var<workgroup> Ks: array<vec4<f32>, ${BK * D4}>;
+var<workgroup> Vs: array<vec4<f32>, ${BK * D4}>;
+var<workgroup> Cm: array<f32, ${T * QPT}>;
+var<workgroup> Cl: array<f32, ${T * QPT}>;
+@compute @workgroup_size(${T})
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let b = wid.z;
+  let h = wid.y;
+  let cq = lid.x & 3u;
+  let qg = (lid.x >> 2u) & 15u;
+  let kg = lid.x >> 6u;
+  let hd = h * ${D}u;
+  let qRow = wid.x * ${BQ}u + qg * ${QPT}u;
+${Array.from({ length: QPT }, (_, qq) => `  let qBase${qq} = (b * ${N}u + min(qRow + ${qq}u, ${N - 1}u)) * ${row}u + hd + cq * ${CH4 * 4}u;`).join("\n")}
+  var q: array<vec4<f32>, ${QPT * CH4}>;
+${loadQ.join("\n")}
+  var m: array<f32, ${QPT}>;
+  var l: array<f32, ${QPT}>;
+  var acc: array<vec4<f32>, ${QPT * CH4}>;
+  for (var qq = 0u; qq < ${QPT}u; qq = qq + 1u) { m[qq] = -1e30; l[qq] = 0.0; }
+  for (var i = 0u; i < ${QPT * CH4}u; i = i + 1u) { acc[i] = vec4<f32>(0.0); }
+  var s: array<f32, ${perSplit * QPT}>;
+  var alpha: array<f32, ${QPT}>;
+  var p: array<f32, ${QPT}>;
+  for (var k0 = 0u; k0 < ${keyLen}u; k0 = k0 + ${BK}u) {
+    for (var i = lid.x; i < ${BK * D4}u; i = i + ${T}u) {
+      let j = i / ${D4}u;
+      let d4 = i % ${D4}u;
+      let src = (b * ${N}u + min(k0 + j, ${N - 1}u)) * ${row}u + ${H * D}u + hd + d4 * 4u;
+      Ks[i] = vec4<f32>(QKV[src], QKV[src + 1u], QKV[src + 2u], QKV[src + 3u])${bq(`${H * D}u + hd + d4 * 4u`)};
+      Vs[i] = vec4<f32>(QKV[src + ${H * D}u], QKV[src + ${H * D}u + 1u], QKV[src + ${H * D}u + 2u], QKV[src + ${H * D}u + 3u])${bq(`${2 * H * D}u + hd + d4 * 4u`)};
+    }
+    workgroupBarrier();
+    let j0 = kg * ${perSplit}u;
+    var mNew = m;
+    for (var jj = 0u; jj < ${perSplit}u; jj = jj + 1u) {
+      let kb = (j0 + jj) * ${D4}u + cq * ${CH4}u;
+      let valid = k0 + j0 + jj < ${keyLen}u;
+${Array.from({ length: QPT }, (_, qq) => `      { var t = ${partial(qq)}; t = t + subgroupShuffleXor(t, 1u); t = t + subgroupShuffleXor(t, 2u); let sj = select(-1e30, t, valid); s[jj * ${QPT}u + ${qq}u] = sj; mNew[${qq}] = max(mNew[${qq}], sj); }`).join("\n")}
+    }
+    for (var qq = 0u; qq < ${QPT}u; qq = qq + 1u) { alpha[qq] = exp(m[qq] - mNew[qq]); l[qq] = l[qq] * alpha[qq]; }
+${rescale.join("\n")}
+    for (var jj = 0u; jj < ${perSplit}u; jj = jj + 1u) {
+      if (k0 + j0 + jj < ${keyLen}u) {
+        let kb = (j0 + jj) * ${D4}u + cq * ${CH4}u;
+        for (var qq = 0u; qq < ${QPT}u; qq = qq + 1u) { p[qq] = exp(s[jj * ${QPT}u + qq] - mNew[qq]); l[qq] = l[qq] + p[qq]; }
+${pv.join("\n")}
+      }
+    }
+    m = mNew;
+    workgroupBarrier();
+  }
+  // The four key-splits of a row merged: the row's max over them, each split's sum and
+  // accumulator scaled to it, summed through the staging arrays, sixteen rows a round.
+  for (var qq = 0u; qq < ${QPT}u; qq = qq + 1u) { Cm[lid.x * ${QPT}u + qq] = m[qq]; }
+  workgroupBarrier();
+  let sib = lid.x & 63u;
+  var M: array<f32, ${QPT}>;
+  for (var qq = 0u; qq < ${QPT}u; qq = qq + 1u) {
+    M[qq] = max(max(Cm[sib * ${QPT}u + qq], Cm[(sib + 64u) * ${QPT}u + qq]), max(Cm[(sib + 128u) * ${QPT}u + qq], Cm[(sib + 192u) * ${QPT}u + qq]));
+    alpha[qq] = exp(m[qq] - M[qq]);
+    Cl[lid.x * ${QPT}u + qq] = l[qq] * alpha[qq];
+  }
+  for (var r = 0u; r < 4u; r = r + 1u) {
+    workgroupBarrier();
+    if ((qg >> 2u) == r) {
+      let rowLocal = (qg & 3u) * ${QPT}u;
+      for (var qq = 0u; qq < ${QPT}u; qq = qq + 1u) {
+        let base = ((rowLocal + qq) * ${KS}u + kg) * ${D4}u + cq * ${CH4}u;
+        for (var i = 0u; i < ${CH4}u; i = i + 1u) {
+          let v = acc[qq * ${CH4}u + i] * alpha[qq];
+          if (base + i < ${BK * D4}u) { Ks[base + i] = v; } else { Vs[base + i - ${BK * D4}u] = v; }
+        }
+      }
+    }
+    workgroupBarrier();
+    if ((qg >> 2u) == r) {
+      let rowLocal = (qg & 3u) * ${QPT}u;
+      for (var qq = 0u; qq < ${QPT}u; qq = qq + 1u) {
+        let qi = qRow + qq;
+        if (qi < ${N}u) {
+          let L = Cl[sib * ${QPT}u + qq] + Cl[(sib + 64u) * ${QPT}u + qq] + Cl[(sib + 128u) * ${QPT}u + qq] + Cl[(sib + 192u) * ${QPT}u + qq];
+          // The sixteen threads of the row (four splits by four channel quarters) each sum
+          // a vec4 of channels over the four splits — every sixteenth from their index.
+          for (var c4 = kg * ${CQ}u + cq; c4 < ${D4}u; c4 = c4 + ${KS * CQ}u) {
+            var sum = vec4<f32>(0.0);
+            for (var t = 0u; t < ${KS}u; t = t + 1u) {
+              let idx = ((rowLocal + qq) * ${KS}u + t) * ${D4}u + c4;
+              if (idx < ${BK * D4}u) { sum = sum + Ks[idx]; } else { sum = sum + Vs[idx - ${BK * D4}u]; }
+            }
+            let o = sum / L;
+            let oBase = (b * ${N}u + qi) * ${H * D}u + hd + c4 * 4u;
+            Out[oBase] = o.x; Out[oBase + 1u] = o.y; Out[oBase + 2u] = o.z; Out[oBase + 3u] = o.w;
+          }
+        }
+      }
+    }
+  }
+}`;
+}
+
+/** The key block `fusedAttention` stages: 32 keys and their values of `D` floats each
+ *  (the merge at the end needs 16 × 4 × D floats of the same space — 32 keys hold it),
+ *  halved while that would not fit the device's workgroup storage. */
+export function fusedAttentionBlock(D: number, storage: number): number {
+  let BK = 32;
+  while (BK > 16 && 2 * BK * D * 4 + 512 > storage) BK /= 2;
+  return BK;
+}
+
+/** The grid of `fusedAttention`: query blocks of 16, heads, samples. */
+export function fusedAttentionGrid(B: number, N: number, H: number): [number, number, number] {
+  return [Math.ceil(N / 16), H, B];
+}
+
 /** A block of ones for the bias product — eight by eight. */
 export function onesBlock(): string {
   return `

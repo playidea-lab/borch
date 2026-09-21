@@ -541,7 +541,7 @@ function gpuByKind(d: Device): string {
   hot.sort((p, q) => q[1] - p[1]);
   const total = hot.reduce((a, [, ms]) => a + ms, 0);
   return `GPU time (ms, total ${total.toFixed(1)}, ×count): `
-    + hot.slice(0, 8).map(([k, ms, n]) => `${k} ${ms.toFixed(2)}${n > 1 ? `×${n}` : ""}`).join(" · ")
+    + hot.slice(0, 16).map(([k, ms, n]) => `${k} ${ms.toFixed(2)}${n > 1 ? `×${n}` : ""}`).join(" · ")
     + (d.profileDropped ? ` · ${d.profileDropped} dropped` : "");
 }
 

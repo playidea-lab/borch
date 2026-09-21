@@ -562,6 +562,32 @@ prediction is written down so that the ledger can say which step was wrong.
   run to run (1.50 → 1.59 fused this time, for 0.3 ms less GPU) — the GPU-time column
   and the dispatch count are the measurement there.
 
+- **2026-09-21, the fused attention — built, gated, measured slower; not routed.** The
+  ViT profile at batch 16 on metal-3 (16 kinds printed now) put 3.5 of 10.2 ms of GPU in
+  the chain around attention's two products: the three permute gathers 1.30, the products
+  1.25, softmax 0.52, the key-mask add 0.40. `Tensor.fusedAttention` /
+  `F.fusedQkvAttention` (inference only, subgroups required) takes the packed `qkv`
+  projection, adds its bias, and writes the merged heads — no split, no scores in memory,
+  no mask pass, no merge; held to the composed chain at 4e-7 relative on two shapes
+  (`device:ts`, 54 / 54), and the ViT gate stayed at 1e-6 through bimm's `Attention`
+  calling it (265 → 133 dispatches a replay). **Three thread blocks, each measured on
+  the same forward (ms per forward of twelve layers, batch 1 / batch 16; the chain
+  ~0.5 / 3.5):** v1, a thread a row, 64 rows a workgroup: **3.04 / 4.33** — twelve
+  workgroups at batch 1, and every multiply-add reads an operand from workgroup memory;
+  v2, four key-splits a row, 16 rows a workgroup: **1.21 / 6.18** — the grid filled, the
+  staging of each key block four times over swamped it; v3, a thread four rows by
+  sixteen channels with two subgroup shuffles a score, 64 rows and 256 threads a
+  workgroup: **1.99 / 26.7** — the per-thread state (16 + 16 vec4, 32 scores, the
+  running maxima) left the register file, and Metal ran it from memory. The chain's
+  products run on subgroup matrices at 4.7 TFLOP/s; a scalar kernel does not reach that
+  on this card, and on the 5080 (no f32 subgroup matrices) the chain's scalar batched
+  product already runs at 9 TFLOP/s with 0.2 ms of gathers beside it — nothing to take
+  there either. **What would win, on Metal only: the same fusion on subgroup matrices**
+  (Q·Kᵀ and P·V as 8 × 8 multiplies, the score tile stored to workgroup memory for the
+  row max and exp, then loaded back as the left operand), predicted at the chain's
+  product time plus a little — ~1.3 ms against 3.5, 22 % of the forward. Not built
+  today; the kernel stays as its base, bimm does not call it, and its doc says why.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |
