@@ -251,6 +251,7 @@ import {
   poolOut,
   convTiledGrid,
   convDirect2d,
+  type DirectConfig,
   directFits,
   directGrid,
   directGridFills,
@@ -918,19 +919,30 @@ function convForwardRun(
   // fit (`docs/GEMM.md` §4 — the rule's pick where the direct kernel is not it), and
   // the tiled GEMM with its split policy. The rule's pick is first; the cached decision
   // for this adapter and shape, if there is one, runs instead.
+  //
+  // **The per-card numbers the API does not give** (`docs/GEMM.md`, the D3D12 sweep):
+  // the split policy over-split the laptop's card four times (32 pieces where 8 were
+  // faster; 4 where unsplit was), and its direct kernel preferred a wider output-channel
+  // block. Neither is a constant to calibrate; each is one more candidate — the rule's
+  // count at a quarter, the direct block at 4 × 16 — and the tuner takes it where it
+  // measures faster. On the cards the rules were swept on, it will not.
   const candidates: TuneCandidate[] = [];
-  const directCand = (): TuneCandidate => ({
-    label: "direct", keys: [`cnd:${key}:${bias ? "b" : "n"}${tag}`],
-    run: () => dev().run(dev().pipeline(`cnd:${key}:${bias ? "b" : "n"}${tag}`, () => convDirect2d(s, bias !== null, ep, false)), [x, w, ...tail], directGrid(s)),
-  });
-  const stagedCand = (t: StagedTile): TuneCandidate => {
+  const quarter = (n: number): number => Math.max(1, Math.floor(n / 4));
+  const directCand = (cfg?: DirectConfig): TuneCandidate => {
+    const pk = `cnd:${key}:${bias ? "b" : "n"}${tag}${cfg ? ":w" : ""}`;
+    return {
+      label: cfg ? "direct:wide" : "direct", keys: [pk],
+      run: () => dev().run(dev().pipeline(pk, () => convDirect2d(s, bias !== null, ep, false, cfg)), [x, w, ...tail], directGrid(s, cfg)),
+    };
+  };
+  const stagedCand = (t: StagedTile, piecesOverride?: number): TuneCandidate => {
     const kSpace = s.kernel.reduce((a, b) => a * b, 1);
     const coPad = stagedCoPad(s.O, t.TM);
-    const pieces = stagedSplit(s, t);
+    const pieces = piecesOverride ?? stagedSplit(s, t);
     const tl = `${t.TM}x${t.TN}r${t.RM}x${t.RN}k${t.KB}`;
     const kk = pieces === 1 ? `cnss:${key}:${tl}:${bias ? "b" : "n"}${tag}` : `cnss:${key}:${tl}:s${pieces}`;
     return {
-      label: `staged:${tl}`, keys: [`tmwc:${key}:${t.TM}`, kk, ...(pieces > 1 ? [`ssc:${key}:${pieces}:${bias ? "b" : "n"}${tag}`] : [])],
+      label: `staged:${tl}${piecesOverride !== undefined ? `:s${pieces}` : ""}`, keys: [`tmwc:${key}:${t.TM}`, kk, ...(pieces > 1 ? [`ssc:${key}:${pieces}:${bias ? "b" : "n"}${tag}`] : [])],
       run: () => {
         const wc = packedWeight([w], `tmwc:${key}:${t.TM}`, kSpace * s.C * coPad, (dst) =>
           dev().run1d(dev().pipeline(`tmwc:${key}:${t.TM}`, () => tapMajorWeightsCo(s.O, s.C, kSpace, coPad)), [w, dst], kSpace * s.C * coPad));
@@ -944,25 +956,38 @@ function convForwardRun(
       },
     };
   };
-  const tiledCand = (): TuneCandidate => ({
-    label: "tiled", keys: splits === 1 ? [`cnt:${key}:${bias ? "b" : "n"}${tag}`] : [`cnt:${key}:s`, `ssc:${key}:${bias ? "b" : "n"}${tag}:${splits}`],
-    run: () => {
-      if (splits === 1) {
-        dev().run(dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}${tag}`, () => convNDForwardTiled(s, bias !== null, ep)), [x, w, ...tail], convTiledGrid(s));
-        return;
-      }
-      const parted = dev().alloc(n * splits);
-      dev().run(dev().pipeline(`cnt:${key}:s`, () => convNDForwardTiled(s, false)), [x, w, parted], convTiledGrid(s));
-      dev().run1d(dev().pipeline(`ssc:${key}:${bias ? "b" : "n"}${tag}:${splits}`, () => sumSplitsConv(s, splits, bias !== null, ep)), [parted, ...tail], n);
-    },
-  });
+  const tiledCand = (splitsOverride?: number): TuneCandidate => {
+    const sp = splitsOverride ?? splits;
+    const one = `cnt:${key}:${bias ? "b" : "n"}${tag}`;
+    const many = splitsOverride !== undefined ? `cnt:${key}:s${sp}` : `cnt:${key}:s`;
+    return {
+      label: `tiled${splitsOverride !== undefined ? `:s${sp}` : ""}`, keys: sp === 1 ? [one] : [many, `ssc:${key}:${bias ? "b" : "n"}${tag}:${sp}`],
+      run: () => {
+        if (sp === 1) {
+          dev().run(dev().pipeline(one, () => convNDForwardTiled(s, bias !== null, ep, sp)), [x, w, ...tail], convTiledGrid(s, sp));
+          return;
+        }
+        const parted = dev().alloc(n * sp);
+        dev().run(dev().pipeline(many, () => convNDForwardTiled(s, false, undefined, sp)), [x, w, parted], convTiledGrid(s, sp));
+        dev().run1d(dev().pipeline(`ssc:${key}:${bias ? "b" : "n"}${tag}:${sp}`, () => sumSplitsConv(s, sp, bias !== null, ep)), [parted, ...tail], n);
+      },
+    };
+  };
   const direct = directFits(s) ? directCand() : null;
-  const stagedTiles = STAGED_TILES.filter((t) => stagedFits(s, t, Device.workgroupStorage)).map(stagedCand);
+  const fitting = STAGED_TILES.filter((t) => stagedFits(s, t, Device.workgroupStorage));
+  const stagedTiles = fitting.map((t) => stagedCand(t));
   const tiled = tiledCand();
   // The rule's order: direct first where its grid fills the card, else the first staged
   // tile, else the tiled GEMM; the rest follow as candidates for the tuner.
   if (direct && directGridFills(s)) candidates.push(direct, ...stagedTiles, tiled);
   else candidates.push(...stagedTiles, tiled, ...(direct ? [direct] : []));
+  // The variants — a quarter of the pieces on the rule's staged tile and on the tiled
+  // GEMM where the rule splits, and the wide direct block — for the tuner only: they are
+  // never the rule's pick, and they cost a compile each on the first recording.
+  const first = fitting[0];
+  if (first !== undefined) { const pcs = stagedSplit(s, first); if (quarter(pcs) !== pcs) candidates.push(stagedCand(first, quarter(pcs))); }
+  if (quarter(splits) !== splits) candidates.push(tiledCand(quarter(splits)));
+  if (direct) candidates.push(directCand({ TS: 4, COUT: 16, WEIGHT_BYTES: Math.min(32768, Device.workgroupStorage) }));
   dev().choose(`conv:${key}:${bias ? "b" : "n"}${tag}`, candidates).run();
 }
 
@@ -11825,17 +11850,29 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       const outQ = qo ? d.alloc(total / 4) : null;
       const qTail = qo && outQ && int8.outMax ? [int8.outMax, outQ] : [];
       const tail = [...(bias ? [bias.buffer] : []), ...(residual ? [residual.buffer] : []), out, ...qTail];
-      const splits = convInt8Split(s);
-      if (splits === 1) {
-        d.run(d.pipeline(`ci8:${key}:${bias ? "b" : "n"}:${tag}${qo ? ":q" : ""}`, () => convForwardInt8(s, 1, bias !== null, ep, qo)),
-          [xq, int8.packed, max, int8.scales, ...tail], convInt8Grid(s, 1));
-      } else {
-        const slab = d.alloc(total * splits);
-        d.run(d.pipeline(`ci8:${key}:s${splits}`, () => convForwardInt8(s, splits, false)),
-          [xq, int8.packed, max, int8.scales, slab], convInt8Grid(s, splits));
-        d.run1d(d.pipeline(`ssc8:${key}:${splits}:${bias ? "b" : "n"}:${tag}${qo ? ":q" : ""}`, () => sumSplitsConv(s, splits, bias !== null, ep, qo)),
-          [slab, ...tail], qo ? total / 4 : total);
-      }
+      // The K pieces: the policy's count, and — for the tuner (`docs/COMPILER.md` Step 5,
+      // as the f32 paths) — a quarter of it, where the policy splits.
+      const one = `ci8:${key}:${bias ? "b" : "n"}:${tag}${qo ? ":q" : ""}`;
+      const int8Cand = (splits: number, label: string): TuneCandidate => ({
+        label, keys: splits === 1 ? [one] : [`ci8:${key}:s${splits}`, `ssc8:${key}:${splits}:${bias ? "b" : "n"}:${tag}${qo ? ":q" : ""}`],
+        run: () => {
+          if (splits === 1) {
+            d.run(d.pipeline(one, () => convForwardInt8(s, 1, bias !== null, ep, qo)),
+              [xq, int8.packed, max, int8.scales, ...tail], convInt8Grid(s, 1));
+            return;
+          }
+          const slab = d.alloc(total * splits);
+          d.run(d.pipeline(`ci8:${key}:s${splits}`, () => convForwardInt8(s, splits, false)),
+            [xq, int8.packed, max, int8.scales, slab], convInt8Grid(s, splits));
+          d.run1d(d.pipeline(`ssc8:${key}:${splits}:${bias ? "b" : "n"}:${tag}${qo ? ":q" : ""}`, () => sumSplitsConv(s, splits, bias !== null, ep, qo)),
+            [slab, ...tail], qo ? total / 4 : total);
+        },
+      });
+      const rule = convInt8Split(s);
+      const fewer = Math.max(1, Math.floor(rule / 4));
+      const cands = [int8Cand(rule, "int8")];
+      if (fewer !== rule) cands.push(int8Cand(fewer, `int8:s${fewer}`));
+      d.choose(one, cands).run();
       const y = new Tensor(out, outShape);
       if (qo && outQ && int8.outMax) y.int8Twin = { words: outQ, max: int8.outMax };
       return y;

@@ -4234,7 +4234,7 @@ function residualBinding(e: ConvEpilogue | undefined, slot: number): string {
 }
 
 export function convNDForwardTiled(
-  s: ConvNDShape, hasBias: boolean, epilogue?: ConvEpilogue,
+  s: ConvNDShape, hasBias: boolean, epilogue?: ConvEpilogue, splitsOverride?: number,
 ): string {
   const inStride = suffixStrides(s.inDims);
   const outStride = suffixStrides(s.outDims);
@@ -4247,8 +4247,9 @@ export function convNDForwardTiled(
   const K = cin * kSpace;
   const P = s.N * outSpace;
   // Split, the partial sums land in a slab per piece and `sumSplitsConv` adds them (and
-  // the bias) once more — the bias binding is not taken here in that case.
-  const splits = convForwardSplit(s);
+  // the bias) once more — the bias binding is not taken here in that case. The count is
+  // the policy's unless a tuner's candidate names its own (`splitsOverride`).
+  const splits = splitsOverride ?? convForwardSplit(s);
   const KT = tileDepth(tileShape(cout, P).TM);
   const withBias = hasBias && splits === 1;
   // Split, the epilogue waits for `sumSplitsConv` — a partial sum cannot be clamped.
@@ -5840,11 +5841,11 @@ function tileCount(M: number, N: number): number {
 
 /** The dispatch grid for the tiled conv. Rows are output channels; columns are batch
  *  and output position. */
-export function convTiledGrid(s: ConvNDShape): [number, number, number] {
+export function convTiledGrid(s: ConvNDShape, splitsOverride?: number): [number, number, number] {
   const P = s.N * s.outDims.reduce((a, b) => a * b, 1);
   const { groups, cout } = grouped(s);
   const { TM, TN } = tileShape(cout, P);
-  return [Math.ceil(P / TN), Math.ceil(cout / TM), groups * convForwardSplit(s)];
+  return [Math.ceil(P / TN), Math.ceil(cout / TM), groups * (splitsOverride ?? convForwardSplit(s))];
 }
 
 /**
