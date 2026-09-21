@@ -1956,6 +1956,9 @@ prints the adapter:
 | `apple / metal-3`, **2026-09-22, borch-ts 0.6.0 as published** — borch.ts | **19.3** | **31.7** | **55.1** |
 | `apple / metal-3`, same run — TF.js 4.22.0 | 86.5 | 172.8 | 349.1 |
 | ratio | **4.5×** | **5.5×** | **6.3×** |
+| `nvidia / lovelace` (RTX 4090, Chrome 153, Vulkan), **2026-09-22, borch-ts 0.6.0 as published** — borch.ts | **10.5** | **10.9** | **17.7** |
+| `nvidia / lovelace`, same run — TF.js 4.22.0 | 67.5 | 113.7 | 211.7 |
+| ratio | **6.4×** | **10.4×** | **12.0×** |
 
 The 2026-09-19 rows are the same page and the same TF.js bytes sixteen days later: TF.js
 did not move (86.4 → 86.5) and borch.ts went from 38.6 to 21.2 ms at batch 16 — the
@@ -1996,6 +1999,30 @@ borch's page, after borch:
 | ratio | **3.5×** | **3.1×** | **2.8×** |
 | `apple / metal-3`, same run — Burn 0.21 wgpu (wasm) | 264.7 | 520.7 | 1025.6 |
 | ratio | **13.7×** | **16.4×** | **18.5×** |
+| `nvidia / lovelace` (RTX 4090, Chrome 153, Vulkan), **2026-09-22, 0.6.0 as published** — borch.ts | **10.0** | **12.3** | **17.9** |
+| `nvidia / lovelace`, same run — jax-js 0.1.25 + optax 0.1.2 | 67.3 | 74.4 | 103.6 |
+| ratio | **6.7×** | **6.0×** | **5.8×** |
+| `nvidia / lovelace`, same run — Burn 0.21 wgpu (wasm, built there; `wasm-opt` refused the module, so unoptimised) | 115.7 | 248.5 | 516.9 |
+| ratio | **11.6×** | **20.2×** | **28.9×** |
+
+**The Ada card, 2026-09-22.** The 4090 came back on the bus (a PCIe power lead reseated,
+a cold boot) and 0.6.0 was measured on it the same morning, on the 5080's kernel set:
+training 10.0–10.5 / 10.9–12.3 / 17.7–17.9 ms across two runs, TF.js 6.4–12.0× behind,
+jax-js 5.8–6.7×, Burn 11.6–28.9× — Burn is 2.3× faster on this card than on metal-3 at
+batch 16 and the same at batch 64, the one library whose distance to borch moves with
+the card, which is what "synchronises on every readback" costs on a GPU that clocks up
+slowly. Two things stood in the way and are written down. That machine's Chrome was
+**143** (installed 2025-12), and its WGSL front end refused the int8 convolution's
+`subgroupMatrixStore` — *"requires argument 1 to be uniform; builtin 'sid' may be
+non-uniform"* — a rule Chrome 151 and 153 no longer apply to `subgroup_id`; the library
+counted 27 faults and refused to print a number, as it should, and the rows are from
+Chrome 153 an hour later. The library-side answer is a probe at `create` (compile that
+one store once, and drop the int8 rule when the front end refuses it) rather than a
+version check; it is not in 0.6.0. And wasm-pack's `wasm-opt` rejected the Burn module
+built there (rustc 1.98, the day's dependency resolution), so Burn's row runs the
+wasm-bindgen output as it is — the readback synchronisation its time is made of is not
+something `wasm-opt` touches, and its batch-64 loss (0.24 against Metal's 0.25 on the
+same seed) says the step is the same step.
 
 Read with these attached. **jax-js**: it has no BatchNorm module and no cross-entropy, so
 both are written from its primitives the way its own MNIST example writes them; the
@@ -2084,6 +2111,10 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused + captured, `apple / metal-3`, **2026-09-22, 0.6.0 as published** | | **1.09 ms** | **4.12 ms** |
 | ONNX Runtime Web 1.29.0 f32 / **f16**, same run | | 4.35 / 3.29 ms | 5.30 / 4.26 ms |
 | ORT is faster than the captured network by (f32 / f16) | | 0.25× / 0.33× — borch ahead | 0.78× / **0.97×** — borch ahead of both |
+| borch.ts fused + captured, `nvidia / lovelace` (RTX 4090, Chrome 153, Vulkan), **2026-09-22, 0.6.0 as published** | | **0.58 ms** | **1.65 ms** |
+| borch.ts **int8 static** + captured, same run | | **0.56 ms** | **0.83 ms** |
+| ONNX Runtime Web 1.29.0, same run | | 3.70 ms | 3.61 ms |
+| ORT is faster than the captured f32 / int8 network by | | 0.16× / 0.15× — borch ahead | 0.46× / 0.23× — borch ahead |
 
 **ORT at its own reduced precisions, 2026-09-21.** The int8 rows above stood beside ORT
 running the f32 file, which is not the same question as "ORT at its best". So
@@ -2107,6 +2138,11 @@ says about its providers:
 | ORT int8 on wasm | `nvidia / blackwell` | 4.1 ms | 55.9 ms |
 | borch.ts f32 fused + captured / **int8 static** + captured, same run | `nvidia / blackwell` | 0.56 / 0.84 ms | 1.66 / **0.98 ms** |
 | **top-1 on the same 1,000 held-out CIFAR-10 images** (trained network) | `nvidia / blackwell` | borch f32 92.40 · borch int8 static 92.50 | ORT f32 92.40 · **ORT int8 92.50** |
+| ORT f32, same run, **2026-09-22** | `nvidia / lovelace` (RTX 4090, Chrome 153, Vulkan) | 3.70 ms | 3.61 ms |
+| ORT f16 on WebGPU | `nvidia / lovelace` | *refused, the same sentence as the 5080's* | |
+| ORT int8 on WebGPU | `nvidia / lovelace` | 40.9 ms | 104.6 ms |
+| ORT int8 on wasm | `nvidia / lovelace` | 4.6 ms | 64.3 ms |
+| borch.ts f32 fused + captured / **int8 static** + captured, same run | `nvidia / lovelace` | 0.58 / 0.56 ms | 1.65 / **0.83 ms** |
 
 Three things the table says. **ORT's int8 is not a GPU path in the browser**: on every
 adapter the QDQ file runs slower on WebGPU than ORT's own f32 (6× on Metal, 11–28× on
@@ -2150,6 +2186,10 @@ mean of twenty after three warm-ups, a scope a forward, readback included:
 | borch.ts captured, 298 / 274 dispatches a replay | `nvidia / blackwell`, D3D12 | **3.37 ms** | **27.83 ms** |
 | ONNX Runtime Web 1.29.0, same run | `nvidia / blackwell`, D3D12 | 11.80 ms | 61.02 ms |
 | ORT is faster than the captured network by | | 0.29× — borch ahead | **0.46×** — borch ahead |
+| borch.ts eager, `nvidia / lovelace` (RTX 4090, Chrome 153, Vulkan), **2026-09-22, 0.6.0 as published** — the 5080's kernel set, 197 tokens unpadded | | 3.58 ms | 6.38 ms |
+| borch.ts captured, 298 / 274 dispatches a replay | `nvidia / lovelace` | **1.67 ms** | **4.88 ms** |
+| ONNX Runtime Web 1.29.0, same run | `nvidia / lovelace` | 8.12 ms | 11.41 ms |
+| ORT is faster than the captured network by | | 0.21× — borch ahead | **0.43×** — borch ahead |
 
 Where the batch-16 forward spends itself is the GPU (9.8 of 10.5 ms on metal-3, 4.8 of
 4.94 on the 5080, 23.6 of 27.8 on the laptop's D3D12), and where the GPU spends itself is the three wide matmuls of every
