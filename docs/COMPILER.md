@@ -426,6 +426,12 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   the int8 static forward beside it 0.94 / **0.52** — at batch 1 now ahead of f32, the
   launch-bound wash of the int8 ledger tipping by the same measurement.
 
+  **Direct3D 12** (the RTX 5050 Laptop, the same afternoon): **9 decisions, 1 changed —
+  a 64-channel convolution the rule sends to the direct kernel, 0.717 → 0.473 ms on the
+  staged kernel**, 0.24 ms of GPU a step, which is the case the plan was written for: a
+  card the hand rules were not swept on, and a rule whose measurement (direct wins the
+  64-channel layer, on metal-3 and the 5080) does not hold there. `capture:ts` 20 / 20.
+
 ## 6. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

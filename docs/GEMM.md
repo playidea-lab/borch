@@ -253,8 +253,16 @@ else. `tileShape` / `tileDepth` / `scalarMatmulSplit` re-swept for the new tile.
   (`tmwc`, 0.15 ms for a 512 × 512 × 9 weight, six of them) and that eats what the kernel
   saves — the same bill the subgroup path pays in eager, and the reason `compiled`
   hoists it. On metal-3 the stride-2 layers (which the subgroup kernels refuse) moved to
-  it: the unfused eager forward at batch 16 7.2 → 4.5 ms. **D3D12 is unmeasured** — the
-  Windows worker is in a lecture until its owner says otherwise.
+  it: the unfused eager forward at batch 16 7.2 → 4.5 ms. **D3D12, measured the same
+  afternoon** (the RTX 5050 Laptop, its owner's lecture over): exact against the direct
+  kernel on every shape, the same winner — 512 → 512 at 4 × 4, batch 16, the tiled
+  kernel 0.490 + 0.014 → **staged 128 × 64 r8×4 kb4 0.314** (1.6×); 256 → 256 at 8 × 8
+  0.489 → **0.287** (1.7×); 128 → 128 at 16 × 16 the direct kernel's 0.349 → 0.292 + 0.023;
+  batch 1, 512 → 512 0.114 → 0.071, 256 → 256 0.038 → 0.025; 64 → 64 at 32 × 32 stays
+  direct (0.316 against 0.332). Three APIs, one tile. And the tuner (`docs/COMPILER.md`
+  Step 5) found on this card what the rule had not: on its first recording of the
+  training step it moved a 64-channel layer the rule sends direct to the staged kernel,
+  0.717 → 0.473 ms — the one decision of nine that changed there, 0.24 ms a step.
 
 ## 4. After this
 
