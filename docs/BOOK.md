@@ -2054,7 +2054,7 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused + captured, `nvidia / blackwell`, **2026-09-21**, the scalar conv path swept on the card (`docs/INFER.md` ledger; two runs) | | **0.65 ms** | **1.74–1.90 ms** |
 | ONNX Runtime Web 1.29.0, same runs | | 3.51–3.52 ms | 3.62–3.99 ms |
 | ORT is faster than the captured network by | | 0.19× — borch ahead | **0.48×** — borch ahead |
-| borch.ts **int8** + captured, `nvidia / blackwell`, **2026-09-21** — 13 of 20 convolutions on the int8 subgroup configuration (`docs/INT8.md`), max \|int8 − f32\| 3.4e-4 | | 0.66 ms | **1.22 ms** |
+| borch.ts **int8** + captured, `nvidia / blackwell`, **2026-09-21** — 13 of 20 convolutions on the int8 subgroup configuration (`docs/INT8.md`), max \|int8 − f32\| 3.4e-4; **top-1 on 2,000 CIFAR-10 test images with a trained network: f32 92.70 %, int8 92.75 %** | | 0.66–0.92 ms | **1.22–1.39 ms** |
 | ONNX Runtime Web 1.29.0, same run | | 3.28–3.85 ms | 3.65–4.06 ms |
 | ORT is faster than the int8 network by | | 0.17–0.20× — borch ahead | **0.30–0.33×** — borch ahead |
 
@@ -2088,10 +2088,12 @@ configuration it has (`docs/INT8.md`) was then built on — the same night: with
 the 20 convolutions on `i8 × i8 → i32` subgroup matrices (`torch.compiled(model,
 { int8: true })`, an accuracy trade a caller asks for, refused by name elsewhere) the
 batch-16 forward is **1.22 ms**, a third of ORT's, with the logits 1.8e-3 of their scale
-from f32; at batch 1 it is a wash, because an int8 layer is four dispatches to the f32
-layer's one and the replay there is launch-bound. The accuracy gate that would let the
-path ship (top-1 within half a point) waits on a trained network — the bench's weights
-are a seed-0 draw.
+from f32; at batch 1 it is a wash or a loss, because an int8 layer is four dispatches
+to the f32 layer's one and the replay there is launch-bound. The accuracy gate that lets
+the path ship — top-1 within half a point of f32 — was run the same night on a network
+trained for it (`tests/browser/train_resnet18_cifar.py`, 95 s on the 5080, 93.25 %):
+on 2,000 test images the f32 forward is 92.70 %, torch's own number to the image, and
+the int8 forward **92.75 %**. Passed, with room.
 
 The 2026-09-20 rows are `torch.compiled` pointed at the fused network's `noGrad` forward
 (`docs/INFER.md` Step 1): the JavaScript that encodes the thirty-eight dispatches is paid

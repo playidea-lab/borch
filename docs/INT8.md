@@ -97,7 +97,7 @@ rules apply here.
 - **Gate**: exact against a CPU int32 reference for every conv shape of ResNet-18; GPU
   time per layer below the scalar tile's on each.
 
-### Step 4 — Accuracy · size S · the gate that decides whether it ships · **open: needs a trained network** (§6)
+### Step 4 — Accuracy · size S · the gate that decides whether it ships · **passed 2026-09-21** (§6: 92.70 → 92.75 %)
 
 The bench's ResNet-18 with the exported weights, W8A8 through `compiled(model,
 { int8: true })`, against the f32 forward on the same held-out images.
@@ -230,6 +230,32 @@ wants the trade.
   with a labelled test slice for the browser, then the gate as written, then the static
   scale. Held on metal-3 (no int8 configuration, the path inert): `parity:ts` 229,
   `capture:ts` 18 / 18, `device:ts`; `compare:ts` unchanged.
+
+- **2026-09-21, Step 4 — the accuracy gate, on a network trained for it.**
+  `tests/browser/train_resnet18_cifar.py` trains `export_resnet18.py`'s ResNet-18 on
+  CIFAR-10 on the 5080 through cq (twenty epochs, OneCycle, bf16 autocast, **95 s**, test
+  top-1 **93.25 %**) and writes the trained weights, the ONNX twin, a probe and a
+  labelled slice of 2,000 test images beside the seed-0 files; `compare:ts` runs the slice
+  through the f32 fused forward and the int8 one and prints the gate:
+
+  | forward, RTX 5080, 2,000 CIFAR-10 test images | top-1 |
+  |---|---|
+  | torch (the training script's own number on the slice) | 92.70 % |
+  | borch.ts f32 fused | **92.70 %** |
+  | borch.ts int8, 13 of 20 convolutions, per-tensor dynamic activation scale | **92.75 %** (+0.05 points) |
+
+  **Gate "top-1 within 0.5 points of f32": passed**, with room — W8A8 with per-channel
+  weights and a per-tensor activation scale costs this network nothing measurable, and
+  the logits are 1.8e-3 of their scale from f32 (§6 above). The f32 forward's top-1 is
+  torch's to the image, which is the f32 path's own gate met on a trained network for
+  the first time. The int8 path is therefore **routed to** where a caller asks
+  (`compiled(model, { int8: true })`), on the adapters that have the configuration.
+  This run's times: batch 16 int8 1.39 ms against f32 1.76 (the earlier run 1.22 —
+  run-to-run range 1.22–1.39), batch 1 0.92 against 0.65 — the batch-1 bill of §6 stands.
+  What the plan now has that it did not: a trained network and a calibration set, which
+  is what the **static scale** needs — the next step, not in this plan's six, and the one
+  that would make batch 1 a gain: per-layer activation scales from the slice, folded
+  into the producing layer's epilogue so an int8 layer is one dispatch again.
 
 ## 5. Risks, and the sentence that retires each
 
