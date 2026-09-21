@@ -464,6 +464,28 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   and the 5080; `capture:ts` 21 / 21 on both. The laptop's numbers of this afternoon are
   from a machine reading 2–3× its morning on every row and are shape, not size.
 
+- **2026-09-21, the per-card numbers as candidates (f69870b, 28549df).** `docs/GEMM.md`
+  had named two numbers the laptop's D3D12 wanted and WebGPU does not give — a split
+  policy over-splitting its card four times, a direct kernel preferring a 4 × 16 block —
+  and proposed a calibration at `create`. The tuner makes that unnecessary: the rule's
+  staged and tiled pieces at a quarter (where the rule splits), the direct block at
+  4 × 16 under 32 KiB, and the int8 convolution's pieces at a quarter are candidates, never
+  the rule's pick, taken where they measure faster. **The laptop took six** (direct
+  1.309 → wide 0.435, 0.419 → 0.273; tiled 0.383 → `s2` 0.319, 0.348 → `s4` 0.331; two
+  more) — 1.18 ms of GPU a step, the captured inference forward 7.29 → 6.50 ms at batch
+  16 on a noisy afternoon. **The 5080 took three** (the wide block on two direct layers,
+  0.084 → 0.069 and 0.101 → 0.086; one staged → tiled), **metal-3 three** (the wide block
+  on two layers the rule sent tiled, 0.297 → 0.264 and 0.078 → 0.059; a tiled `s1`). The
+  cost is the candidates' compiles on the first recording: 24 → 44 candidates on the
+  training step (compile wave 5080 69 → 118 ms; the laptop's DXC 963 → 2,590), 38 → 67 on
+  the inference forward (the laptop 2,773). That is a first visit's cost per shape per
+  adapter, cached after; on D3D12 it is seconds, and the next lever there is not fewer
+  candidates but Chrome's own pipeline cache across sessions, which this does not touch.
+  `capture:ts` 23 / 23 on all three — the pack-cache check now writes every convolution
+  weight, since which layers pack is the tuner's per adapter (the 5080 sent the 512 → 512
+  layers to the tiled GEMM, which reads the weight as it is, and a check that had picked
+  one weight found no pack).
+
 ## 6. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

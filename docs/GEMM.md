@@ -215,7 +215,14 @@ else. `tileShape` / `tileDepth` / `scalarMatmulSplit` re-swept for the new tile.
   prefers a wider output-channel block (64 → 64 at 32 × 32: 4 × 16 with a slice of 14
   0.289 against the default's 0.343). Both are 5–15 % and both would want a per-card
   number the API does not give — a calibration at `create`, like the kicks. Named, not
-  taken.
+  taken. *Taken 2026-09-21 (f69870b), not as a calibration: each is one more candidate
+  for the tuner (`docs/COMPILER.md` Step 5) — the rule's staged and tiled pieces at a
+  quarter, the direct block at 4 × 16 under 32 KiB, the int8 pieces at a quarter — and the
+  laptop's first recording took six of them (direct 1.309 → wide 0.435 and 0.419 →
+  0.273; tiled 0.383 → two pieces 0.319, 0.348 → four 0.331; 1.18 ms of GPU a step),
+  the captured batch-16 forward 7.29 → 6.50 ms in an afternoon when everything else
+  on the machine read slower. The 5080 and metal-3 took the wide block on two 64- and
+  128-channel layers each (15–45 %) and nothing else — the rules were swept there.*
 
 - **2026-09-21, the scalar staged convolution — built, measured, routed** (§4's first
   candidate; c1b3644, f3455a3). `convForwardStaged`: a block of input channels' band of

@@ -299,7 +299,10 @@ wants the trade.
   ORT's f16 (`_f16.onnx`, I/O kept f32) is the nearer competitor: on Metal 2.88 / 4.14
   against borch's f32 1.01 / 4.07 — level at batch 16 — and on the 5080's Chrome the
   session refuses ("requires f16 but the device does not support it"). An f16
-  convolution is therefore the next precision lever on Metal, not on Vulkan.
+  convolution is therefore the next precision lever on Metal, not on Vulkan — and not on
+  the laptop's D3D12 either, where ORT's f16 file ran slower than its f32 twice in the
+  afternoon (19.2 against 14.7, 18.8 against 16.0 ms at batch 16; a noisy machine, the
+  same direction both times).
 
 ## 5. Risks, and the sentence that retires each
 
