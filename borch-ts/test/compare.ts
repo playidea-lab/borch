@@ -448,12 +448,24 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     }
     lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${perForward} dispatches/forward · JavaScript ${(js / 10).toFixed(2)} ms of it (${Math.round((d.bindGroups - bg0) / 10)} bind groups)`);
     // The fused forward's GPU time by kind — what of the wall is the GPU's (INFER Step 0).
+    const ph0 = d.packHits, pm0 = d.packMisses;
+    await d.profile(() => noGrad(() => model.forward(xb)).toArray());
+    const packed = `packs ${d.packHits - ph0} hit / ${d.packMisses - pm0} made`;
+    // **The same forward without the pack cache** (a forward outside `noGrad` packs into
+    // scope buffers as before the cache): on the 5080 the fused eager kernels read 9×
+    // their unfused time with the cache (`docs/FIRST.md` 2a) — this row says whether the
+    // kept pack buffers are what is slow.
+    let noCacheTotal = 0;
+    await scope(async () => {
+      await d.profile(() => model.forward(xb).toArray());
+      for (const ns of d.nsByKind.values()) noCacheTotal += ns / 1e6;
+    });
     await d.profile(() => noGrad(() => model.forward(xb)).toArray());
     const hot: [string, number, number][] = [];
     for (const [kind, ns] of d.nsByKind) hot.push([kind, ns / 1e6, d.countByKind.get(kind) ?? 1]);
     hot.sort((p, q) => q[1] - p[1]);
     const total = hot.reduce((a, [, v]) => a + v, 0);
-    lines.push(`           fused GPU time (ms, total ${total.toFixed(1)}, ×count): ` + hot.slice(0, 8).map(([k, v, n]) => `${k} ${v.toFixed(2)}${n > 1 ? `×${n}` : ""}`).join(" · "));
+    lines.push(`           fused GPU time (ms, total ${total.toFixed(1)}, ×count; ${packed}; without the pack cache ${noCacheTotal.toFixed(1)}): ` + hot.slice(0, 8).map(([k, v, n]) => `${k} ${v.toFixed(2)}${n > 1 ? `×${n}` : ""}`).join(" · "));
     // **The eval forward recorded and replayed** (INFER Step 1): `compiled` over the fused
     // network's `noGrad` forward — the intermediates fused, laid into arenas, and the
     // JavaScript that encodes thirty-eight dispatches paid once. The replay's logits are
