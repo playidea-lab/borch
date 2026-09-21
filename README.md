@@ -1,9 +1,19 @@
 # borch
 
-**PyTorch's shape, in a browser tab.** Three implementations of one arithmetic —
-a numpy core (`import borch as torch`), a TypeScript runtime on WebGPU (`borch-ts`),
-and a Python binding over that runtime for Pyodide (`borch_webgpu`) — held to real
-PyTorch's values, errors and printed form within the range a curriculum uses.
+**PyTorch's shape, in a browser tab — no install, no server, the data never leaves the
+machine, and every value held to real PyTorch's.** Three implementations of one
+arithmetic — a numpy core (`import borch as torch`), a TypeScript runtime on WebGPU
+(`borch-ts`), and a Python binding over that runtime for Pyodide (`borch_webgpu`) — held
+to PyTorch's values, errors and printed form within the range a curriculum uses.
+
+Measured on the same page as the others, same GPU, the adapter beside every number
+(2026-09-22, `apple / metal-3`, borch-ts 0.6.0 as published; the full tables, three
+adapters and the losing rows are on the [Compare page](https://playidea-lab.github.io/borch/site/compare.html)):
+
+| ResNet-18 (CIFAR), batch 16 | borch.ts | TF.js 4.22 | jax-js 0.1.25 | Burn 0.21 | ONNX Runtime Web 1.29 |
+|---|---|---|---|---|---|
+| training step | **19.3 ms** | 86.5 | 68.1 | 264.7 | does not train |
+| inference forward, captured | **4.12 ms** | — | — | — | 5.30 (f32) · 4.26 (f16) |
 
 - **See it run:** https://playidea-lab.github.io/borch/site/ — the playground trains
   on your GPU; eleven lessons and ten tutorials run every code block in the page.

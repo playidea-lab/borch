@@ -59,6 +59,7 @@
       <span class="sep" aria-hidden="true"></span>
       <a href="setup.html">GPU</a>
       <a href="check.html">Check</a>
+      <a href="compare.html">Compare</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="ko/" class="lang">한국어</a>
@@ -541,7 +542,7 @@ for step in range(201):
   <div class="wrap">
     <p class="eyebrow">Only what was measured</p>
     <h2>How fast · how correct</h2>
-    <p class="lead">Faster than the TF.js runtime it replaced (2–3×), and the matmul underneath is within a whisker of torch on the same Metal GPU. The parity and golden runs are below in full; the speed tables — machine by machine, down to the dispatch — are folded so they do not wall the page.</p>
+    <p class="lead"><strong>Measured 2026-09-22 with 0.6.0 as published:</strong> the training step is 4.5–10× faster than TF.js, 2.8–7.5× than jax-js and 14–18× than Burn — every library that trains in a browser on WebGPU — and the captured inference forward is ahead of ONNX Runtime Web on three adapters, for a ResNet and a ViT. The whole comparison, same page and same GPU with the adapter beside every number and the losing rows kept, is on <a href="compare.html">the Compare page</a>. Below: the earlier tables, kept as they were measured, and the matmul underneath within a whisker of torch on the same Metal GPU. The parity and golden runs are below in full; the speed tables — machine by machine, down to the dispatch — are folded so they do not wall the page.</p>
 
     <details class="fold">
       <summary>Speed — the full tables, machine by machine</summary>

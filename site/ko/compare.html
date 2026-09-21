@@ -1,0 +1,195 @@
+<!doctype html>
+<!--
+  비교를 한 페이지에: borch.ts 를 브라우저에서 WebGPU 로 학습하는 라이브러리들(TF.js, jax-js,
+  Burn)과 추론 런타임(ONNX Runtime Web)에 대고 잰다 — 같은 페이지, 같은 GPU, 같은 가중치,
+  숫자마다 어댑터를 옆에 둔다. 지는 행은 남긴다. 재현 명령은 맨 아래.
+
+  영어판은 `../compare.html`이고 둘은 같이 고친다. 숫자는 `docs/BOOK.md`("How fast it is")의
+  것이며 run 이 움직일 때만 움직인다.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>유사 솔루션 실측 비교 — borch</title>
+<meta name="description" content="같은 페이지·같은 GPU 에서 잰 borch.ts 와 TF.js·jax-js·Burn·ONNX Runtime Web: 학습은 브라우저에서 학습하는 모든 라이브러리보다 4.5–10× 빠르고, 추론은 세 어댑터에서 ORT Web 을 앞선다. 지는 행도 그대로.">
+<link rel="alternate" hreflang="en" href="../compare.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="유사 솔루션 실측 비교 — borch">
+<meta property="og:description" content="같은 페이지, 같은 GPU, 같은 가중치: borch.ts 대 TF.js·jax-js·Burn·ONNX Runtime Web, 숫자마다 어댑터를 옆에.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/compare.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">배우기</a>
+      <a href="tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="api/">API</a>
+      <a href="vision.html">비전</a>
+      <a href="models.html">모델</a>
+      <a href="python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="playground.html">Playground</a>
+      <a href="notebook.html">Notebook</a>
+      <a href="workbench.html">Workbench</a>
+      <a href="widgets.html">위젯</a>
+      <a href="tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="setup.html">GPU</a>
+      <a href="check.html">확인</a>
+      <a href="compare.html" class="on" aria-current="page">비교</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../compare.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">같은 페이지 · 같은 GPU · 같은 가중치 · 숫자마다 어댑터</p>
+    <h1>유사 솔루션 실측 비교</h1>
+    <p class="lead">
+      오늘 브라우저에서 WebGPU 로 신경망을 학습하는 라이브러리는 셋 — TF.js, jax-js, Burn — 이고,
+      추론만 하는 런타임이 하나, ONNX Runtime Web 이다. 이 페이지는 그 넷을 borch.ts 와 같은
+      페이지, 같은 GPU 에서, 같은 시드 데이터 또는 torch 에서 내보낸 같은 가중치로 돌리고, 숫자
+      아래마다 어댑터를 찍는다. borch 가 지는 행은 남기고, 모든 표를 재현하는 명령은 맨 아래에
+      있다. Chrome 과 WebGPU 가 필요하다. 숫자는 그날 그 카드의 것이고, run 이 움직일 때 움직인다.
+    </p>
+
+    <div class="note-box">
+      <strong>한 줄로.</strong> 학습: TF.js 보다 4.5–10×, jax-js 보다 2.8–7.5×, Burn 보다 14–18× 빠르다.
+      추론: 캡처한 forward 가 세 어댑터·두 배치 모두에서 ONNX Runtime Web 의 f32 파일을 앞선다,
+      ResNet 도 ViT 도. 가장 가까운 행은 Metal batch 16 의 ORT f16 파일로, 무승부다. ORT 의 int8
+      파일은 브라우저에서 GPU 경로가 아니고, borch 의 int8 forward 는 같은 top-1 에서 ORT 최선의
+      4 분의 1 이다. 대가: 첫 호출이 컴파일한다(0.05–0.2 초, 기계당·모양당 한 번, 브라우저가
+      보관), 그리고 eager 경로는 되감기보다 느리다.
+    </div>
+
+    <h2>학습 — ResNet-18 (CIFAR), 스텝당 ms</h2>
+    <p>
+      같은 구조, SGD 0.05/0.9, 교차엔트로피, 같은 시드 픽셀; 워밍업 2회 뒤 5회 측정, 매 스텝 손실
+      리드백을 넣어 GPU 가 끝나는 시점까지 시계에 들어간다. 라이브러리마다 자기 레이아웃(NHWC
+      또는 NCHW)과 자기 옵티마이저로 돈다 — 그 차이가 비교의 일부다.
+    </p>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>어댑터 · 날짜</th><th>라이브러리</th><th>batch 16</th><th>32</th><th>64</th><th>borch 대비</th></tr></thead>
+      <tbody>
+        <tr><td><code>apple / metal-3</code> · 2026-09-22, borch-ts 0.6.0 게시본</td><td><strong>borch.ts</strong></td><td class="num"><strong>19.3</strong></td><td class="num"><strong>31.7</strong></td><td class="num"><strong>55.1</strong></td><td class="num">1×</td></tr>
+        <tr><td></td><td>TF.js 4.22.0 (WebGPU)</td><td class="num">86.5</td><td class="num">172.8</td><td class="num">349.1</td><td class="num">4.5× · 5.5× · 6.3× 느림</td></tr>
+        <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">68.1</td><td class="num">97.1</td><td class="num">152.2</td><td class="num">3.5× · 3.1× · 2.8×</td></tr>
+        <tr><td></td><td>Burn 0.21 (Rust → wasm, wgpu)</td><td class="num">264.7</td><td class="num">520.7</td><td class="num">1025.6</td><td class="num">13.7× · 16.4× · 18.5×</td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Linux, Vulkan) · 2026-09-21</td><td><strong>borch.ts</strong></td><td class="num"><strong>10.6</strong></td><td class="num"><strong>14.7</strong></td><td class="num"><strong>23.2</strong></td><td class="num">1×</td></tr>
+        <tr><td></td><td>TF.js 4.22.0</td><td class="num">75.4</td><td class="num">122.0</td><td class="num">236.7</td><td class="num">7.1× · 8.3× · 10.2×</td></tr>
+        <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">78.5</td><td class="num">81.1</td><td class="num">116.4</td><td class="num">7.5× · 5.5× · 5.0×</td></tr>
+        <tr><td><code>nvidia / blackwell</code>, Direct3D 12 경유 (RTX 5050 Laptop, Windows 11) · 2026-09-21</td><td><strong>borch.ts</strong></td><td class="num"><strong>32.3</strong></td><td class="num"><strong>53.7</strong></td><td class="num"><strong>98.1</strong></td><td class="num">1×</td></tr>
+        <tr><td></td><td>TF.js 4.22.0</td><td class="num">174.8</td><td class="num">334.9</td><td class="num">659.2</td><td class="num">5.4× · 6.2× · 6.7×</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted">
+      2026-09-03 에 같은 페이지는 TF.js 대비 2.2–2.9× 였다. TF.js 는 움직이지 않았고(같은 바이트,
+      86.4 → 86.5), borch 가 움직였다 — subgroup 행렬 위의 합성곱 backward, 융합된 옵티마이저 스텝,
+      카드마다 측정으로 고른 커널. jax-js 에는 BatchNorm 과 교차엔트로피 모듈이 없어 그 스텝은
+      있는 것으로 조립했고, Burn 의 wasm wgpu 백엔드는 단일 스레드로 리드백마다 동기화한다. 각각
+      그 라이브러리가 오늘 브라우저에서 할 수 있는 최선이지, 그 라이브러리의 최적 구현은 아니다.
+    </p>
+
+    <h2>추론 — ResNet-18 (CIFAR) forward, ms</h2>
+    <p>
+      torch 에서 한 번 내보낸 같은 신경망 — borch.ts 에는 safetensors, ORT 에는 ONNX — 이고, 두
+      런타임이 시드 입력에서 torch 의 logits 를 1e-3 안에서 재현한 뒤에만 표를 찍는다(실측 ~5e-8).
+      워밍업 3회 뒤 20회 평균, forward 마다 scope 하나, 리드백 포함. borch 행은 eval forward 를
+      기록해 되감은 것(<code>compiled(model)</code>)이다.
+    </p>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>어댑터</th><th>런타임</th><th>batch 1</th><th>batch 16</th><th>borch / ORT</th></tr></thead>
+      <tbody>
+        <tr><td><code>apple / metal-3</code> · 2026-09-22</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>1.09</strong></td><td class="num"><strong>4.12</strong></td><td class="num">0.25× · 0.78×</td></tr>
+        <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">4.35</td><td class="num">5.30</td><td></td></tr>
+        <tr><td></td><td>ONNX Runtime Web, f16 파일 (입출력 f32)</td><td class="num">3.29</td><td class="num">4.26</td><td class="num">0.33× · <strong>0.97× — 무승부</strong></td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan) · 2026-09-21</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>0.56</strong></td><td class="num"><strong>1.66</strong></td><td class="num">0.15× · 0.39–0.47×</td></tr>
+        <tr><td></td><td><strong>borch.ts int8 static + captured</strong></td><td class="num"><strong>0.52</strong></td><td class="num"><strong>0.94–1.03</strong></td><td class="num">0.14× · 0.22–0.28×</td></tr>
+        <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">3.5–3.8</td><td class="num">3.6–4.3</td><td></td></tr>
+        <tr><td></td><td>ONNX Runtime Web, f16 파일</td><td colspan="3">세션 거부 — 이 카드의 Chrome(Linux, Vulkan)은 ORT 의 디바이스에 f16 을 주지 않는다</td></tr>
+        <tr><td></td><td>ONNX Runtime Web, int8 파일 (QDQ) · WebGPU / wasm 프로바이더</td><td class="num">42–45 / 4.1</td><td class="num">98–106 / 56</td><td class="num">자기 f32 보다 11–28× 느림</td></tr>
+        <tr><td><code>nvidia / blackwell</code>, Direct3D 12 경유 (RTX 5050 Laptop) · 2026-09-21</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>1.69–1.81</strong></td><td class="num"><strong>6.50–7.29</strong></td><td class="num">0.25–0.30× · 0.41–0.46×</td></tr>
+        <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">5.67–7.34</td><td class="num">15.7–16.0</td><td></td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>
+      <strong>같은 1,000장 held-out CIFAR-10 의 top-1</strong>, 이 시험을 위해 학습한 신경망, 5080:
+      borch f32 92.40 %, borch int8 static 92.50 %, ORT f32 92.40 %, ORT int8 92.50 %. 양자화된
+      신경망은 같은 신경망이고, 다른 것은 누가 GPU 에서 돌리느냐다. ORT 의 int8 파일은 모든
+      어댑터에서 자기 f32 보다 WebGPU 에서 느리고(Metal 6×, 5080 11–28×) batch 1 에서는 wasm
+      프로바이더보다도 느리다 — 양자화된 합성곱이 WebGPU 프로바이더의 것이 아니다.
+    </p>
+
+    <h2>추론 — ViT-Tiny/16 (224², 1000 클래스) forward, ms</h2>
+    <p>
+      timm 의 <code>vit_tiny_patch16_224</code> seed 0, borch 쪽은 bimm-ts 모델, 둘 다 torch 의
+      logits 로 게이트(실측 ~1e-6). 트랜스포머용으로 이 라이브러리에 쓴 것은 없다: 선형층은
+      합성곱의 GEMM 타일로, 어텐션은 배치 행렬곱과 subgroup softmax 로 돈다.
+    </p>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>어댑터</th><th>borch captured, b1</th><th>ORT f32, b1</th><th>borch, b16</th><th>ORT, b16</th><th>borch / ORT</th></tr></thead>
+      <tbody>
+        <tr><td><code>apple / metal-3</code> · 2026-09-22 (토큰 열 197 → 200 패딩, subgroup 행렬)</td><td class="num"><strong>2.22</strong></td><td class="num">5.46</td><td class="num"><strong>10.64</strong></td><td class="num">19.77</td><td class="num">0.41× · 0.54×</td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan) · 2026-09-21 — 이 카드엔 f32 subgroup 행렬이 없어 스칼라 GEMM</td><td class="num"><strong>1.73–2.25</strong></td><td class="num">6.89–8.18</td><td class="num"><strong>4.93</strong></td><td class="num">14.2–14.6</td><td class="num">0.21–0.33× · 0.34–0.35×</td></tr>
+        <tr><td><code>nvidia / blackwell</code>, Direct3D 12 경유 (RTX 5050 Laptop) · 2026-09-21</td><td class="num"><strong>3.31–3.37</strong></td><td class="num">10.0–11.8</td><td class="num"><strong>24.0–27.8</strong></td><td class="num">47.5–61.0</td><td class="num">0.29–0.33× · 0.46–0.50×</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2>이 페이지가 말하지 않는 것</h2>
+    <ul>
+      <li><strong>모델 하나씩.</strong> ResNet-18 은 32 × 32 CIFAR 이고 ViT 는 tiny 다. 더 큰 입력과 더 큰 모델(57 MB 창으로 파인튜닝한 346 MB ViT-Base 는 <code>docs/SCALE.md</code> 에 따로 있다)은 이 표 밖이다.</li>
+      <li><strong>Chrome 만.</strong> Safari 와 Firefox 는 재지 않았다. 어댑터마다 기계 하나. 5080 의 Chrome 은 ORT 에 f16 을, borch 에 f32 subgroup 행렬을 주지 않는다(int8 만).</li>
+      <li><strong>노트북의 오후 행이 범위인 것</strong>은 기계가 사용 중이었기 때문이다. 모든 라이브러리가 함께 2–3× 느렸고 비율은 유지됐다. 기계 없는 시간은 인용은 되어도 반박은 안 되기에 어댑터가 모든 행에 있다.</li>
+      <li><strong>borch 에 없는 것:</strong> f16 연산 커널(Metal 에서 ORT 의 f16 이 비기는 이유), LLM 디코드, 일반 그래프 IR. int8 은 합성곱만, 그리고 카드가 int8 subgroup 설정을 내주는 곳에서만.</li>
+      <li><strong>eager 는 이 표가 아니다.</strong> <code>compiled</code> 없이 모델을 부르는 페이지는 eager 행을 본다: Metal 에서 되감기의 1.1–1.35×, 5080 batch 1 에서는 ORT 와 대등 — 카드가 짧은 burst 사이에 클럭을 내리고 eager 루프가 그 틈을 준다.</li>
+      <li><strong>첫 호출은 컴파일한다.</strong> Metal 과 5080 에서 0.05 초, 노트북 D3D12 에서 0.16 초(브라우저가 컴파일된 파이프라인을 다음 방문까지 보관해 두 번째는 0.015 초), 입력 모양당 한 번.</li>
+    </ul>
+
+    <h2>재현</h2>
+    <p>이 페이지의 모든 표는 소프트웨어 어댑터를 거부하고 숫자 아래에 기계를 적는 러너가 찍는다.</p>
+<pre><code>git clone https://github.com/playidea-lab/borch &amp;&amp; cd borch &amp;&amp; npm ci &amp;&amp; npm run build:ts
+npm run compare:ts          # 학습 vs TF.js · 추론 vs ORT Web f32/f16/int8 · ViT-Tiny
+npm run compare-peers:ts    # jax-js 와 Burn (Burn crate 는 tests/browser/burn_resnet18 에서 빌드)
+npm run capture:ts          # 기록, 튜너, 첫 호출의 비용</code></pre>
+    <p class="small muted">
+      숫자마다 뒤에 있는 원장 — run 전에 적은 예측과 그중 틀린 것 — 은
+      <code>docs/BOOK.md</code>("How fast it is"), <code>docs/INFER.md</code>,
+      <code>docs/INT8.md</code>, <code>docs/GEMM.md</code>, <code>docs/COMPILER.md</code>,
+      <code>docs/FIRST.md</code> 다. 바이트 고정: TF.js 4.22.0, jax-js 0.1.25, Burn 0.21,
+      ONNX Runtime Web 1.29.0 (<code>tests/browser/assets.lock</code>).
+    </p>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    borch — 브라우저에서 WebGPU 위에 도는 PyTorch 모양의 텐서 라이브러리 · Apache-2.0<br>
+    이름이 비슷한 다른 프로젝트들과 무관하다 — minitorch · nanotorch · edutorch.
+  </div>
+</footer>
+
+</body>
+</html>

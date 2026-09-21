@@ -1,0 +1,207 @@
+<!doctype html>
+<!--
+  The comparison, on one page: borch.ts against the libraries that train in a browser on
+  WebGPU (TF.js, jax-js, Burn) and against the inference runtime (ONNX Runtime Web) —
+  same page, same GPU, same weights, the adapter beside every number. The rows that lose
+  are kept. The reproducing commands are at the bottom.
+
+  The Korean edition is `ko/compare.html`; both are edited together. The numbers come
+  from `docs/BOOK.md` ("How fast it is") and move only when a run moves them.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Measured against the others — borch</title>
+<meta name="description" content="borch.ts against TF.js, jax-js, Burn and ONNX Runtime Web on the same page and the same GPU: training 4.5–10× faster than every library that trains in a browser, inference ahead of ORT Web on three adapters, the losing rows kept.">
+<link rel="alternate" hreflang="ko" href="ko/compare.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Measured against the others — borch">
+<meta property="og:description" content="Same page, same GPU, same weights: borch.ts against TF.js, jax-js, Burn and ONNX Runtime Web, with the adapter beside every number.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/compare.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">Learn</a>
+      <a href="tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="api/">API</a>
+      <a href="vision.html">Vision</a>
+      <a href="models.html">Models</a>
+      <a href="python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="playground.html">Playground</a>
+      <a href="notebook.html">Notebook</a>
+      <a href="workbench.html">Workbench</a>
+      <a href="widgets.html">Widgets</a>
+      <a href="tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="setup.html">GPU</a>
+      <a href="check.html">Check</a>
+      <a href="compare.html" class="on" aria-current="page">Compare</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="ko/compare.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">same page · same GPU · same weights · the adapter beside every number</p>
+    <h1>Measured against the others</h1>
+    <p class="lead">
+      Three libraries train a network in a browser on WebGPU today — TF.js, jax-js and
+      Burn — and one runtime serves one, ONNX Runtime Web. This page runs each of them on
+      the same page as borch.ts, on the same GPU, with the same seeded data or the same
+      torch-exported weights, and prints the adapter under every number. The rows where
+      borch loses are kept, and the commands that reproduce every table are at the bottom.
+      Chrome with WebGPU; the numbers are the day's and the card's, and they move when a run
+      moves them.
+    </p>
+
+    <div class="note-box">
+      <strong>Read in one line.</strong> Training: 4.5–10× faster than TF.js, 2.8–7.5× than
+      jax-js, 14–18× than Burn. Inference: the captured forward is ahead of ONNX Runtime
+      Web's f32 file on all three adapters at both batch sizes, for a ResNet and for a
+      ViT; the nearest row is ORT's f16 file on Metal at batch 16, which is a draw. ORT's
+      int8 file is not a GPU path in the browser; borch's int8 forward is a quarter of ORT's
+      best at the same top-1. The price: a first call that compiles (0.05–0.2 s, once per
+      shape per machine, kept by the browser), and an eager path that is slower than the
+      replay.
+    </div>
+
+    <h2>Training — ResNet-18 (CIFAR), ms per step</h2>
+    <p>
+      The same architecture, SGD 0.05/0.9, cross-entropy, the same seeded pixels; two
+      warm-up steps then five timed, with a loss readback every step so the clock includes
+      the GPU finishing. Each library runs its own layout (NHWC or NCHW) and its own
+      optimizer — that difference is part of what is compared.
+    </p>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>adapter · date</th><th>library</th><th>batch 16</th><th>32</th><th>64</th><th>against borch</th></tr></thead>
+      <tbody>
+        <tr><td><code>apple / metal-3</code> · 2026-09-22, borch-ts 0.6.0 as published</td><td><strong>borch.ts</strong></td><td class="num"><strong>19.3</strong></td><td class="num"><strong>31.7</strong></td><td class="num"><strong>55.1</strong></td><td class="num">1×</td></tr>
+        <tr><td></td><td>TF.js 4.22.0 (WebGPU)</td><td class="num">86.5</td><td class="num">172.8</td><td class="num">349.1</td><td class="num">4.5× · 5.5× · 6.3× slower</td></tr>
+        <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">68.1</td><td class="num">97.1</td><td class="num">152.2</td><td class="num">3.5× · 3.1× · 2.8×</td></tr>
+        <tr><td></td><td>Burn 0.21 (Rust → wasm, wgpu)</td><td class="num">264.7</td><td class="num">520.7</td><td class="num">1025.6</td><td class="num">13.7× · 16.4× · 18.5×</td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Linux, Vulkan) · 2026-09-21</td><td><strong>borch.ts</strong></td><td class="num"><strong>10.6</strong></td><td class="num"><strong>14.7</strong></td><td class="num"><strong>23.2</strong></td><td class="num">1×</td></tr>
+        <tr><td></td><td>TF.js 4.22.0</td><td class="num">75.4</td><td class="num">122.0</td><td class="num">236.7</td><td class="num">7.1× · 8.3× · 10.2×</td></tr>
+        <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">78.5</td><td class="num">81.1</td><td class="num">116.4</td><td class="num">7.5× · 5.5× · 5.0×</td></tr>
+        <tr><td><code>nvidia / blackwell</code> through Direct3D 12 (RTX 5050 Laptop, Windows 11) · 2026-09-21</td><td><strong>borch.ts</strong></td><td class="num"><strong>32.3</strong></td><td class="num"><strong>53.7</strong></td><td class="num"><strong>98.1</strong></td><td class="num">1×</td></tr>
+        <tr><td></td><td>TF.js 4.22.0</td><td class="num">174.8</td><td class="num">334.9</td><td class="num">659.2</td><td class="num">5.4× · 6.2× · 6.7×</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted">
+      On 2026-09-03 the same page read 2.2–2.9× against TF.js. TF.js has not moved (the same
+      bytes, 86.4 → 86.5); borch did — the convolution backward on subgroup matrices, the
+      fused optimizer step, the kernels chosen by measurement on each card. jax-js has no
+      BatchNorm and no cross-entropy module, so its step is assembled from what it has;
+      Burn's wgpu backend on wasm is single-threaded and synchronises on every readback.
+      Each is the best that library can do in a browser today, not the best implementation
+      of that library.
+    </p>
+
+    <h2>Inference — ResNet-18 (CIFAR) forward, ms</h2>
+    <p>
+      One network exported from torch once — safetensors for borch.ts, ONNX for ORT — and a
+      table printed only after both runtimes reproduce torch's logits on a seeded input to
+      1e-3 (measured ~5e-8). Mean of twenty after three warm-ups, a scope a forward, the
+      readback included. The borch row is the eval forward recorded and replayed
+      (<code>compiled(model)</code>).
+    </p>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>adapter</th><th>runtime</th><th>batch 1</th><th>batch 16</th><th>borch / ORT</th></tr></thead>
+      <tbody>
+        <tr><td><code>apple / metal-3</code> · 2026-09-22</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>1.09</strong></td><td class="num"><strong>4.12</strong></td><td class="num">0.25× · 0.78×</td></tr>
+        <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">4.35</td><td class="num">5.30</td><td></td></tr>
+        <tr><td></td><td>ONNX Runtime Web, f16 file (I/O kept f32)</td><td class="num">3.29</td><td class="num">4.26</td><td class="num">0.33× · <strong>0.97× — a draw</strong></td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan) · 2026-09-21</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>0.56</strong></td><td class="num"><strong>1.66</strong></td><td class="num">0.15× · 0.39–0.47×</td></tr>
+        <tr><td></td><td><strong>borch.ts int8 static + captured</strong></td><td class="num"><strong>0.52</strong></td><td class="num"><strong>0.94–1.03</strong></td><td class="num">0.14× · 0.22–0.28×</td></tr>
+        <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">3.5–3.8</td><td class="num">3.6–4.3</td><td></td></tr>
+        <tr><td></td><td>ONNX Runtime Web, f16 file</td><td colspan="3">the session refuses — this card's Chrome (Linux, Vulkan) gives ORT's device no f16</td></tr>
+        <tr><td></td><td>ONNX Runtime Web, int8 file (QDQ) · WebGPU / wasm provider</td><td class="num">42–45 / 4.1</td><td class="num">98–106 / 56</td><td class="num">11–28× slower than its own f32</td></tr>
+        <tr><td><code>nvidia / blackwell</code> through Direct3D 12 (RTX 5050 Laptop) · 2026-09-21</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>1.69–1.81</strong></td><td class="num"><strong>6.50–7.29</strong></td><td class="num">0.25–0.30× · 0.41–0.46×</td></tr>
+        <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">5.67–7.34</td><td class="num">15.7–16.0</td><td></td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>
+      <strong>Top-1 on the same 1,000 held-out CIFAR-10 images</strong>, a network trained
+      for the test, on the 5080: borch f32 92.40 %, borch int8 static 92.50 %, ORT f32
+      92.40 %, ORT int8 92.50 %. The quantised network is the same network; what differs is
+      who runs it on the GPU. ORT's int8 file runs slower on WebGPU than ORT's own f32 on
+      every adapter (6× on Metal, 11–28× on the 5080) and slower than on its wasm provider
+      at batch 1 — its quantised convolutions are not the WebGPU provider's.
+    </p>
+
+    <h2>Inference — ViT-Tiny/16 (224², 1000 classes) forward, ms</h2>
+    <p>
+      timm's <code>vit_tiny_patch16_224</code> at seed 0, bimm-ts's model on the borch side,
+      both gated on torch's logits (measured ~1e-6). Nothing in this library was written for
+      a transformer: the linear layers run the convolution's GEMM tiles, attention runs the
+      batched matmul and the subgroup softmax.
+    </p>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>adapter</th><th>borch captured, b1</th><th>ORT f32, b1</th><th>borch, b16</th><th>ORT, b16</th><th>borch / ORT</th></tr></thead>
+      <tbody>
+        <tr><td><code>apple / metal-3</code> · 2026-09-22 (the token row padded 197 → 200 for the subgroup matrices)</td><td class="num"><strong>2.22</strong></td><td class="num">5.46</td><td class="num"><strong>10.64</strong></td><td class="num">19.77</td><td class="num">0.41× · 0.54×</td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan) · 2026-09-21 — no f32 subgroup matrices on this card, the scalar GEMM throughout</td><td class="num"><strong>1.73–2.25</strong></td><td class="num">6.89–8.18</td><td class="num"><strong>4.93</strong></td><td class="num">14.2–14.6</td><td class="num">0.21–0.33× · 0.34–0.35×</td></tr>
+        <tr><td><code>nvidia / blackwell</code> through Direct3D 12 (RTX 5050 Laptop) · 2026-09-21</td><td class="num"><strong>3.31–3.37</strong></td><td class="num">10.0–11.8</td><td class="num"><strong>24.0–27.8</strong></td><td class="num">47.5–61.0</td><td class="num">0.29–0.33× · 0.46–0.50×</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2>What this page does not say</h2>
+    <ul>
+      <li><strong>One model each.</strong> The ResNet-18 is 32 × 32 CIFAR and the ViT is tiny. Larger inputs and larger models (a 346 MB ViT-Base fine-tuned through a 57 MB window is measured elsewhere, in <code>docs/SCALE.md</code>) are outside this table.</li>
+      <li><strong>Chrome only.</strong> Safari and Firefox are unmeasured. One machine per adapter. The 5080's Chrome gives ORT no f16 and borch no f32 subgroup matrices (int8 only).</li>
+      <li><strong>The laptop's afternoon rows are ranges</strong> because the machine was in use; every library read 2–3× slower together and the ratios held. A time without its machine can be quoted but not contested, which is why the adapter is on every row.</li>
+      <li><strong>Not in borch:</strong> f16 compute kernels (why ORT's f16 draws on Metal), LLM decode, a general graph IR. int8 is the convolution only, and only where the card exposes an int8 subgroup configuration.</li>
+      <li><strong>Eager is not the table.</strong> A page that calls the model without <code>compiled</code> sees the eager row: on Metal within 1.1–1.35× of the replay, on the 5080 at batch 1 level with ORT — the card clocks down between short bursts and the eager loop lets it.</li>
+      <li><strong>The first call compiles.</strong> 0.05 s on Metal and the 5080, 0.16 s on the laptop's D3D12 (the browser keeps the compiled pipelines for the next visit; 0.015 s the second time), once per input shape.</li>
+    </ul>
+
+    <h2>Reproduce it</h2>
+    <p>Every table on this page is printed by a runner that refuses a software adapter and names the machine under the numbers.</p>
+<pre><code>git clone https://github.com/playidea-lab/borch &amp;&amp; cd borch &amp;&amp; npm ci &amp;&amp; npm run build:ts
+npm run compare:ts          # training vs TF.js · inference vs ORT Web f32/f16/int8 · ViT-Tiny
+npm run compare-peers:ts    # jax-js and Burn (the Burn crate builds from tests/browser/burn_resnet18)
+npm run capture:ts          # the recording, the tuner, the first call's cost</code></pre>
+    <p class="small muted">
+      The ledgers behind each number — the predictions written before the runs and which
+      of them were wrong — are <code>docs/BOOK.md</code> ("How fast it is"),
+      <code>docs/INFER.md</code>, <code>docs/INT8.md</code>, <code>docs/GEMM.md</code>,
+      <code>docs/COMPILER.md</code> and <code>docs/FIRST.md</code>. Bytes pinned:
+      TF.js 4.22.0, jax-js 0.1.25, Burn 0.21, ONNX Runtime Web 1.29.0
+      (<code>tests/browser/assets.lock</code>).
+    </p>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    borch — a PyTorch-shaped tensor library running on WebGPU in the browser · Apache-2.0<br>
+    Unrelated to other projects with similar names — minitorch · nanotorch · edutorch.
+  </div>
+</footer>
+
+</body>
+</html>

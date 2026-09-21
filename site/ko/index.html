@@ -54,6 +54,7 @@
       <span class="sep" aria-hidden="true"></span>
       <a href="setup.html">GPU</a>
       <a href="check.html">확인</a>
+      <a href="compare.html">비교</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../" class="lang">English</a>
@@ -531,7 +532,7 @@ for step in range(201):
   <div class="wrap">
     <p class="eyebrow">잰 것만 적는다</p>
     <h2>얼마나 빠른가 · 얼마나 맞는가</h2>
-    <p class="lead">대체한 TF.js 런타임보다 빠르고(2–3×), 그 밑의 matmul 은 같은 Metal GPU 에서 torch 에 한 끗 차이로 붙는다. parity 와 golden 결과는 아래에 전부 두고, 기기별로 dispatch 까지 들어간 속도 표는 페이지를 막지 않도록 접어 둔다.</p>
+    <p class="lead"><strong>2026-09-22, 게시된 0.6.0 으로 실측:</strong> 학습 스텝은 TF.js 보다 4.5–10×, jax-js 보다 2.8–7.5×, Burn 보다 14–18× 빠르고 — 브라우저에서 WebGPU 로 학습하는 라이브러리 전부 — 캡처한 추론 forward 는 세 어댑터에서 ONNX Runtime Web 을 앞선다, ResNet 도 ViT 도. 같은 페이지·같은 GPU 에서 숫자마다 어댑터를 붙이고 지는 행도 남긴 전체 비교는 <a href="compare.html">비교 페이지</a>에 있다. 아래는 그때 잰 그대로 둔 이전 표들과, 같은 Metal GPU 에서 torch 에 한 끗 차이로 붙는 그 밑의 matmul 이다. parity 와 golden 결과는 아래에 전부 두고, 기기별로 dispatch 까지 들어간 속도 표는 페이지를 막지 않도록 접어 둔다.</p>
 
     <details class="fold">
       <summary>속도 — 표 전체, 기기별</summary>
