@@ -392,9 +392,9 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     // The count separates "too many calls" from "a slow kernel" — the eval-mode batch
     // norm was the former, six dispatches a layer over twenty layers (measured here).
     const d = dev();
-    const d0 = d.dispatches;
+    const d0 = d.dispatches; const s0 = d.submits;
     await noGrad(() => model.forward(xb)).toArray();
-    const dispatches = d.dispatches - d0;
+    const dispatches = d.dispatches - d0; const submits = d.submits - s0;
     await d.profile(() => noGrad(() => model.forward(xb)).toArray());
     // **A kind's time is a sum over its dispatches, and the count is printed with it**: the
     // ResNet-18 has three 512 → 512 convolutions at 4 × 4, and their summed 0.37 ms was read
@@ -403,7 +403,7 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     for (const [kind, ns] of d.nsByKind) hot.push([kind, ns / 1e6, d.countByKind.get(kind) ?? 1]);
     hot.sort((p, q) => q[1] - p[1]);
     const total = hot.reduce((a, [, ms]) => a + ms, 0);
-    lines.push(`           borch.ts ${dispatches} dispatches/forward · GPU time (ms, total ${total.toFixed(1)}, ×count): `
+    lines.push(`           borch.ts ${dispatches} dispatches/forward, ${submits} submits · GPU time (ms, total ${total.toFixed(1)}, ×count): `
       + hot.slice(0, 8).map(([k, ms, n]) => `${k} ${ms.toFixed(2)}${n > 1 ? `×${n}` : ""}`).join(" · ")
       + (d.profileDropped ? ` · ${d.profileDropped} dropped` : ""));
   }
@@ -437,7 +437,7 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     // **Where the eager wall goes** (`docs/FIRST.md` 2a): the JavaScript of the forward
     // — encoding, bind groups, tensor bookkeeping — timed on its own (the forward is
     // synchronous; the readback after it is the GPU's), and the bind groups it made.
-    let js = 0; const bg0 = d.bindGroups;
+    let js = 0; const bg0 = d.bindGroups; const sub0 = d.submits;
     for (let i = 0; i < 10; i++) {
       await scope(async () => {
         const t = performance.now();
@@ -446,7 +446,7 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
         await y.toArray();
       });
     }
-    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${perForward} dispatches/forward · JavaScript ${(js / 10).toFixed(2)} ms of it (${Math.round((d.bindGroups - bg0) / 10)} bind groups)`);
+    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${perForward} dispatches/forward · JavaScript ${(js / 10).toFixed(2)} ms of it (${Math.round((d.bindGroups - bg0) / 10)} bind groups, ${((d.submits - sub0) / 10).toFixed(1)} submits a forward)`);
     // The fused forward's GPU time by kind — what of the wall is the GPU's (INFER Step 0).
     const ph0 = d.packHits, pm0 = d.packMisses;
     await d.profile(() => noGrad(() => model.forward(xb)).toArray());
