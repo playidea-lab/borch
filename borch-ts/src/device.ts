@@ -1333,6 +1333,9 @@ export class Device {
           this.pipelines.set(signature, pipeline); this.accesses.set(pipeline, bindingAccess(code));
           this.tuneCompiles.push({ sig: signature, ms: performance.now() - t0, bytes: code.length });
         }));
+      // A dry run goes on past the miss (nothing dispatches, so the handle is never
+      // used); the tuner's warm wave stops at it and runs the candidate again later.
+      if (this.dryRun) return {} as GPUComputePipeline;
       throw new PrewarmMiss(signature);
     }
     if (shaderDiagnostics()) {
@@ -2039,6 +2042,9 @@ export class Device {
     groups: readonly [number, number, number],
     meta?: Elementwise | Reduce,
   ): void {
+    // A dry run (`compileAhead`, the second mode): the step's host side runs and its
+    // kernels compile side by side, nothing is dispatched.
+    if (this.dryRun) return;
     const cap = this.limits.maxComputeWorkgroupsPerDimension;
     for (const [axis, count] of groups.entries()) {
       if (count > cap) {
@@ -2614,6 +2620,34 @@ export class Device {
   compileAhead(on: boolean): void {
     this.prewarming = on;
   }
+
+  /**
+   * **A dry run of `body`, compiling every kernel it meets side by side.** Nothing is
+   * dispatched — `run` returns at once and a missed pipeline is a placeholder — so the
+   * body's host side runs to the end in one pass, every miss starts its compile, and the
+   * compiles are awaited together. For a pure step's first call: measured on the RTX
+   * 5050 Laptop (D3D12, 2026-09-21), the ResNet-18 inference forward's first call was
+   * 673 ms with a miss thrown out of the step and the step run again per miss — forty
+   * waves of one compile each, serial after all. The body's allocations are scoped away.
+   * Only a pure body: its outputs are never made, and a body that reads a value back
+   * reads nothing.
+   */
+  async dryRunAhead(body: () => Promise<void>): Promise<void> {
+    this.dryRun = true;
+    this.prewarming = true;
+    this.beginScope();
+    try {
+      await body();
+    } catch (err) {
+      if (!Device.isCompileMiss(err)) throw err;
+    } finally {
+      this.endScope();
+      this.dryRun = false;
+      this.prewarming = false;
+    }
+    await this.awaitCompiles();
+  }
+  private dryRun = false;
 
   /** Waits for every pipeline a wave started. */
   async awaitCompiles(): Promise<void> {

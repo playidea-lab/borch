@@ -229,12 +229,21 @@ export class Compiled<A extends CompiledArg[], R> {
    */
   async call(...args: A): Promise<Awaited<R>> {
     const key = keyOf(args);
-    const rec = this.records.get(key);
+    let rec = this.records.get(key);
     if (rec) {
       // A state-writing step owes its tuning: it runs here, before the replay, on the
       // recording's own buffers — the caller is done with the last call's outputs by now,
       // and the replay overwrites them anyway.
       if (this.pending.get(key)?.queue) await this.tuneNow(key);
+      // A re-recording with the tuner's kernels waits here too: the last call's outputs
+      // are the caller's until they ask again, and swapping under them would kill them.
+      const fresh = this.replacement.get(key);
+      if (fresh) {
+        this.replacement.delete(key);
+        this.records.get(key)?.cap.dispose();
+        this.records.set(key, fresh);
+      }
+      rec = this.records.get(key) as Recording<Awaited<R>>;
       rec.inputs.forEach((held, i) => {
         if (held instanceof Tensor) held.copyFrom(args[i] as Tensor);
       });
@@ -289,6 +298,8 @@ export class Compiled<A extends CompiledArg[], R> {
   }
   private readonly inflight = new Map<string, Promise<void>>();
   private disposed = false;
+  /** A re-recording with the chosen kernels, swapped in at the next call. */
+  private readonly replacement = new Map<string, Recording<Awaited<R>>>();
 
   /**
    * One recording of the step for `args`. `collect` queues every kernel choice for the
@@ -298,35 +309,37 @@ export class Compiled<A extends CompiledArg[], R> {
    */
   private async record(args: A, datas: (Float32Array | null)[], collect: boolean, ahead: boolean): Promise<Recording<Awaited<R>>> {
     const d = device();
-    for (let wave = 0; ; wave++) {
-      d.beginCapture();
-      if (collect) d.tuneMode = "collect";
-      if (ahead) d.compileAhead(true);
-      let inputs: CompiledArg[];
-      let out: Awaited<R>;
-      try {
-        inputs = args.map((a, i) => (a instanceof Tensor
-          ? Tensor.from(datas[i] as Float32Array, a.shape, { dtype: a.dtype })
-          : a));
-        // A step that awaits (a streamed backbone's refills) is recorded across its awaits.
-        out = await this.fn(...(inputs as A));
-      } catch (err) {
-        d.tuneMode = null;
-        d.compileAhead(false);
-        d.endCapture().dispose();
-        if (ahead && Device.isCompileMiss(err) && wave < 32) { await d.awaitCompiles(); continue; }
-        throw err;
-      }
+    const make = (): CompiledArg[] => args.map((a, i) => (a instanceof Tensor
+      ? Tensor.from(datas[i] as Float32Array, a.shape, { dtype: a.dtype })
+      : a));
+    // A pure step's kernels, compiled side by side before the recording (`Device.dryRunAhead`).
+    if (ahead) await d.dryRunAhead(async () => { await this.fn(...(make() as A)); });
+    d.beginCapture();
+    if (collect) d.tuneMode = "collect";
+    let inputs: CompiledArg[];
+    let out: Awaited<R>;
+    try {
+      inputs = make();
+      // A step that awaits (a streamed backbone's refills) is recorded across its awaits.
+      out = await this.fn(...(inputs as A));
+    } catch (err) {
       d.tuneMode = null;
-      d.compileAhead(false);
-      return { cap: d.endCapture(), inputs, out };
+      d.endCapture().dispose();
+      throw err;
     }
+    d.tuneMode = null;
+    return { cap: d.endCapture(), inputs, out };
   }
 
-  /** The passes over a fresh recording — fusion, hoisting, the plan, the check — and its
-   *  place in the table. */
+  /** The passes over a fresh recording — fusion, hoisting, the plan — and its place in
+   *  the table. */
   private finish(key: string, made: Recording<Awaited<R>>): void {
-    const { cap, inputs, out } = made;
+    this.passes(made);
+    this.records.set(key, made);
+  }
+
+  private passes(made: Recording<Awaited<R>>): void {
+    const { cap, out } = made;
     const held = tensorsOf(out).map((t) => t.buffer);
     if (this.fuse) cap.fuse(held);
     // The replay-invariant dispatches — a frozen weight's repack — run once and leave the
@@ -337,7 +350,6 @@ export class Compiled<A extends CompiledArg[], R> {
       const p = cap.plan(held);
       this.planned.push({ moved: p.moved, released: p.released, bytesBefore: p.bytesBefore, bytesAfter: p.bytesAfter, arenas: p.arenas });
     }
-    this.records.set(key, { cap, inputs, out });
   }
 
   /**
@@ -394,9 +406,10 @@ export class Compiled<A extends CompiledArg[], R> {
       const t1 = performance.now();
       const fresh = await this.record(p.args, p.datas, false, false);
       if (this.disposed) { fresh.cap.dispose(); return; }
-      this.finish(key, fresh);
+      this.passes(fresh);
       if (this.check) this.checked.push(await this.verify(fresh.cap, fresh.inputs, fresh.out));
-      rec.cap.dispose();
+      this.replacement.get(key)?.cap.dispose();
+      this.replacement.set(key, fresh);
       p.cost.rerecord = performance.now() - t1;
     }
   }
@@ -405,6 +418,8 @@ export class Compiled<A extends CompiledArg[], R> {
   dispose(): void {
     this.disposed = true;
     this.pending.clear();
+    for (const r of this.replacement.values()) r.cap.dispose();
+    this.replacement.clear();
     for (const r of this.records.values()) r.cap.dispose();
     this.records.clear();
   }
