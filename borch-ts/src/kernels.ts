@@ -5175,6 +5175,20 @@ ${store.join("\n")}
  *  `9 · KB · TM` floats, so a wider tile takes a thinner block). */
 export interface StagedTile { readonly TM: number; readonly TN: number; readonly RM: number; readonly RN: number; readonly KB: number }
 export const STAGED_DEFAULT: StagedTile = { TM: 64, TN: 64, RM: 4, RN: 4, KB: 8 };
+/** The tiles the forward tries, best first — swept on metal-3 and the RTX 5080 (2026-09-21,
+ *  `kernel_bench fwd --sweep=staged`): the 8 × 4 micro-tile on 128 × 64 with a block of
+ *  four channels won every deep layer on both (512 → 512 at 4 × 4, batch 16: 0.264 ms on
+ *  metal-3 against the tiled kernel's 0.318, 0.080 against 0.100 on the 5080); then the
+ *  4 × 4 on 64 × 64 with a block of four, which fits the 16 KiB floor. */
+export const STAGED_TILES: readonly StagedTile[] = [
+  { TM: 128, TN: 64, RM: 8, RN: 4, KB: 4 },
+  { TM: 64, TN: 64, RM: 4, RN: 4, KB: 4 },
+];
+/** The first tile of `STAGED_TILES` the shape and the device take, or `null`. */
+export function stagedTileFor(s: ConvNDShape, storage: number): StagedTile | null {
+  for (const t of STAGED_TILES) if (stagedFits(s, t, storage)) return t;
+  return null;
+}
 
 /** The band of padded rows one tile of `TN` pixels touches — whole images (a plane
  *  that divides `TN`) or a run of rows of one image (a row that divides `TN`). */

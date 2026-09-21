@@ -281,6 +281,12 @@ import {
   maskedScatterSourceBackward,
   absMaxAtomic,
   absMaxParts,
+  convForwardStaged,
+  stagedCoPad,
+  stagedGrid,
+  stagedSplit,
+  stagedTileFor,
+  tapMajorWeightsCo,
   convForwardInt8,
   convInt8Fits,
   convInt8Grid,
@@ -877,6 +883,34 @@ function convForwardRun(
       bufs,
       sgfGrid(s),
     );
+    return;
+  }
+  // **The scalar staged convolution** (`convForwardStaged`, `docs/GEMM.md` §4): where no
+  // subgroup kernel took the shape, before the tiled GEMM whose gather it replaces. The
+  // weights are repacked tap-major-by-channel each call (hoisted under `compiled`, as the
+  // subgroup path's repack is); measured 1.2–1.25× the tiled kernel on the deep layers
+  // at batch 16 on both adapters and 2× at batch 1 on the 5080.
+  const stagedTile = stagedTileFor(s, Device.workgroupStorage);
+  if (stagedTile !== null) {
+    const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+    const coPad = stagedCoPad(s.O, stagedTile.TM);
+    const wc = dev().alloc(kSpace * s.C * coPad);
+    dev().run1d(dev().pipeline(`tmwc:${key}:${stagedTile.TM}`, () => tapMajorWeightsCo(s.O, s.C, kSpace, coPad)), [w, wc], kSpace * s.C * coPad);
+    const pieces = stagedSplit(s, stagedTile);
+    const tl = `${stagedTile.TM}x${stagedTile.TN}r${stagedTile.RM}x${stagedTile.RN}k${stagedTile.KB}`;
+    if (pieces === 1) {
+      dev().run(
+        dev().pipeline(`cnss:${key}:${tl}:${bias ? "b" : "n"}${tag}`, () => convForwardStaged(s, stagedTile, 1, bias !== null, ep)),
+        [x, wc, ...tail], stagedGrid(s, stagedTile, 1));
+      return;
+    }
+    const slab = dev().alloc(n * pieces);
+    dev().run(
+      dev().pipeline(`cnss:${key}:${tl}:s${pieces}`, () => convForwardStaged(s, stagedTile, pieces, false)),
+      [x, wc, slab], stagedGrid(s, stagedTile, pieces));
+    dev().run1d(
+      dev().pipeline(`ssc:${key}:${pieces}:${bias ? "b" : "n"}${tag}`, () => sumSplitsConv(s, pieces, bias !== null, ep)),
+      [slab, ...tail], n);
     return;
   }
   if (splits === 1) {
