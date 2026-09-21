@@ -415,8 +415,16 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   tuned ones differ by a rounding. The gate's other half — "no shape in the three
   models' recordings slower than the rule's choice, two runs" — is the minimum of two
   rounds per candidate, by construction; the first-record overhead is the timing of
-  every candidate, once, and is not yet measured as a number. The 5080's numbers follow
-  when its worker answers.
+  every candidate, once, and is not yet measured as a number.
+
+  **The RTX 5080** (its worker came back): the training step **9 decisions, 2 changed**,
+  both within 2 % (a direct 0.093 → staged 0.091; a staged 0.125 → tiled 0.121) — the
+  hand rules, swept on this card the day before, were already the tuner's answer there,
+  which is the gate passing in the other direction. `capture:ts` 20 / 20. The inference
+  forward, pure, was re-recorded with the tuner's choices: `compare:ts` **1.74 → 1.66 ms
+  at batch 16** (43 dispatches against 40 — a split the tuner preferred), 0.58 at batch 1;
+  the int8 static forward beside it 0.94 / **0.52** — at batch 1 now ahead of f32, the
+  launch-bound wash of the int8 ledger tipping by the same measurement.
 
 ## 6. Risks, and the sentence that retires each
 

@@ -2069,6 +2069,10 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused + captured, `nvidia / blackwell` (RTX 5080, Vulkan), **2026-09-21 (later)**, the deep layers on the scalar staged convolution (`docs/GEMM.md` §3) | | **0.54 ms** | 1.74 ms |
 | ONNX Runtime Web 1.29.0, same run | | 3.60 ms | 3.69 ms |
 | ORT is faster than the captured network by | | 0.15× — borch ahead | 0.47× — borch ahead |
+| borch.ts fused + captured, `nvidia / blackwell` (RTX 5080, Vulkan), **2026-09-21 (night)**, the kernels chosen by measurement on the first recording (`docs/COMPILER.md` Step 5) | | **0.58 ms** | **1.66 ms** |
+| borch.ts **int8 static** + captured, same run | | **0.52 ms** | **0.94 ms** |
+| ONNX Runtime Web 1.29.0, same run | | 3.84 ms | 4.28 ms |
+| ORT is faster than the captured f32 / int8 network by | | 0.15× / 0.14× — borch ahead | 0.39× / 0.22× — borch ahead |
 
 **The eager rows before 2026-09-21 timed the allocator with the forward.** The
 inference comparison's eager loop made each forward's intermediates on fresh buffers —
