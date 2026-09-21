@@ -21,7 +21,7 @@
  * shader compilation, which the warm-up pays for on both sides.
  */
 
-import { Tensor, noGrad } from "../src/tensor.js";
+import { Tensor, noGrad, scope } from "../src/tensor.js";
 import { Device } from "../src/device.js";
 import { calibrateInt8, clearInt8, fuseForInference, quantizeForInt8 } from "../src/nn.js";
 import { compiled } from "../src/compile.js";
@@ -204,8 +204,12 @@ async function top1(forward: (x: Tensor) => Tensor, pixels: Float32Array, labels
   let correct = 0;
   for (let i = 0; i < n; i += batch) {
     const b = Math.min(batch, n - i);
-    const x = Tensor.from(pixels.subarray(i * 3072, (i + b) * 3072), [b, 3, 32, 32]);
-    const out = await noGrad(() => forward(x)).toArray();
+    // A scope a batch: thirty forwards of a hundred images without one filled the card
+    // (the allocation's out-of-memory is reported late, as an invalid buffer in a bind group).
+    const out = await scope(async () => {
+      const x = Tensor.from(pixels.subarray(i * 3072, (i + b) * 3072), [b, 3, 32, 32]);
+      return noGrad(() => forward(x)).toArray();
+    });
     for (let j = 0; j < b; j++) {
       let best = 0;
       for (let c = 1; c < 10; c++) if ((out[j * 10 + c] ?? 0) > (out[j * 10 + best] ?? 0)) best = c;

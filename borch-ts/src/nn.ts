@@ -25,7 +25,7 @@ import { Device } from "./device.js";
 import { convInt8CoPad } from "./kernels.js";
 import { quantizeConvWeightInt8TapMajor } from "./quant.js";
 import {
-  device, type InterpolateMode, keepAlive, noGrad, type PadMode, type Reduction,
+  device, type InterpolateMode, keepAlive, noGrad, type PadMode, type Reduction, scope,
   Tensor, batchedMatmul, type Int8ConvWeight, setInt8Calibrating } from "./tensor.js";
 
 /**
@@ -6771,10 +6771,13 @@ export async function calibrateInt8(m: Module, pixels: Float32Array, batch: numb
   try {
     for (let i = 0; i < count; i += batch) {
       const b = Math.min(batch, count - i);
-      const x = Tensor.from(pixels.subarray(i * per, (i + b) * per), [b, ...shape]);
-      noGrad(() => m.forward(x));
+      // A scope a batch — the maxima live in the layers' kept words, the rest returns.
+      await scope(async () => {
+        const x = Tensor.from(pixels.subarray(i * per, (i + b) * per), [b, ...shape]);
+        noGrad(() => m.forward(x));
+        await device().synchronize();
+      });
     }
-    await device().synchronize();
   } finally {
     setInt8Calibrating(false);
   }
