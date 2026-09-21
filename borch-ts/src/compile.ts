@@ -252,11 +252,22 @@ export class Compiled<A extends CompiledArg[], R> {
     const made = await this.record(args, datas, tuning && !this.pure, this.pure);
     const cost: FirstCallCost = { record: performance.now() - t0, deferred: tuning, wait: 0, tuning: 0, compile: 0, rerecord: 0, candidates: 0 };
     this.firstCall.push(cost);
-    this.finish(key, made);
-    if (this.check) this.checked.push(await this.verify(made.cap, made.inputs, made.out));
-    if (tuning) {
-      this.pending.set(key, { queue: this.pure ? null : d.takeTuneQueue(), args, datas, cost });
-      if (this.pure) idle(() => { void this.tuneNow(key); });
+    // A state-writing step's candidates are closures over this recording's buffers, and
+    // the passes (fusion, hoisting, the plan) move and release those buffers — so the
+    // raw recording stands until its tuning has run at the next call, and the passes
+    // follow it there. Measured the other way round (2026-09-21, both NVIDIA cards): a
+    // candidate wrote a buffer the plan had released and the pool had handed out again,
+    // twice in one dispatch — a validation fault.
+    if (tuning && !this.pure) {
+      this.records.set(key, made);
+      this.pending.set(key, { queue: d.takeTuneQueue(), args, datas, cost });
+    } else {
+      this.finish(key, made);
+      if (this.check) this.checked.push(await this.verify(made.cap, made.inputs, made.out));
+      if (tuning) {
+        this.pending.set(key, { queue: null, args, datas, cost });
+        idle(() => { void this.tuneNow(key); });
+      }
     }
     return made.out;
   }
@@ -359,6 +370,10 @@ export class Compiled<A extends CompiledArg[], R> {
       if (this.disposed) return;
       d.flush();
       outs.forEach((o, i) => d.writeWords(o.buffer, words(outBefore[i] as Float32Array)));
+      // The passes the raw recording was waiting for.
+      this.finish(key, rec);
+      if (this.check) this.checked.push(await this.verify(rec.cap, rec.inputs, rec.out));
+      if (this.disposed) return;
     } else {
       // In idle time the step may be disposed under this pass; every wait checks.
       const scratch = await this.record(p.args, p.datas, true, false);
