@@ -10,6 +10,7 @@ the replay's clock printed beside the eager step's. Refuses a software adapter b
 measuring: the clock and the bytes are the GPU's.
 """
 
+import os
 import sys
 
 import run as runner
@@ -22,6 +23,11 @@ ADAPTER_MS = 120_000
 
 
 def main(argv):
+    # `--profile=<dir>`: a Chrome profile kept between runs — the second run of the same
+    # page then says what the browser remembered (`docs/FIRST.md` 1c).
+    for a in argv:
+        if a.startswith("--profile="):
+            os.environ["BORCH_CHROME_PROFILE"] = a.split("=", 1)[1]
     runner.require_fresh_dist()
     dist = runner.ROOT / "borch-ts" / "dist" / "test" / "capture.js"
     if not dist.exists():

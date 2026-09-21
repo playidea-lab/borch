@@ -488,7 +488,15 @@ def _open(playwright, headed=False, flags=FLAGS):
     """Opens headed unless told otherwise — see `_headed`."""
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
     want = _headed(headed)
+    # **A profile that outlives the run** (`BORCH_CHROME_PROFILE=<dir>`): Chrome's own caches
+    # — the compiled pipelines among them, on the APIs where it keeps them — and the page's
+    # `localStorage` survive to the next run, which is what `docs/FIRST.md` 1c measures. A
+    # fresh profile (the default) is the first visit every time.
+    profile = os.environ.get("BORCH_CHROME_PROFILE")
     try:
+        if profile:
+            return playwright.chromium.launch_persistent_context(
+                profile, headless=not want, channel=channel, args=list(flags))
         return playwright.chromium.launch(
             headless=not want,
             channel=channel,
