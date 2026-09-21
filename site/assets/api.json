@@ -4,7 +4,7 @@
  "korean": {
   "done": 791,
   "stale": 0,
-  "missing": 587
+  "missing": 642
  },
  "modules": [
   {
@@ -15975,6 +15975,545 @@
    "count": 33
   },
   {
+   "name": "compile",
+   "title": "compiled",
+   "blurb": {
+    "ko": "`torch.compiled`·`torch.capture` — 스텝을 한 번 기록해 되감는다. 융합·메모리 계획·측정으로 고른 커널·첫 호출의 비용이 여기 있다.",
+    "en": "`torch.compiled` and `torch.capture` — a step recorded once and replayed: fusion, the memory plan, the kernels chosen by measurement, what the first call costs."
+   },
+   "doc": "`torch.compiled` and `torch.capture` for JavaScript — **the bookkeeping the Python\nbinding does around a recording, done here** (`docs/COMPILER.md` Step 6).\n\nA training step is the same dispatches with the same buffers every time; recorded once\n(`Device.beginCapture`/`endCapture`, `Capture`), it replays without the JavaScript that\nbuilt it. What `compiled` adds to that: the first call for a set of input shapes runs\nthe function under a capture on **copies** of its tensor arguments (uploads, so they\nare the recording's live-ins and are never moved by the memory plan), keeps what it\nreturned, and every later call with those shapes copies its arguments into the same\nbuffers and replays — handing back the same returned objects, which now read the new\nstep. A new shape — the last, shorter batch — is recorded once more and kept beside\nthe first. Numbers among the arguments are part of the shape key: a value the step\nbaked into a kernel cannot change on replay.\n\n**What the caller holds.** Python knows every tensor still referenced and tells the\nfusion and memory passes so; JavaScript cannot. Here what the function *returns* is\nheld — its buffers are neither left unwritten by `fuse` nor moved by `plan` — and\nanything else made inside the function may be. A value the caller wants after the\nstep is returned from the step; the parameters, the optimizer's state and the inputs\nare live-ins and stay where they are regardless.\n\n`check: true` holds each recording to the eager step on the caller's own function,\nas the binding does: the live-ins are read back after the recording ran, the\nrecording replayed, the live-ins and the result read again and put back, the function\nrun eagerly once more from the same place, and the two compared buffer by buffer —\nbit for bit plain; fused, the outputs within `tol` and the state within `stateTol`.\nA difference throws and names the worst buffer.",
+   "symbols": [
+    {
+     "kind": "type",
+     "name": "CompiledArg",
+     "signature": "export type CompiledArg = Tensor | number | string | boolean | null | undefined",
+     "doc": "What a compiled function may take: tensors, and plain values that become part of the key.",
+     "members": []
+    },
+    {
+     "kind": "interface",
+     "name": "CompiledOptions",
+     "signature": "export interface CompiledOptions",
+     "doc": "",
+     "members": [
+      {
+       "name": "fuse",
+       "signature": "readonly fuse?: boolean",
+       "doc": "Merge elementwise trees into single kernels (`Capture.fuse`). Default on.",
+       "optional": true
+      },
+      {
+       "name": "plan",
+       "signature": "readonly plan?: boolean",
+       "doc": "Lay the intermediates into arenas (`Capture.plan`). Default on.",
+       "optional": true
+      },
+      {
+       "name": "check",
+       "signature": "readonly check?: boolean",
+       "doc": "Hold each recording to the eager step; costs two steps and a readback per shape.",
+       "optional": true
+      },
+      {
+       "name": "tol",
+       "signature": "readonly tol?: number",
+       "doc": "Fused, the outputs' relative tolerance against eager.",
+       "optional": true
+      },
+      {
+       "name": "stateTol",
+       "signature": "readonly stateTol?: number",
+       "doc": "Fused, the state's — Adam magnifies a rounding on a parameter near zero.",
+       "optional": true,
+       "torch": "state_tol"
+      },
+      {
+       "name": "int8",
+       "signature": "readonly int8?: boolean",
+       "doc": "**A model's convolutions on the int8 subgroup path** (`docs/INT8.md`), where the\nadapter has the configuration — refused by name where it has not. Off by default:\nthe int8 forward is held to accuracy, not to torch's logits, and a caller asks for\nthat trade. `Compiled.int8Layers` says how many layers took it.",
+       "optional": true
+      },
+      {
+       "name": "tune",
+       "signature": "readonly tune?: boolean",
+       "doc": "**Kernel selection by measurement** (`docs/COMPILER.md` Step 5): before a shape's\nfirst recording, one pass collects every choice a rule makes among kernels, each\ncandidate is timed under the profiler, and the fastest is cached for this adapter\n(in memory and in `localStorage`); the recording then uses the decisions. Default on\nwhere the device has `timestamp-query`; the hand rules decide where it has not.",
+       "optional": true
+      },
+      {
+       "name": "pure",
+       "signature": "readonly pure?: boolean",
+       "doc": "The step is a pure function of its arguments — it writes no parameter, no optimiser\nstate, no buffer that outlives the call. `compiled(model)` sets it; a function form\nsays so itself. A pure step's first call compiles its kernels side by side instead of\none after another, and its tuning runs on a throwaway recording in idle time; a step\nthat writes state is compiled as it runs and tuned at the start of its next call\n(`docs/FIRST.md` 1b).",
+       "optional": true
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "CheckReport",
+     "signature": "export interface CheckReport",
+     "doc": "",
+     "members": [
+      {
+       "name": "buffers",
+       "signature": "readonly buffers: number",
+       "doc": ""
+      },
+      {
+       "name": "outputs",
+       "signature": "readonly outputs: number",
+       "doc": ""
+      },
+      {
+       "name": "differ",
+       "signature": "readonly differ: number",
+       "doc": ""
+      },
+      {
+       "name": "worstRel",
+       "signature": "readonly worstRel: number",
+       "doc": "",
+       "torch": "worst_rel"
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "PlanReport",
+     "signature": "export interface PlanReport",
+     "doc": "",
+     "members": [
+      {
+       "name": "moved",
+       "signature": "readonly moved: number",
+       "doc": ""
+      },
+      {
+       "name": "released",
+       "signature": "readonly released: number",
+       "doc": ""
+      },
+      {
+       "name": "bytesBefore",
+       "signature": "readonly bytesBefore: number",
+       "doc": "",
+       "torch": "bytes_before"
+      },
+      {
+       "name": "bytesAfter",
+       "signature": "readonly bytesAfter: number",
+       "doc": "",
+       "torch": "bytes_after"
+      },
+      {
+       "name": "arenas",
+       "signature": "readonly arenas: number",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "capture",
+     "signature": "export declare function capture<T>(fn: () => T): { step: Capture; result: T; }",
+     "doc": "Runs `fn` under a capture and returns the recording with the function's result. The\nhand-driven form: the caller made the inputs, writes the next batch into them\n(`copyFrom`) and calls `step.replay()`; the tensors `fn` made read the new step.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "captureAsync",
+     "signature": "export declare function captureAsync<T>(fn: () => Promise<T>): Promise<{ step: Capture; result: T; }>",
+     "doc": "`capture` for a step that awaits — one that streams a frozen backbone through a window\n(`streamTrainStep`), whose refills are staging maps. Nothing else may dispatch on the\ndevice while the recording is open across those awaits; the recording carries the\nrefills (`Recorded.refill`) and replays through `step.replayAsync()`.",
+     "members": [],
+     "torch": "capture_async"
+    },
+    {
+     "kind": "interface",
+     "name": "FirstCallCost",
+     "signature": "export interface FirstCallCost",
+     "doc": "The costs of a first call, ms of wall — `Compiled.firstCall`.",
+     "members": [
+      {
+       "name": "record",
+       "signature": "record: number",
+       "doc": "Recording the step: the JavaScript of one eager run, its dispatches encoded — and,\n for a pure step, the waves of its own kernels compiling side by side."
+      },
+      {
+       "name": "deferred",
+       "signature": "deferred: boolean",
+       "doc": "Whether the tuning ran after the first call returned (a pure step, idle time; a\n state-writing step, its next call) — then `tuning`, `compile`, `rerecord` and\n `candidates` are filled in when it has."
+      },
+      {
+       "name": "wait",
+       "signature": "wait: number",
+       "doc": "Waiting for that run's GPU work and reading its outputs back — the step's own first\n execution, paid here before the tuner runs on the same buffers; without a tuner the\n same wait comes when the caller reads the result."
+      },
+      {
+       "name": "tuning",
+       "signature": "tuning: number",
+       "doc": "The tuning pass: every candidate warmed once, then timed. Includes `compile`."
+      },
+      {
+       "name": "compileWave",
+       "signature": "compileWave: number",
+       "doc": "Of `tuning`, the warm wave — the candidates' pipelines compiling (the platform's\n cost: ~10 ms a pipeline on NVIDIA Vulkan, ~200 on D3D12, measured 2026-09-21).",
+       "torch": "compile_wave"
+      },
+      {
+       "name": "rerecord",
+       "signature": "rerecord: number",
+       "doc": "Recording again with the chosen kernels, where a decision changed a pure step."
+      },
+      {
+       "name": "candidates",
+       "signature": "candidates: number",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Compiled",
+     "signature": "export declare class Compiled<A extends CompiledArg[], R>",
+     "doc": "",
+     "members": [
+      {
+       "name": "checked",
+       "signature": "readonly checked: CheckReport[]",
+       "doc": "One report per recording when `check` is on."
+      },
+      {
+       "name": "planned",
+       "signature": "readonly planned: PlanReport[]",
+       "doc": "One report per recording when `plan` is on."
+      },
+      {
+       "name": "hoisted",
+       "signature": "readonly hoisted: number[]",
+       "doc": "Per recording, how many dispatches were replay-invariant and left the replay."
+      },
+      {
+       "name": "int8Layers",
+       "signature": "int8Layers: number",
+       "doc": "How many convolutions took the int8 path (`int8: true`), once prepared; −1 before.",
+       "torch": "int8_layers"
+      },
+      {
+       "name": "tuned",
+       "signature": "readonly tuned: TuneReport[][]",
+       "doc": "The tuner's decisions, one list per recording (empty where nothing was collected)."
+      },
+      {
+       "name": "firstCall",
+       "signature": "readonly firstCall: FirstCallCost[]",
+       "doc": "What the first call for a shape cost, per recording, in ms of wall: the recording\n itself, the tuning pass (0 without one), the re-recording where a decision changed a\n pure step (0 where none) — and how many candidates the pass timed. The number the\n Step 5 gate is about (`docs/COMPILER.md`): a first load pays this once per shape.",
+       "torch": "first_call"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(fn: (...args: A) => R, opts?: CompiledOptions, prepare?: () => Promise<void>)",
+       "doc": ""
+      },
+      {
+       "name": "shapes",
+       "signature": "get shapes(): number",
+       "doc": "How many input shapes have been recorded."
+      },
+      {
+       "name": "recordingOf",
+       "signature": "recordingOf(...args: A): Capture | undefined",
+       "doc": "The recording for the shapes of `args`, if one exists — for `explain`.",
+       "torch": "recording_of"
+      },
+      {
+       "name": "call",
+       "signature": "call(...args: A): Promise<Awaited<R>>",
+       "doc": "The step for `args`. Async because the first call for a shape reads the tensor\narguments back to make the recording's own copies of them; a replay is synchronous\nunderneath and the promise resolves at once."
+      },
+      {
+       "name": "settle",
+       "signature": "settle(): Promise<void>",
+       "doc": "Runs the tuning still owed — every shape's — now. Tests call it; a page may, to\n have the decisions before it measures."
+      },
+      {
+       "name": "dispose",
+       "signature": "dispose(): void",
+       "doc": "Returns every recording's memory. The returned tensors are not to be used after."
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "compiled",
+     "signature": "export declare function compiled<A extends CompiledArg[], R>(fn: (...args: A) => R, opts?: CompiledOptions): Compiled<A, R>",
+     "doc": "",
+     "members": []
+    }
+   ],
+   "count": 45
+  },
+  {
+   "name": "checkpoint",
+   "title": "checkpoint",
+   "blurb": {
+    "ko": "`torch.utils.checkpoint.checkpoint` — 구간의 출력만 남기고 backward 에서 다시 계산한다.",
+    "en": "`torch.utils.checkpoint.checkpoint` — a segment keeps only its output and recomputes in the backward."
+   },
+   "doc": "**Gradient checkpointing** — `torch.utils.checkpoint.checkpoint`.\n\nA segment run under `checkpoint` keeps **only its output** through the forward, not the\nintermediates a backward would need; at the backward it runs the segment again, with the\ntape on, and flows the incoming gradient through that fresh graph. The trade is the\nplan's Step 6 (`docs/SCALE.md`): O(√n) activation memory for one extra forward, so a\ndeeper model — or a streamed backbone whose block must be resident only while it runs —\nfits where the full tape would not.\n\n## Why it lives here and not in a caller\n\nThe pieces it needs are not exported: `flow` (the backward walk), `enableGrad`, and the\nnode funnel. So the primitive is written once, beside them, and callers get a function.\n\n## What makes it correct rather than a silently-wrong gradient\n\n- **The forward holds nothing.** It runs under `noGrad` inside a `scope()` that keeps\n  only the output; every intermediate is returned to the pool at the scope's close, so\n  the tape carries none of them. That is the whole memory win.\n- **The recompute is a fresh graph on detached leaves.** The inputs are `detach()`ed\n  (sharing their buffers, no copy) and marked `requiresGrad` exactly where the originals\n  were, so `flow` stops at them and records their gradient. Fresh tensors each time means\n  the version guard (`savedVersions`) has nothing stale to fire on.\n- **Gradient goes only to the arguments, and a captured one is refused, not dropped.**\n  `checkpoint` routes gradient to the tensors passed as `inputs` — those are the node's\n  parents. A tensor that requires grad and is used inside `fn` but was *closed over*\n  rather than passed would get no gradient at all, silently; so the recompute's graph is\n  walked and any grad-requiring leaf that is not one of the inputs makes the backward\n  throw, naming the count. Pass every trainable tensor the segment differentiates (a\n  LoRA adapter, say) as an argument; a frozen backbone does not require grad and is not\n  flagged. This is the difference between the plan's Step 6 and a silently wrong gradient.\n- **The recompute frees itself.** It runs inside its own `scope()` that keeps only the\n  gradients it returns; the recomputed intermediates and the accumulation graph go back\n  to the pool at once. So only one segment's worth is resident at a time in the backward,\n  which is the other half of the win.\n- **The node carries no saved tensors.** `checkpoint` saves nothing itself (that is the\n  point), so it never refuses a later in-place edit for a value it is not holding.\n\n`checkpoint` is verified against the plain (fully-taped) backward in\n`tests/browser/checkpoint_probe.py` — the gradients must agree within the golden\ntolerance, and `cost.ts` holds that the buffers at the backward peak actually fall.",
+   "symbols": [
+    {
+     "kind": "function",
+     "name": "checkpoint",
+     "signature": "export declare function checkpoint(fn: (...xs: Tensor[]) => Tensor, ...inputs: Tensor[]): Tensor",
+     "doc": "Runs `fn(...inputs)` so that its intermediates are recomputed in the backward rather\nthan held. The returned tensor behaves as if `fn` had been called normally — the same\nvalue, and a backward that reaches every input that required grad — but the forward\nkeeps only the output.\n\n`fn` must be a pure function of its tensor arguments: it is called a second time in the\nbackward, so anything it reads that is not an argument (a captured tensor, a module\nparameter) must not have changed in between. A frozen backbone block is exactly this.",
+     "members": []
+    }
+   ],
+   "count": 1
+  },
+  {
+   "name": "stream",
+   "title": "stream",
+   "blurb": {
+    "ko": "동결 가중치 창으로 순차 스택을 흘려보낸다 — 블록이 돌기 직전에 두고 직후에 비워, 창보다 큰 모델이 돈다(`docs/SCALE.md`).",
+    "en": "A sequential stack streamed through a frozen-weight window — a block's weights placed just before it runs and evicted after, so a model larger than the window runs (`docs/SCALE.md`)."
+   },
+   "doc": "**Streaming a sequential stack through a frozen-weight window** — `docs/SCALE.md` Step 3\n④. Each block's frozen weights are placed in the window just before the block runs and\nevicted just after, so only a few blocks are resident at once and a model larger than the\nwindow fits. The block's own intermediates are freed in a scope, keeping only the output\nthat flows to the next block.\n\nThis is the scheduler abstraction: a caller (the bimm adapter, the workbench feature pass)\nturns a real model into a list of `StreamBlock`s — each carrying its weight bytes and a\nforward closure — and this runs them with bounded memory. The weights are frozen\n(`requiresGrad` false), so this is a no-grad feature/inference pass; a trainable adapter\non top (LoRA, Step 7) stays resident and is passed into the closure separately.\n\nPrefetch-one-ahead (placing block k+1 while k runs) is a later optimisation: the window's\nsingle staging buffer serialises fills today, so blocks stream one at a time. What this\nestablishes is correctness and bounded residency; overlap is a speed lever for when the\nstaging ring exists.",
+   "symbols": [
+    {
+     "kind": "interface",
+     "name": "StreamBlock",
+     "signature": "export interface StreamBlock",
+     "doc": "One block of a streamed stack: its frozen weights (in the order `run` consumes them),\n their shapes, and the forward that takes the previous output and the windowed weights.",
+     "members": [
+      {
+       "name": "weights",
+       "signature": "readonly weights: readonly Float32Array[]",
+       "doc": ""
+      },
+      {
+       "name": "shapes",
+       "signature": "readonly shapes: readonly (readonly number[])[]",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "run(h: Tensor, weights: readonly Tensor[]): Tensor",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "streamSequential",
+     "signature": "export declare function streamSequential(win: Window, input: Tensor, blocks: readonly StreamBlock[], opts?: { f16?: boolean; int8?: boolean; }): Promise<Tensor>",
+     "doc": "Runs `blocks` in order over `input`, streaming each block's weights through `win`. Returns\nthe final output, kept alive past the streaming scopes. `f16` stores the weights at half\nprecision (unpacked on use) for half the resident bytes.",
+     "members": [],
+     "torch": "stream_sequential"
+    }
+   ],
+   "count": 5
+  },
+  {
+   "name": "stream_module",
+   "title": "stream · module",
+   "blurb": {
+    "ko": "실제 모듈을 `StreamBlock` 으로 — 허브 백본 같은 모듈이 창을 타게 하는 어댑터.",
+    "en": "A real module turned into a `StreamBlock` — the adapter that lets a hub backbone ride the window."
+   },
+   "doc": "**A real module turned into a `StreamBlock`** — `docs/SCALE.md` Step 3 ④, the adapter.\n\n`streamSequential` (`src/stream.ts`) streams a list of `StreamBlock`s — each a plain bag\nof weight bytes plus a forward closure — through a window with bounded residency. That\ninterface is deliberately free of `nn`: the scheduler does not know what a module is. This\nfile is the bridge. Given a real `Module` (a bimm `BasicBlock`, a `Sequential` stage), it\nsnapshots the module's frozen weight kernels as host bytes and builds the closure that, on\neach call, swaps the **windowed** tensors into the module's own parameter fields, runs the\ngenuine `forward`, and restores the resident tensors so the model stays runnable.\n\n**Only weight operands may be windowed.** A window slot lives at an offset inside one\nshared buffer and is bound as a slice — which is exactly how matmul's `mat2` and conv's\nkernel are read, and *not* how a generic op reads a tensor (batch-norm's scale, a bias\nadd, an embedding gather all read from offset 0). So the default selects a module's 4-D\nkernels (conv weights); everything else — biases, batch-norm affine, running statistics —\nstays resident, which is what a frozen eval pass wants anyway. A caller streaming Linear\n`weight`s (2-D, read as `mat2`) passes a `select` that admits them.\n\nThe swap-and-restore keeps this a **non-consuming** pass: the module is unchanged after it\nruns, so the same model can be streamed again and a streamed result compared against the\nresident one.",
+   "symbols": [
+    {
+     "kind": "type",
+     "name": "ParamSelect",
+     "signature": "export type ParamSelect = (name: string, param: Tensor) => boolean",
+     "doc": "Which of a module's parameters go through the window. A window slot is a weight operand\n only, so the default admits 4-D kernels (conv weights) and leaves the rest resident.",
+     "members": []
+    },
+    {
+     "kind": "interface",
+     "name": "StreamBlockOptions",
+     "signature": "export interface StreamBlockOptions",
+     "doc": "",
+     "members": [
+      {
+       "name": "select",
+       "signature": "readonly select?: ParamSelect",
+       "doc": "The parameters to stream; the rest stay resident. Defaults to 4-D conv kernels.",
+       "optional": true
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "streamBlock",
+     "signature": "export declare function streamBlock(module: Module, opts?: StreamBlockOptions): Promise<StreamBlock>",
+     "doc": "Turns one `Module` into a `StreamBlock`: its selected frozen weights become the streamed\nbytes (in `namedParameters` order), and the forward swaps the windowed tensors into the\nmodule's fields, runs `module.forward`, and restores. `async` because reading the weight\nbytes off the device is async.",
+     "members": [],
+     "torch": "stream_block"
+    },
+    {
+     "kind": "function",
+     "name": "streamSequence",
+     "signature": "export declare function streamSequence(win: Window, input: Tensor, modules: readonly Module[], opts?: { f16?: boolean; select?: ParamSelect; }): Promise<Tensor>",
+     "doc": "Streams a sequence of modules through `win`, in order, over `input`. Each module's selected\nfrozen weights are placed just before it runs and evicted just after, so residency stays at\na few modules' worth of weights regardless of the sequence length. `f16` stores the streamed\nweights half-precision (unpacked on use); `select` chooses which parameters stream.",
+     "members": [],
+     "torch": "stream_sequence"
+    }
+   ],
+   "count": 5
+  },
+  {
+   "name": "stream_train",
+   "title": "stream · train",
+   "blurb": {
+    "ko": "흘려보내는 동결 백본 위에서 어댑터(LoRA)를 학습한다 — forward 와 backward 모두 그 블록이 도는 동안만 가중치가 상주한다.",
+    "en": "Training an adapter (LoRA) on a streamed frozen backbone — a block's weights resident only while it runs, in both passes."
+   },
+   "doc": "**Training an adapter on a streamed frozen backbone** — `docs/SCALE.md` Step 7, the residency\nrule. A block's frozen weights are resident only while that block runs, in both passes:\n\n  - **forward**: place block k's frozen weights in the window, run it, keep only the output\n    (the boundary activation), evict — so at most one block's weights and the boundary\n    activations are resident, never the whole backbone. The block's own intermediates are\n    dropped, exactly as gradient checkpointing drops them.\n  - **backward**: walk the blocks in reverse; refill block k's weights, recompute its forward\n    *with the tape on* from the saved boundary input, flow the incoming gradient through that\n    fresh graph into the resident adapters and into the block input, evict. This is QLoRA's\n    per-layer dequant in both passes, with \"dequant\" replaced by \"refill\".\n\n## Why this is not `checkpoint()`\n\n`checkpoint` (`checkpoint.ts`) recomputes inside the autograd backward, which is\n**synchronous** — but refilling the window is `async` (a staging-buffer map). So the reverse\npass is written out here, awaiting each refill, rather than hung off `Tensor.backward()`. The\ngradient arithmetic is the same `flow` the tape uses; only the driving loop differs.\n\n## What is resident\n\nThe frozen base weights stream (one block at a time in the window); the adapters stay resident\nand trainable; the boundary activations — one tensor per block edge — stay resident so the\nrecompute has its input. That is the checkpointing memory profile, with the weights bounded by\nthe window on top. The base weights never form a gradient (`requiresGrad` is false), so nothing\nis spent taping them.",
+   "symbols": [
+    {
+     "kind": "interface",
+     "name": "TrainBlock",
+     "signature": "export interface TrainBlock",
+     "doc": "One block of a streamed training stack: its frozen weight bytes (streamed through the\n window), their shapes, the resident trainable parameters whose gradients this fills (the\n block's adapters), and a forward that consumes the previous output and the windowed frozen\n weights — reading its adapters from its own closure.",
+     "members": [
+      {
+       "name": "weights",
+       "signature": "readonly weights: readonly Float32Array[]",
+       "doc": ""
+      },
+      {
+       "name": "shapes",
+       "signature": "readonly shapes: readonly (readonly number[])[]",
+       "doc": ""
+      },
+      {
+       "name": "params",
+       "signature": "readonly params: readonly Tensor[]",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "run(h: Tensor, windowed: readonly Tensor[]): Tensor",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "streamTrainStep",
+     "signature": "export declare function streamTrainStep(win: Window, input: Tensor, blocks: readonly TrainBlock[], loss: (output: Tensor) => Tensor, opts?: { lossParams?: readonly Tensor[]; }): Promise<Tensor>",
+     "doc": "One training step over a streamed frozen backbone. Runs `blocks` in order over `input` with\nthe residency rule above, evaluates `loss` on the final output, and fills each block's\n`params[*].grad` — accumulating, as `Tensor.backward` does, so a caller zeroes grads between\nsteps. Returns the scalar loss (kept alive past the internal scopes); the caller reads it and\nthen steps its optimiser over the adapters.\n\n`loss` must return a scalar (a `[]`-shaped tensor). The frozen weights are streamed, so the\nwindow holds at most one block's worth at a time in either pass. `opts.lossParams` are\nresident trainable tensors used **inside `loss`** rather than in a streamed block — a new\nclassification head, say — whose gradients are harvested from the loss's own backward.",
+     "members": [],
+     "torch": "stream_train_step"
+    },
+    {
+     "kind": "type",
+     "name": "BufferSelect",
+     "signature": "export type BufferSelect = (shape: readonly number[]) => boolean",
+     "doc": "Which of a block's frozen buffers stream — a window slot is a weight operand only, so the\n default is buffers with rank ≥ 2 (conv kernels, linear weights). Batch-norm running stats\n (rank 1) stay resident, as a frozen eval reads them generically.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "trainBlock",
+     "signature": "export declare function trainBlock(module: Module, opts?: { select?: BufferSelect; offload?: boolean; }): Promise<TrainBlock>",
+     "doc": "Turns a real (LoRA-adapted, frozen-base) `Module` into a {@link TrainBlock}: its frozen weight\nbuffers stream, its trainable parameters (the adapters) are harvested for gradients, and the\nforward swaps the windowed buffers into the module's fields, runs `module.forward`, and\nrestores. The bridge from `applyLora`'d modules to {@link streamTrainStep}.\n\n`offload` frees the base buffers from the GPU after reading their bytes to host — so a model\nlarger than the device budget does not sit resident while it streams. The block then exists\nonly in host bytes plus the window: its `run` sets the module's fields to the windowed tensors\nand does not restore (there is nothing resident to restore to), so the module is usable **only**\nthrough streaming afterwards (`streamSequential` for a no-grad forward, this for training).",
+     "members": [],
+     "torch": "train_block"
+    },
+    {
+     "kind": "function",
+     "name": "streamTrainSequence",
+     "signature": "export declare function streamTrainSequence(win: Window, input: Tensor, modules: readonly Module[], loss: (output: Tensor) => Tensor, opts?: { select?: BufferSelect; lossParams?: readonly Tensor[]; offload?: boolean; }): Promise<Tensor>",
+     "doc": "One training step over a sequence of real modules, streaming each module's frozen weight\nbuffers through `win` — the model-facing form of {@link streamTrainStep}. The caller passes\n`applyLora`'d modules (frozen base + resident adapter); this fills each adapter's `.grad`.",
+     "members": [],
+     "torch": "stream_train_sequence"
+    }
+   ],
+   "count": 9
+  },
+  {
+   "name": "half",
+   "title": "half",
+   "blurb": {
+    "ko": "호스트 f32 ↔ f16 비트 변환 — 동결 가중치를 창에 절반 바이트로 두기 위한 것. dtype 이 아니다.",
+    "en": "Host f32 ↔ f16 bit conversion — frozen weights kept in the window at half the bytes. Not a dtype."
+   },
+   "doc": "**Host f32 ↔ f16 bit conversion** — for storing frozen weights in a window at half the\nbytes (`docs/SCALE.md` Step 4, folded into Step 3). This is not a `float16` dtype: the\nbytes are packed IEEE half-precision, held as raw window bytes, and unpacked to f32 on\nthe GPU (`unpackHalf`) when a weight funnel reads them. The core axiom \"storage is\nfloat32\" is untouched — a window buffer is outside the Tensor storage model (ADR-003\ndecision 5). WGSL's `pack2x16float` would do the same on the GPU; packing on the host\nkeeps the place path (staging → copyRange) as it is, with no temporary GPU buffers.\n\nThe conversion is the standard round-to-nearest-even one (Fabian Giesen's), handling\nsubnormals, overflow to inf, and NaN — the same rounding `pack2x16float` does, so a\nhost-packed weight and a GPU-unpacked read agree (checked in `window_probe`).",
+   "symbols": [
+    {
+     "kind": "function",
+     "name": "f32ToF16Bit",
+     "signature": "export declare function f32ToF16Bit(val: number): number",
+     "doc": "One f32 value to its IEEE half-precision bit pattern (a `u16`).",
+     "members": [],
+     "torch": "f32_to_f16_bit"
+    },
+    {
+     "kind": "function",
+     "name": "f16BitToF32",
+     "signature": "export declare function f16BitToF32(h: number): number",
+     "doc": "An IEEE half-precision bit pattern (a `u16`) to its f32 value.",
+     "members": [],
+     "torch": "f16_bit_to_f32"
+    },
+    {
+     "kind": "function",
+     "name": "f32ToF16Bits",
+     "signature": "export declare function f32ToF16Bits(a: Float32Array): Uint16Array",
+     "doc": "Pack an f32 array to half-precision bits. Length is preserved; each value is 2 bytes.",
+     "members": [],
+     "torch": "f32_to_f16_bits"
+    },
+    {
+     "kind": "function",
+     "name": "f16BitsToF32",
+     "signature": "export declare function f16BitsToF32(a: Uint16Array): Float32Array",
+     "doc": "Unpack half-precision bits back to an f32 array — the host mirror of `unpackHalf`.",
+     "members": [],
+     "torch": "f16_bits_to_f32"
+    }
+   ],
+   "count": 4
+  },
+  {
+   "name": "quant",
+   "title": "quant",
+   "blurb": {
+    "ko": "호스트 채널별 int8 양자화 — 동결 가중치를 창에 4 분의 1 바이트로 두고, 합성곱의 int8 경로가 읽는 tap-major 팩도 여기서 만든다.",
+    "en": "Host per-channel int8 quantisation — frozen weights in the window at a quarter of the bytes, and the tap-major pack the convolution's int8 path reads."
+   },
+   "doc": "**Host per-channel int8 quantisation** — for storing a frozen weight in a window at a quarter\nof the bytes (`docs/SCALE.md` Step 5). Like `half.ts`, this is **not** a dtype: the bytes are\npacked int8, held as raw window bytes (four per `u32`), and turned back into f32 on the GPU by\nthe matmul's int8 read (`weightInt8`) or a dequant pass — the core axiom \"storage is float32\"\nis untouched (ADR-003 decision 5).\n\n**Symmetric, per output channel.** A weight `[out, in]` gets one scale per `out` row:\n`scale[o] = max|W[o,:]| / 127`, and `q[o,i] = round(W[o,i] / scale[o])` clamped to `[-127, 127]`.\nPer-channel (rather than one scale for the whole tensor) is what keeps top-1 within a point of\nf32 — a single outlier row would otherwise crush every other row's resolution. The values pack\nin the weight's own row-major order, so element `o*in + i` is byte `(o*in + i) % 4` of word\n`(o*in + i) / 4` — the same index the matmul reads with `transB` (`bcol*K + brow`, `bcol = o`).",
+   "symbols": [
+    {
+     "kind": "function",
+     "name": "quantizeInt8PerChannel",
+     "signature": "export declare function quantizeInt8PerChannel(data: Float32Array, outChannels: number): { packed: Uint32Array; scales: Float32Array; }",
+     "doc": "Quantises `data` (a row-major `[outChannels, inPerChannel]` weight) to per-channel int8,\npacked four to a `u32`. Returns the packed words (padded so the byte count is a whole number\nof words) and one f32 scale per output channel. A zero row gets scale 0 and quantises to zeros.",
+     "members": [],
+     "torch": "quantize_int8_per_channel"
+    },
+    {
+     "kind": "function",
+     "name": "dequantInt8PerChannel",
+     "signature": "export declare function dequantInt8PerChannel(data: Float32Array, outChannels: number): Float32Array",
+     "doc": "The exact f32 values a per-channel int8 window weight holds — `quantize` then reconstruct\n(`q * scale`). The reference for a test: feeding these to an f32 matmul matches the int8\nmatmul's own reconstruction bit for bit.",
+     "members": [],
+     "torch": "dequant_int8_per_channel"
+    },
+    {
+     "kind": "function",
+     "name": "quantizeConvWeightInt8TapMajor",
+     "signature": "export declare function quantizeConvWeightInt8TapMajor(data: Float32Array, O: number, C: number, kSpace: number, coPad: number): { packed: Uint32Array; scales: Float32Array; }",
+     "doc": "**Per-output-channel int8 for the int8 convolution** (`docs/INT8.md` Step 3), laid out for\nits right operand: `[tap][ci][co]`, four output channels a word, `co` padded to a whole\n`coPad` so every 16-column block the subgroup load takes is inside the array. One scale\nper output channel over all of that channel's taps and inputs: `scale[o] = max|W[o]| /\n127`. `data` is torch's `[O, C, kh, kw]`, row-major.",
+     "members": [],
+     "torch": "quantize_conv_weight_int8_tap_major"
+    }
+   ],
+   "count": 3
+  },
+  {
    "name": "cpu",
    "title": "cpu",
    "blurb": {
@@ -24652,5 +25191,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3368
+ "total": 3440
 }

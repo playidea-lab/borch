@@ -189,6 +189,9 @@ KIND = {
 UNWIRED = {
     "bench.py": ("tool", "the timed training step behind `run.py --bench`, a measurement rather than a verdict"),
     "export_resnet18.py": ("tool", "writes the ResNet-18 weights the inference comparison shares — run when they change"),
+    "export_vit_tiny.py": ("tool", "writes timm's ViT-Tiny/16 weights the transformer comparison shares — compare.py runs it when they are absent"),
+    "export_ort_variants.py": ("tool", "onnxruntime's f16 and int8 (QDQ) forms of the comparison's ResNet-18 — compare.py runs it when they are absent"),
+    "train_resnet18_cifar.py": ("tool", "trains the ResNet-18 the int8 accuracy gate is held to (minutes on a GPU) and writes the labelled test slice — run once per machine"),
     "features_probe.py": ("diagnostic", "prints what this adapter offers; there is no right answer to fail"),
     "readback_probe.py": ("diagnostic", "how long one value takes to come back from bare WebGPU, no borch in it"),
     "backbone_sweep.py": ("diagnostic", "which of the registry's models load and what each costs — "

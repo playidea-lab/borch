@@ -109,7 +109,9 @@ def test_the_readme_autograd_example_prints_what_its_comment_claims():
     """
     blocks = [(line, body) for line, body in _python_blocks()
               if "backward()" in body and "print(" in body]
-    assert len(blocks) == 1, f"expected one autograd example, found {len(blocks)}"
+    # **The first such block, not the only one.** The compiled-step example later in the
+    # file also backwards and prints; the claim this test holds is the opening example's.
+    assert blocks, "expected an autograd example with a print and a comment on it"
     line, body = blocks[0]
 
     claimed = [NOTE.search(raw) for raw in body.splitlines() if raw.startswith("print(")]

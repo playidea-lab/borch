@@ -216,7 +216,7 @@ async function resnet(lines: string[]): Promise<void> {
   untuned.dispose();
   if (cost && plain) {
     const perCand = cost.candidates ? cost.tuning / cost.candidates : 0;
-    lines.push(`autotune overhead: first call ${cost.record.toFixed(0)} ms (the recording; the tuning is ${cost.deferred ? "owed to the second call" : "not deferred"}) · then the step's own first run ${cost.wait.toFixed(0)} + tuning ${cost.tuning.toFixed(0)} (of which the candidates' pipelines compiling ${cost.compile.toFixed(0)}; ${cost.candidates} candidates, ${perCand.toFixed(1)} ms each) + re-record ${cost.rerecord.toFixed(0)} · the same step recorded with tune: false ${plain.record.toFixed(0)} ms · a replay ${replayMs.toFixed(1)} ms`);
+    lines.push(`autotune overhead: first call ${cost.record.toFixed(0)} ms (the recording; the tuning is ${cost.deferred ? "owed to the second call" : "not deferred"}) · then the step's own first run ${cost.wait.toFixed(0)} + tuning ${cost.tuning.toFixed(0)} (of which the candidates' pipelines compiling ${cost.compileWave.toFixed(0)}; ${cost.candidates} candidates, ${perCand.toFixed(1)} ms each) + re-record ${cost.rerecord.toFixed(0)} · the same step recorded with tune: false ${plain.record.toFixed(0)} ms · a replay ${replayMs.toFixed(1)} ms`);
   }
   // **The plan's bound (2 ms a candidate) and two after it (three replays of the step,
   // with and without the compile wave) were all guesses the measurement refused**: the
@@ -238,7 +238,7 @@ async function resnet(lines: string[]): Promise<void> {
   const second = cached.firstCall[0];
   cached.dispose();
   want("autotune: a second recording of the same step times nothing (the decisions are cached by adapter and key)",
-    !!second && second.candidates === 0 && second.compile === 0, second ? `${second.candidates} candidates, no compile wave, ${second.tuning.toFixed(1)} ms of readback and passes` : "no first call");
+    !!second && second.candidates === 0 && second.compileWave === 0, second ? `${second.candidates} candidates, no compile wave, ${second.tuning.toFixed(1)} ms of readback and passes` : "no first call");
   step.dispose();
   const d1 = device().dispatches;
   want("ResNet-18: dispatches were counted", d1 > d0, `${d1 - d0} dispatches over the compiled section`);
@@ -381,7 +381,7 @@ async function inference(lines: string[]): Promise<void> {
   await scope(async () => noGrad(() => byHand.forward(x)).toArray());
   want("eager pack cache: the weights written in place are repacked on the next forward, and only those", dv.packMisses - m1 === hitsAgain, `${dv.packMisses - m1} repacks after the write, ${hitsAgain} packs in use`);
   const fc = step.firstCall[0];
-  if (fc) lines.push(`compiled(model) first call: recording ${fc.record.toFixed(0)} ms (its kernels compiled side by side; the answer is out) · then in idle time: tuning ${fc.tuning.toFixed(0)} (compile wave ${fc.compile.toFixed(0)}; ${fc.candidates} candidates) + re-record ${fc.rerecord.toFixed(0)} ms${step.tuned.flat().some((t) => t.chosen !== t.prior) ? " (a decision changed; the pure forward was recorded again)" : ""}`);
+  if (fc) lines.push(`compiled(model) first call: recording ${fc.record.toFixed(0)} ms (its kernels compiled side by side; the answer is out) · then in idle time: tuning ${fc.tuning.toFixed(0)} (compile wave ${fc.compileWave.toFixed(0)}; ${fc.candidates} candidates) + re-record ${fc.rerecord.toFixed(0)} ms${step.tuned.flat().some((t) => t.chosen !== t.prior) ? " (a decision changed; the pure forward was recorded again)" : ""}`);
   step.dispose();
 
   const xs = Tensor.from(array(8 * 3 * 16 * 16, 78, 2), [8, 3, 16, 16]);

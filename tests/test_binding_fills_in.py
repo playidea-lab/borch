@@ -56,7 +56,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # names — none of them has a counterpart in TypeScript.
 PYTHON_SIDE = """
 as_tensor can_cast dense_dim from_numpy get_default_dtype get_device
-get_rng_state initial_seed is_distributed is_grad_enabled
+get_rng_state initial_seed is_distributed
 is_inference is_inference_mode_enabled is_storage numpy promote_types
 result_type set_rng_state share_memory_ sparse_dim to_dense tolist typename
 asarray resize_as_ storage_offset values

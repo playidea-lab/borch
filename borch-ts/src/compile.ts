@@ -163,7 +163,7 @@ export interface FirstCallCost {
   tuning: number;
   /** Of `tuning`, the warm wave — the candidates' pipelines compiling (the platform's
    *  cost: ~10 ms a pipeline on NVIDIA Vulkan, ~200 on D3D12, measured 2026-09-21). */
-  compile: number;
+  compileWave: number;
   /** Recording again with the chosen kernels, where a decision changed a pure step. */
   rerecord: number;
   candidates: number;
@@ -259,7 +259,7 @@ export class Compiled<A extends CompiledArg[], R> {
     // on a throwaway recording later); a state-writing step collects its candidates now,
     // closures over the live recording, and is compiled as it runs.
     const made = await this.record(args, datas, tuning && !this.pure, this.pure);
-    const cost: FirstCallCost = { record: performance.now() - t0, deferred: tuning, wait: 0, tuning: 0, compile: 0, rerecord: 0, candidates: 0 };
+    const cost: FirstCallCost = { record: performance.now() - t0, deferred: tuning, wait: 0, tuning: 0, compileWave: 0, rerecord: 0, candidates: 0 };
     this.firstCall.push(cost);
     if (cost.record > 200) {
       Device.advise("first-call", `the first call of a shape took ${cost.record.toFixed(0)} ms — its kernels compiling (once per shape on this machine; the browser keeps them for the next visit). Later calls replay in a fraction of that; a page that must answer at once can call the step once while it loads.`);
@@ -400,7 +400,7 @@ export class Compiled<A extends CompiledArg[], R> {
     }
     this.tuned.push(report);
     p.cost.tuning = performance.now() - t0 - p.cost.wait;
-    p.cost.compile = d.tuneWarmMs;
+    p.cost.compileWave = d.tuneWarmMs;
     p.cost.candidates = report.reduce((a, t) => a + t.candidates.length, 0);
     // Where a decision changed and the recording is a pure function of its inputs —
     // said so, or found so (`mutatesState`) — it is made again with the chosen kernels
