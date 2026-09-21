@@ -47,3 +47,22 @@
 | int8 subgroup GEMM in the tree (2026-09-20 · 64e1f78, `kernel_bench --bench=mmi8`) | `matmulInt8` **exact on every entry** of 256³ / 512 × 1024 × 256 / 1024³ / 2048³ against a CPU int32 reference; dequantising store within 1.1e-7. 1024³ **0.038 ms · 56.6 TOPS · 3.59×** the f32 scalar tile (0.136); 2048³ 0.273 ms · 62.9 TOPS · 3.0× (0.821). The probe row above (0.078 ms, 1.75×) was a wall clock carrying the polling stall |
 | validation faults | 0 |
 
+### nvidia / blackwell — 2026-09-21 · 825138a (RTX 5050 Laptop, Chrome on Windows 11 / **Direct3D 12**, cq worker DESKTOP-KETRGAE)
+
+> The same vendor name as the row above, through the other API. **`shader-f16` is here**
+> (it is not under Vulkan on the 5080), subgroups are, subgroup matrices are not (no
+> configuration at all — neither f32 nor int8), so every convolution and every product
+> runs on the scalar kernels; and the readback stall of the Vulkan entry is here too —
+> the kick calibration turned kicks on (plain 4.43 ms for 0.88 of GPU). The
+> app-control policy that had blocked the worker on the 18th was gone on the 21st.
+
+| what | measured |
+|---|---|
+| features | 24 — `shader-f16`, `subgroups` (32 / 32), `timestamp-query`, `chromium-experimental-multi-draw-indirect`, `texture-compression-unaligned`, … · **no** `chromium-experimental-subgroup-matrix` |
+| first run (`first_run`) | first visit 3059 ms in the page / 4.2 s · revisit 2316 / 3.0 · warm 2279 / 2.7 — adapter request 543 ms cold, 115 warm |
+| re-tiled GEMM (`kernel_bench mm --sweep=gemm`) | **128 × 128 r8×8 vec4 wins here**: 2048³ 6.35 → 3.60 ms (1.77×, 4.8 TFLOP/s), 1024³ 0.720 → 0.457, the deep ResNet shapes 0.43 → 0.26; the 8 × 4 that wins on Metal and Vulkan 1.30× here; double buffering +9 % |
+| the convolutions (`fwd --sweep=all`) | the micro-tiles do not help the gather kernel (512 → 512 at 4 × 4, b16: 64 × 64 0.505, r8×4 0.497, r8×8 0.645); the split policy over-splits this card (32 pieces 0.493 + 0.014 against 8 pieces 0.465 + 0.005); the direct kernel prefers 4 × 16 (64 → 64 at 32 × 32: 0.289 against 0.343) |
+| captured training step, ResNet-18 CIFAR batch 16 (`capture:ts`) | eager 32.1 → replay 27.5 ms; 400 intermediates 600.3 → 171.8 MB in 4 arenas; **18 / 18 bit for bit** |
+| readback kicks | **on** — plain 4.43 ms for 0.88 of GPU, kicked 1.51 |
+| validation faults | 0 |
+
