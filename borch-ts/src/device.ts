@@ -497,6 +497,12 @@ export type Access = "r" | "w" | "rw";
  *  pipeline keys its `run` dispatches under, which the profiler files times by. */
 export interface TuneCandidate { readonly label: string; readonly keys: readonly string[]; readonly run: () => void }
 
+/** Thrown by `Device.pipeline` while the tuner is pre-warming: the pipeline is being made
+ *  asynchronously and the candidate is to be run again once every pending one is ready. */
+class PrewarmMiss extends Error {
+  constructor(signature: string) { super(`pipeline ${signature} compiling`); }
+}
+
 /** One decision of `Device.runTuning`. */
 export interface TuneReport {
   readonly key: string; readonly prior: string; readonly priorMs: number;
@@ -1315,6 +1321,16 @@ export class Device {
     if (hit) return hit;
     const code = source();
     const module = this.device.createShaderModule({ code });
+    // **Pre-warming (the tuner): the pipeline is made asynchronously, so the GPU process
+    // compiles candidates side by side instead of one after another on its main thread.**
+    // Measured before this path (capture:ts, 2026-09-21): the tuner's warm wave was 349 ms
+    // on the RTX 5080 (Vulkan) and 3,595 ms on the RTX 5050 Laptop (D3D12) for the fifteen
+    // pipelines the rule's picks had not compiled — a serial compile each, DXC's at ~200 ms.
+    if (this.prewarming) {
+      this.prewarmPending.push(this.device.createComputePipelineAsync({ layout: "auto", compute: { module, entryPoint: "main" } })
+        .then((pipeline) => { this.pipelines.set(signature, pipeline); this.accesses.set(pipeline, bindingAccess(code)); }));
+      throw new PrewarmMiss(signature);
+    }
     if (shaderDiagnostics()) {
       void module.getCompilationInfo().then((info) => {
         for (const m of info.messages) {
@@ -2483,6 +2499,12 @@ export class Device {
   private static readonly TUNE_STORE = "borch-ts.tune.v1";
   /** What a `compiled` step is doing with choices: collecting candidates, or nothing. */
   tuneMode: "collect" | null = null;
+  /** While the tuner pre-warms, `pipeline` makes misses asynchronously and throws `PrewarmMiss`. */
+  private prewarming = false;
+  private prewarmPending: Promise<void>[] = [];
+  /** The last `runTuning`'s warm wave in ms — the candidates' pipelines compiling, and one
+   *  wait. Reported apart from the timing, since it is the platform's compile cost. */
+  tuneWarmMs = 0;
   private readonly tuneQueue = new Map<string, readonly TuneCandidate[]>();
 
   /** Loads the decisions saved by earlier sessions on this adapter. */
@@ -2537,10 +2559,30 @@ export class Device {
     if (this.tuneQueue.size === 0) return out;
     const all: { k: string; i: number; cand: TuneCandidate }[] = [];
     for (const [k, candidates] of this.tuneQueue) candidates.forEach((cand, i) => all.push({ k, i, cand }));
-    // Warm: every candidate once, one wait. The compiles happen here.
-    for (const { cand } of all) cand.run();
+    // Warm: every candidate once, one wait. The compiles happen here — asynchronously,
+    // in waves: a candidate whose pipeline is missing throws `PrewarmMiss` from `pipeline`
+    // and runs again after every pending compile has resolved (a candidate can miss more
+    // than once — its convolution, then its split sum).
+    const tw = performance.now();
+    this.prewarming = true;
+    try {
+      let pending = all.map((e) => e.cand);
+      for (let wave = 0; pending.length > 0 && wave < 8; wave++) {
+        const missed: TuneCandidate[] = [];
+        for (const cand of pending) {
+          try { cand.run(); } catch (err) { if (err instanceof PrewarmMiss) missed.push(cand); else throw err; }
+        }
+        await Promise.all(this.prewarmPending);
+        this.prewarmPending = [];
+        pending = missed;
+      }
+    } finally {
+      this.prewarming = false;
+      this.prewarmPending = [];
+    }
     this.flush();
     await this.synchronize();
+    this.tuneWarmMs = performance.now() - tw;
     // Passes with no kernel kind repeated.
     const passes: { k: string; i: number; cand: TuneCandidate }[][] = [];
     for (const entry of all) {

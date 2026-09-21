@@ -138,8 +138,11 @@ export interface FirstCallCost {
    *  execution, paid here before the tuner runs on the same buffers; without a tuner the
    *  same wait comes when the caller reads the result. */
   wait: number;
-  /** The tuning pass proper: every candidate warmed once, then timed. */
+  /** The tuning pass: every candidate warmed once, then timed. Includes `compile`. */
   tuning: number;
+  /** Of `tuning`, the warm wave — the candidates' pipelines compiling (the platform's
+   *  cost: ~10 ms a pipeline on NVIDIA Vulkan, ~200 on D3D12, measured 2026-09-21). */
+  compile: number;
   /** Recording again with the chosen kernels, where a decision changed a pure step. */
   rerecord: number;
   candidates: number;
@@ -234,7 +237,7 @@ export class Compiled<A extends CompiledArg[], R> {
     };
     const t0 = performance.now();
     let { cap, inputs, out } = await record(tuning);
-    const cost: FirstCallCost = { record: performance.now() - t0, wait: 0, tuning: 0, rerecord: 0, candidates: 0 };
+    const cost: FirstCallCost = { record: performance.now() - t0, wait: 0, tuning: 0, compile: 0, rerecord: 0, candidates: 0 };
     // **The tuning pass** (`docs/COMPILER.md` Step 5): the choices the recording collected
     // are timed — every candidate's dispatches on the recording's own buffers, under
     // the profiler — and the fastest is cached for this adapter, in memory and in
@@ -256,6 +259,7 @@ export class Compiled<A extends CompiledArg[], R> {
       d.flush();
       outs.forEach((o, i) => d.writeWords(o.buffer, words(outBefore[i] as Float32Array)));
       cost.tuning = performance.now() - t2;
+      cost.compile = d.tuneWarmMs;
       cost.candidates = report.reduce((a, t) => a + t.candidates.length, 0);
       if (report.some((t) => t.chosen !== t.prior) && !cap.mutatesState()) {
         const t2 = performance.now();
