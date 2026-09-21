@@ -22,6 +22,7 @@ import { runningStats } from "./kernels.js";
 import { traced } from "./onnx.js";
 import { onSeed, uniform as uniform01, uniformArray } from "./random.js";
 import { Device } from "./device.js";
+import { gradMode } from "./autograd.js";
 import { convInt8CoPad } from "./kernels.js";
 import { quantizeConvWeightInt8TapMajor } from "./quant.js";
 import {
@@ -166,8 +167,21 @@ export abstract class Module {
    * borch.ts golden calls `forward` directly and was green.
    */
   call(x: Tensor, ...rest: Tensor[]): Tensor {
-    return this.forward(x, ...rest);
+    // An eval() model run under gradient mode records a graph for a backward nobody
+    // will call — every intermediate kept, the forward slower, and nothing said. Said
+    // once, at the outermost call only: a training model with a frozen eval() block
+    // inside it is not that mistake (`docs/FIRST.md` 3).
+    if (Module.callDepth === 0 && !this.training && gradMode.enabled) {
+      Device.advise("eval-grad", "an eval() model was run with gradients on — the forward keeps every intermediate for a backward that inference never calls. Wrap inference in noGrad(() => model.call(x)), or use compiled(model).");
+    }
+    Module.callDepth += 1;
+    try {
+      return this.forward(x, ...rest);
+    } finally {
+      Module.callDepth -= 1;
+    }
   }
+  private static callDepth = 0;
 
   /**
    * The parameters this layer holds directly. Children come from

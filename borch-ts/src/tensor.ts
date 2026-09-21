@@ -2527,6 +2527,12 @@ export class Tensor implements Node<Tensor> {
     // matrix is bypassed for a quantised operand. `docs/SCALE.md` Step 5.
     const int8 = transB ? mat2.int8WeightBinding() : null;
     const f16Slot = int8 === null ? mat2.f16WeightBinding() : null;
+    // A product off the eights the subgroup kernel wants takes the scalar tile at 4.5
+    // against 11 TFLOP/s (`subgroupMatmulFits`) — a sequence of 197 tokens sends every
+    // matmul of a transformer there. Said once for a product big enough to matter.
+    if (Device.subgroupMatrix && int8 === null && f16Slot === null && !subgroupMatmulFits(M, K, N) && M * K * N >= 1 << 24) {
+      Device.advise("eights", `a matmul of ${M}×${K}×${N} misses the subgroup-matrix kernel: every axis has to be a whole eight. Pad the odd axis (a token row of 197 to 200, as bimm's ViT does) and slice the result — the scalar tile runs at less than half the speed.`);
+    }
     if (int8 !== null) {
       const splits = scalarMatmulSplit(M, K, N);
       const target = splits > 1 ? dev().alloc(M * N * splits) : out;

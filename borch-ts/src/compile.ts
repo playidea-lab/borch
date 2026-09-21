@@ -261,6 +261,9 @@ export class Compiled<A extends CompiledArg[], R> {
     const made = await this.record(args, datas, tuning && !this.pure, this.pure);
     const cost: FirstCallCost = { record: performance.now() - t0, deferred: tuning, wait: 0, tuning: 0, compile: 0, rerecord: 0, candidates: 0 };
     this.firstCall.push(cost);
+    if (cost.record > 200) {
+      Device.advise("first-call", `the first call of a shape took ${cost.record.toFixed(0)} ms — its kernels compiling (once per shape on this machine; the browser keeps them for the next visit). Later calls replay in a fraction of that; a page that must answer at once can call the step once while it loads.`);
+    }
     // A state-writing step's candidates are closures over this recording's buffers, and
     // the passes (fusion, hoisting, the plan) move and release those buffers — so the
     // raw recording stands until its tuning has run at the next call, and the passes

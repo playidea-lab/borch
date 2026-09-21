@@ -1104,6 +1104,13 @@ export class Device {
     Device.readbackKicks = await calibrateKicks(device, canTime);
     Device.canTime = canTime;
     Device.loadTune();
+    // A laptop on battery throttles its GPU, and every number then is the machine's
+    // state (the ledger's afternoon runs, 2–3× the morning's on every library). Chrome
+    // says so through the Battery API where it has one; asked, not awaited.
+    const nav = globalThis.navigator as { getBattery?: () => Promise<{ charging: boolean }> } | undefined;
+    nav?.getBattery?.().then((b) => {
+      if (!b.charging) Device.advise("battery", "this machine is on battery — its GPU is throttled and clocks change under load, so a time measured now is the machine's state, not the code's. Plug in before measuring.");
+    }).catch(() => { /* no battery API, or none of its business */ });
     return made;
   }
 
@@ -1945,6 +1952,12 @@ export class Device {
       );
     }
     const size = Math.max(bytes, BYTES_PER_F32);
+    if (this.scopes.length === 0 && this.recording === null && !this.dryRun) {
+      this.unscoped += 1;
+      if (this.unscoped === Device.UNSCOPED_ADVICE_AT) {
+        Device.advise("unscoped", `${Device.UNSCOPED_ADVICE_AT} buffers were made outside any scope() — a loop that runs a model without one keeps every intermediate until the page unloads. Wrap each forward in scope(async () => { ... }), or run the model through compiled(model), which keeps only what a replay needs.`);
+      }
+    }
     // Under a capture nothing is recycled: a pooled buffer may still be bound by a
     // recorded dispatch of this very step.
     const reused = recycle && !this.pinned ? this.spare.get(size)?.pop() : undefined;
@@ -2593,6 +2606,31 @@ export class Device {
   // profiler and caches the fastest by `(adapter, key)` — in memory and in
   // `localStorage`, so the next page load pays nothing. The hand rules stay the prior
   // and the whole answer where timestamps are not available.
+
+  // ── Advice: the traps a first page falls into, named once ─────────────────────────
+  //
+  // `docs/FIRST.md` 3. Each is a way a learner's code is silently slow or wrong, and each
+  // gets one sentence from the library before the number is wrong: an inference loop with
+  // no `scope`, an eval model run under gradient mode, a matmul off the eights the
+  // subgroup kernels want, a laptop on battery, the first call's compile. Said once each
+  // (`advised` remembers), on `console.warn`, and `Device.advice = false` silences them —
+  // a bench that knows what it is doing says so.
+
+  /** Whether advice is printed. `advised` fills either way, so a test can ask. */
+  static advice = true;
+  /** The advice given so far, by key. */
+  static readonly advised = new Set<string>();
+
+  static advise(key: string, message: string): void {
+    if (Device.advised.has(key)) return;
+    Device.advised.add(key);
+    if (Device.advice) console.warn(`[borch.ts] ${message}`);
+  }
+
+  /** Buffers `alloc` made outside any scope and outside a capture — an inference loop
+   *  without a `scope` keeps every one until the page unloads. */
+  unscoped = 0;
+  static readonly UNSCOPED_ADVICE_AT = 2000;
 
   /** Whether the device has `timestamp-query` — the autotune's instrument. */
   static canTime = false;

@@ -14,6 +14,7 @@ import {
   init,
   isAvailable,
   keepAlive,
+  nn,
   noGrad,
   probe,
   scope,
@@ -269,6 +270,34 @@ export async function report(): Promise<Report> {
     const wants = keepAlive(Tensor.randn([1, 8, 3 * 2 * 16]));
     wants.requiresGrad = true;
     wantThrow("fused attention refuses an input that wants a gradient", "inference kernel", () => Tensor.fusedAttention(wants, 2));
+  }
+
+  // ── Advice: the traps named once, and nothing on correct code ─────────────────
+  // `docs/FIRST.md` 3. Silent here (`Device.advice = false`); `Device.advised` says what
+  // would have been printed.
+  {
+    const dv = device();
+    Device.advice = false;
+    Device.advised.delete("unscoped"); Device.advised.delete("eval-grad"); Device.advised.delete("eights");
+    dv.unscoped = 0;
+    const lin = new nn.Linear(16, 16).eval();
+    for (const p of lin.parameters()) keepAlive(p);
+    const before = Device.advised.size;
+    await scope(async () => { await noGrad(() => lin.call(Tensor.randn([8, 16]))).toArray(); });
+    want("advice: a scoped noGrad forward of an eval model draws none", Device.advised.size === before, `${Device.advised.size - before} new`);
+    await scope(async () => { await lin.call(Tensor.randn([8, 16])).toArray(); });
+    want("advice: an eval() model run under gradient mode is told once", Device.advised.has("eval-grad"));
+    await scope(async () => { await lin.call(Tensor.randn([8, 16])).toArray(); });
+    want("advice: told once, not twice", Device.advised.size === before + 1, `${Device.advised.size - before} new`);
+    // Two thousand small tensors outside any scope — the loop a first page writes.
+    dv.unscoped = 0;
+    for (let i = 0; i < Device.UNSCOPED_ADVICE_AT + 10; i++) Tensor.randn([4]);
+    want("advice: an inference loop without a scope is told", Device.advised.has("unscoped"));
+    if (Device.subgroupMatrix) {
+      await scope(async () => { await Tensor.randn([200, 300]).matmul(Tensor.randn([300, 400])).toArray(); });
+      want("advice: a large matmul off the eights is told", Device.advised.has("eights"));
+    }
+    Device.advice = true;
   }
 
   // ── Synchronising ───────────────────────────────────────────────────
