@@ -437,16 +437,24 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     // **Where the eager wall goes** (`docs/FIRST.md` 2a): the JavaScript of the forward
     // — encoding, bind groups, tensor bookkeeping — timed on its own (the forward is
     // synchronous; the readback after it is the GPU's), and the bind groups it made.
-    let js = 0; const bg0 = d.bindGroups; const sub0 = d.submits;
+    let js = 0, sub = 0, rd = 0, close = 0; const bg0 = d.bindGroups; const sub0 = d.submits;
     for (let i = 0; i < 10; i++) {
+      const t0 = performance.now();
       await scope(async () => {
         const t = performance.now();
         const y = noGrad(() => model.forward(xb));
-        js += performance.now() - t;
+        const t1 = performance.now();
+        d.flush();
+        const t2 = performance.now();
         await y.toArray();
+        const t3 = performance.now();
+        js += t1 - t; sub += t2 - t1; rd += t3 - t2;
+        close -= t3;
       });
+      close += performance.now();
+      void t0;
     }
-    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${perForward} dispatches/forward · JavaScript ${(js / 10).toFixed(2)} ms of it (${Math.round((d.bindGroups - bg0) / 10)} bind groups, ${((d.submits - sub0) / 10).toFixed(1)} submits a forward)`);
+    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${perForward} dispatches/forward · of it: JavaScript ${(js / 10).toFixed(2)} + submit ${(sub / 10).toFixed(2)} + readback ${(rd / 10).toFixed(2)} + scope close ${(close / 10).toFixed(2)} ms (${Math.round((d.bindGroups - bg0) / 10)} bind groups, ${((d.submits - sub0) / 10).toFixed(1)} submits a forward)`);
     // The fused forward's GPU time by kind — what of the wall is the GPU's (INFER Step 0).
     const ph0 = d.packHits, pm0 = d.packMisses;
     await d.profile(() => noGrad(() => model.forward(xb)).toArray());
