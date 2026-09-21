@@ -2074,6 +2074,45 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | ONNX Runtime Web 1.29.0, same run | | 3.84 ms | 4.28 ms |
 | ORT is faster than the captured f32 / int8 network by | | 0.15× / 0.14× — borch ahead | 0.39× / 0.22× — borch ahead |
 
+**ORT at its own reduced precisions, 2026-09-21.** The int8 rows above stood beside ORT
+running the f32 file, which is not the same question as "ORT at its best". So
+`tests/browser/export_ort_variants.py` has onnxruntime convert the same ResNet-18 to
+**f16** (every tensor and op, the input and output kept f32) and to **static int8** in
+the QDQ form (per-channel weights, u8 activations, calibrated on the images borch's
+static scales are), and the page times each — and the int8 on ORT's wasm provider as
+well, because a WebGPU time that is the wasm time is a fallback whatever the session
+says about its providers:
+
+| ResNet-18 (CIFAR) forward, ORT Web 1.29.0 | adapter | batch 1 | batch 16 |
+|---|---|---|---|
+| ORT f32 (the rows above), same run | `apple / metal-3` | 4.10 ms | 5.75 ms |
+| ORT **f16** on WebGPU, max \|logits − torch\| 6.1e-4 | `apple / metal-3` | 2.88 ms | **4.14 ms** |
+| ORT **int8** (QDQ) on WebGPU, 2.7e-3 | `apple / metal-3` | 25.3 ms | 37.5 ms |
+| ORT int8 on wasm | `apple / metal-3` | 7.1 ms | 108.7 ms |
+| borch.ts f32 fused + captured, same run | `apple / metal-3` | **1.01 ms** | 4.07 ms |
+| ORT f32, same run | `nvidia / blackwell` (RTX 5080, Vulkan) | 3.76 ms | 3.74 ms |
+| ORT f16 on WebGPU | `nvidia / blackwell` | *refused: "Program Transpose requires f16 but the device does not support it"* | |
+| ORT int8 on WebGPU | `nvidia / blackwell` | 42.5 ms | 106.1 ms |
+| ORT int8 on wasm | `nvidia / blackwell` | 4.1 ms | 55.9 ms |
+| borch.ts f32 fused + captured / **int8 static** + captured, same run | `nvidia / blackwell` | 0.56 / 0.84 ms | 1.66 / **0.98 ms** |
+| **top-1 on the same 1,000 held-out CIFAR-10 images** (trained network) | `nvidia / blackwell` | borch f32 92.40 · borch int8 static 92.50 | ORT f32 92.40 · **ORT int8 92.50** |
+
+Three things the table says. **ORT's int8 is not a GPU path in the browser**: on every
+adapter the QDQ file runs slower on WebGPU than ORT's own f32 (6× on Metal, 11–28× on
+the 5080, and on the laptop's D3D12 130 / 200 ms against 6 / 15), and at batch 1 slower
+than on wasm — the quantised convolutions are not the WebGPU provider's, and the data
+crosses to the CPU and back around them. Its accuracy is borch's (92.50 % on the same
+images, calibrated the same way): the int8 ResNet is the same network; what differs is
+who runs it on the GPU, and at 0.98 ms against ORT's best-on-this-card 3.74, that is
+this library. **ORT's f16 is real on Metal**: 4.14 ms at batch 16 is 1.4× its f32 and
+level with borch's f32 captured forward (4.07) — the one row where ORT draws, and the
+reason an f16 convolution kernel is on the list below and not before it: at batch 1 the
+same file is 2.88 against 1.01. On the 5080's Chrome (Linux, Vulkan) ORT's device has no
+f16 and the session refuses; on the laptop's D3D12 it ran (5.15 / 19.19 ms) in an
+afternoon when the machine read 3× slower than its morning on every row, borch's and
+TF.js's alike, so that pair is not quoted. And the gaps to torch — f16 6.1e-4, int8
+2.7e-3 of a 0.19 scale — are of the size borch's int8 prints (3.0e-4).
+
 **And a transformer, 2026-09-21.** The ResNet is convolutions; a transformer forward is
 batched matmuls, softmax, layer norms and GELU over a token row, and ORT has a kernel
 written for each (a fused attention among them). The same page runs **ViT-Tiny/16** —

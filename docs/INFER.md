@@ -530,6 +530,17 @@ prediction is written down so that the ledger can say which step was wrong.
   the 200 × 200 scores — worth 0.8 + 0.5 ms at batch 16 here, more as tokens grow. None
   is started; the table is ahead without them and the mainline is elsewhere.
 
+- **2026-09-21, ORT at its own reduced precisions (daeba33, 302827d).** f16 and QDQ
+  int8 files of the ResNet beside the f32 (`export_ort_variants.py`), each timed on
+  WebGPU, the int8 on wasm too. **ORT's int8 is not a GPU path in the browser** (slower
+  than its f32 on every adapter, slower than its wasm at batch 1; accuracy 92.50 % on the
+  same images, as borch's static int8). **ORT's f16 is** — on Metal 2.88 / 4.14 ms, level
+  with borch's f32 captured 4.07 at batch 16 and 2.9× behind at batch 1; on the 5080's
+  Chrome/Vulkan the session refuses for want of f16. The table's sentence stands with one
+  amendment: at batch 16 on Metal, ORT's best draws. Details in `docs/BOOK.md` and
+  `docs/INT8.md` §6. The laptop's D3D12 run of the same afternoon read 3× its morning on
+  every row (borch, TF.js and ORT alike) and its pair is not quoted.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

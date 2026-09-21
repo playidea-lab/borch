@@ -286,6 +286,21 @@ wants the trade.
   surfaced as "invalid buffer" in a bind group — the allocation's out-of-memory is
   reported late. Held on metal-3 (the path inert): `capture:ts` 18 / 18, `parity:ts`.
 
+- **2026-09-21, ORT's own int8 beside ours (daeba33, 302827d).** Step 6's rows stood
+  beside ORT's f32; `tests/browser/export_ort_variants.py` now has onnxruntime quantise
+  the same network (QDQ, per-channel, static, calibrated on the same second half of the
+  slice) and `compare:ts` times it on ORT's WebGPU and wasm providers. **On the 5080 the
+  QDQ file is 42.5 / 106.1 ms on WebGPU against ORT's f32 3.76 / 3.74 and its own wasm
+  4.1 / 55.9 — the quantised convolutions are not the WebGPU provider's, and the tensors
+  cross to the CPU around them; on Metal 25.3 / 37.5 against 4.10 / 5.75, the same
+  shape.** Accuracy on the same 1,000 images: ORT f32 92.40, ORT int8 92.50 — borch's
+  static int8 92.50 exactly. So the network quantised is the same network, and the row
+  that differs is who runs it on the GPU: 0.98 ms here against nothing on ORT's side.
+  ORT's f16 (`_f16.onnx`, I/O kept f32) is the nearer competitor: on Metal 2.88 / 4.14
+  against borch's f32 1.01 / 4.07 — level at batch 16 — and on the 5080's Chrome the
+  session refuses ("requires f16 but the device does not support it"). An f16
+  convolution is therefore the next precision lever on Metal, not on Vulkan.
+
 ## 5. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |
