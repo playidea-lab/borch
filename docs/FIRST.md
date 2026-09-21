@@ -103,4 +103,15 @@ five scenarios prints its sentence once, and none of them prints on correct code
   cache would take ~0.1 ms of 1.8 on Metal and none of the 5080's 3 — not taken; the
   book's first page runs `compiled(model)` and says why, and the eager path stands as
   it is for the shapes a lesson has.
+- **2026-09-21, 3 — the traps, named once (6135c63).** `Device.advise(key, message)`:
+  said once each on `console.warn`, `Device.advice = false` silences, `Device.advised`
+  remembers. The five: an inference loop with no `scope` (told at the 2,000th buffer made
+  outside any scope, outside a capture and a dry run); an eval model run under gradient
+  mode (at the outermost `call` only — a frozen eval block inside a training model is
+  not the mistake); a matmul off the eights the subgroup kernel wants, when the product
+  is 2²⁴ multiply-adds or more (a ViT's 197 tokens); a laptop on battery (the Battery
+  API, asked at `create`); a first call over 200 ms (its kernels compiling, and where
+  the browser keeps them). `device:ts` 59 / 59: each told, told once, and a scoped
+  `noGrad` forward draws none. Not told: the afternoon's other lesson, that the machine
+  was in use — a page cannot know, and the runner still does not print it.
 
