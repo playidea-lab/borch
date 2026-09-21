@@ -27,7 +27,7 @@
  * bit for bit plain; fused, the outputs within `tol` and the state within `stateTol`.
  * A difference throws and names the worst buffer.
  */
-import { Capture } from "./device.js";
+import { Capture, Device, type TuneReport } from "./device.js";
 import { fuseForInference, Module, quantizeForInt8 } from "./nn.js";
 import { device, noGrad, scope, Tensor } from "./tensor.js";
 
@@ -52,6 +52,14 @@ export interface CompiledOptions {
    * that trade. `Compiled.int8Layers` says how many layers took it.
    */
   readonly int8?: boolean;
+  /**
+   * **Kernel selection by measurement** (`docs/COMPILER.md` Step 5): before a shape's
+   * first recording, one pass collects every choice a rule makes among kernels, each
+   * candidate is timed under the profiler, and the fastest is cached for this adapter
+   * (in memory and in `localStorage`); the recording then uses the decisions. Default on
+   * where the device has `timestamp-query`; the hand rules decide where it has not.
+   */
+  readonly tune?: boolean;
 }
 
 export interface CheckReport {
@@ -138,11 +146,15 @@ export class Compiled<A extends CompiledArg[], R> {
 
   /** How many convolutions took the int8 path (`int8: true`), once prepared; −1 before. */
   int8Layers = -1;
+  /** The tuner's decisions, one list per recording (empty where nothing was collected). */
+  readonly tuned: TuneReport[][] = [];
+  private readonly tune: boolean;
   /** Runs once before the first recording — the int8 quantisation of a model's weights. */
   private prepare: (() => Promise<void>) | null = null;
 
   constructor(private readonly fn: (...args: A) => R, opts: CompiledOptions = {}, prepare?: () => Promise<void>) {
     this.prepare = prepare ?? null;
+    this.tune = opts.tune ?? true;
     this.fuse = opts.fuse ?? true;
     this.plan = opts.plan ?? true;
     this.check = opts.check ?? false;
@@ -178,20 +190,51 @@ export class Compiled<A extends CompiledArg[], R> {
     if (this.prepare) { const p = this.prepare; this.prepare = null; await p(); }
     const datas = await Promise.all(args.map((a) => (a instanceof Tensor ? a.toArray() : Promise.resolve(null))));
     const d = device();
-    d.beginCapture();
-    let inputs: CompiledArg[];
-    let out: Awaited<R>;
-    try {
-      inputs = args.map((a, i) => (a instanceof Tensor
-        ? Tensor.from(datas[i] as Float32Array, a.shape, { dtype: a.dtype })
-        : a));
-      // A step that awaits (a streamed backbone's refills) is recorded across its awaits.
-      out = await this.fn(...(inputs as A));
-    } catch (err) {
-      d.endCapture().dispose();
-      throw err;
+    const tuning = this.tune && Device.canTime;
+    const record = async (collect: boolean): Promise<{ cap: Capture; inputs: CompiledArg[]; out: Awaited<R> }> => {
+      d.beginCapture();
+      let inputs: CompiledArg[];
+      let out: Awaited<R>;
+      // Collecting, every kernel choice in the step is queued for the tuner while the
+      // rule's pick is what is recorded.
+      if (collect) d.tuneMode = "collect";
+      try {
+        inputs = args.map((a, i) => (a instanceof Tensor
+          ? Tensor.from(datas[i] as Float32Array, a.shape, { dtype: a.dtype })
+          : a));
+        // A step that awaits (a streamed backbone's refills) is recorded across its awaits.
+        out = await this.fn(...(inputs as A));
+      } catch (err) {
+        d.tuneMode = null;
+        d.endCapture().dispose();
+        throw err;
+      }
+      d.tuneMode = null;
+      return { cap: d.endCapture(), inputs, out };
+    };
+    let { cap, inputs, out } = await record(tuning);
+    // **The tuning pass** (`docs/COMPILER.md` Step 5): the choices the recording collected
+    // are timed — every candidate's dispatches on the recording's own buffers, under
+    // the profiler — and the fastest is cached for this adapter, in memory and in
+    // `localStorage`. The recording's outputs are put back afterwards (a candidate
+    // rewrote them with its own rounding). Then, **where a decision changed and the
+    // recording is a pure function of its inputs** (`mutatesState` false — an inference
+    // forward), it is made again with the chosen kernels; a step that writes state is
+    // made once, and its decisions serve the next recording — the next shape, the next
+    // `compiled`, the next session. The first recording of a shape pays the timing once.
+    if (tuning) {
+      const outs = tensorsOf(out);
+      d.flush();
+      const outBefore = await Promise.all(outs.map((o) => o.toArray()));
+      const report = await scope(async () => d.runTuning());
+      this.tuned.push(report);
+      d.flush();
+      outs.forEach((o, i) => d.writeWords(o.buffer, words(outBefore[i] as Float32Array)));
+      if (report.some((t) => t.chosen !== t.prior) && !cap.mutatesState()) {
+        cap.dispose();
+        ({ cap, inputs, out } = await record(false));
+      }
     }
-    const cap = d.endCapture();
     const held = tensorsOf(out).map((t) => t.buffer);
     if (this.fuse) cap.fuse(held);
     // The replay-invariant dispatches — a frozen weight's repack — run once and leave the
@@ -216,11 +259,6 @@ export class Compiled<A extends CompiledArg[], R> {
   private async verify(cap: Capture, inputs: readonly CompiledArg[], out: Awaited<R>): Promise<CheckReport> {
     const d = device();
     const live = cap.liveIns();
-    const words = (a: Float32Array): Uint32Array<ArrayBuffer> => {
-      const copy = new Uint32Array(new ArrayBuffer(a.byteLength));
-      new Float32Array(copy.buffer).set(a);
-      return copy;
-    };
     // The commands encoded so far go out first — a read copies through its own encoder.
     const snapshot = async (): Promise<Float32Array[]> => { d.flush(); return Promise.all(live.map((b) => d.read(b, b.size / 4))); };
     const outs = tensorsOf(out);
@@ -287,6 +325,13 @@ export class Compiled<A extends CompiledArg[], R> {
  * shape runs it, every call after replays — the repacks hoisted, the intermediates in
  * arenas. The returned step takes the input tensor and hands back the logits.
  */
+/** A float array's bits as the words `writeWords` takes. */
+function words(a: Float32Array): Uint32Array<ArrayBuffer> {
+  const copy = new Uint32Array(new ArrayBuffer(a.byteLength));
+  new Float32Array(copy.buffer).set(a);
+  return copy;
+}
+
 export function compiled<A extends CompiledArg[], R>(fn: (...args: A) => R, opts?: CompiledOptions): Compiled<A, R>;
 export function compiled(model: Module, opts?: CompiledOptions): Compiled<[Tensor], Tensor>;
 export function compiled(target: Module | ((...args: never[]) => unknown), opts: CompiledOptions = {}): unknown {

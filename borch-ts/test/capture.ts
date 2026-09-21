@@ -175,6 +175,16 @@ async function resnet(lines: string[]): Promise<void> {
     lines.push(rec.explain(device().nsByKind, 8).split("\n").map((l) => "    " + l).join("\n"));
   }
   want("ResNet-18: the replay is not slower than the eager step", replayMs <= eagerMs * 1.05, `eager ${eagerMs.toFixed(1)} · replay ${replayMs.toFixed(1)} ms`);
+  // **The tuner's decisions** (`docs/COMPILER.md` Step 5): every choice collected on the
+  // first recording, each candidate timed, the fastest kept. Held to "nothing tuned is
+  // slower than the rule's pick", and the report says what changed and by how much.
+  const tuned = step.tuned.flat();
+  const changed = tuned.filter((t) => t.chosen !== t.prior);
+  const saved = changed.reduce((a, t) => a + (t.priorMs - t.chosenMs), 0);
+  lines.push(`autotune: ${tuned.length} decisions on the first recording, ${changed.length} changed from the rule's pick, ${saved.toFixed(3)} ms of GPU a step saved`
+    + (changed.length ? ":\n" + changed.slice(0, 8).map((t) => `    ${t.key.split("|")[1] ?? t.key}: ${t.prior} ${t.priorMs.toFixed(3)} → ${t.chosen} ${t.chosenMs.toFixed(3)} ms`).join("\n") : ""));
+  want("autotune: no tuned decision is slower than the rule's pick", tuned.every((t) => t.chosenMs <= t.priorMs), `${tuned.length} decisions`);
+  want("autotune: decisions were collected where the device can time", !Device.canTime || tuned.length > 0, `${tuned.length} decisions · timestamps ${Device.canTime}`);
   step.dispose();
   const d1 = device().dispatches;
   want("ResNet-18: dispatches were counted", d1 > d0, `${d1 - d0} dispatches over the compiled section`);
@@ -280,11 +290,15 @@ async function inference(lines: string[]): Promise<void> {
   const byCall = new ResNet18();
   byHand.eval();
   byHand.fuse();
-  const ref = await noGrad(() => byHand.forward(x)).toArray();
   const step = compiled(byCall);
   const got = await (await step.call(x)).toArray();
   const again = await (await step.call(x)).toArray();
   const rec = step.recordingOf(x);
+  // The eager reference after the first call: the tuner may have decided a kernel on
+  // that call (`docs/COMPILER.md` Step 5), and eager then takes the same decision — the
+  // contract is eager and replay bit for bit, not the rule's kernels and the tuned ones,
+  // which differ by a rounding.
+  const ref = await noGrad(() => byHand.forward(x)).toArray();
   want("compiled(model) on a model with its own fuse() is the hand-fused eval forward, bit for bit",
     maxAbs(ref, got) === 0 && maxAbs(got, again) === 0, `max |Δ| ${maxAbs(ref, got).toExponential(1)} · ${rec ? rec.dispatches : 0} dispatches a replay`);
   step.dispose();

@@ -10,7 +10,7 @@
 import { traced } from "./onnx.js";
 import { backward as tapeBackward, flow as tapeFlow, gradMode, type Node }
   from "./autograd.js";
-import { type BindSlot, bufOf, Device, type DeviceKind, type InitOptions, type Window } from "./device.js";
+import { type BindSlot, bufOf, Device, type DeviceKind, type InitOptions, type Window, type TuneCandidate } from "./device.js";
 import { type AxisPlan, isSlice, planAxis, type Slice } from "./indexing.js";
 import { gauss, refuseGenerator, uniform } from "./random.js";
 // **A cycle on purpose, and it holds because nothing is touched while loading.**
@@ -282,10 +282,12 @@ import {
   absMaxAtomic,
   absMaxParts,
   convForwardStaged,
+  STAGED_TILES,
+  type StagedTile,
   stagedCoPad,
+  stagedFits,
   stagedGrid,
   stagedSplit,
-  stagedTileFor,
   tapMajorWeightsCo,
   convForwardInt8,
   convInt8Fits,
@@ -824,17 +826,27 @@ function convForwardRun(
   // its loads are direct from the padded plane, and it measured faster (256 → 256 on
   // 8 × 8 at batch 16: 0.75 against 0.85 ms staged).
   const smallSubgroup = Device.subgroupMatrix && !turned && sgfsFits(s) && (s.outDims[1] ?? 1) !== 8;
-  if (directFits(s) && !smallSubgroup && (turned || directGridFills(s))) {
-    // The narrow layers go direct — see `convDirect2d` for the measurement; a grid too
-    // small to fill the card goes to the split GEMM instead (`DIRECT_MIN_WORKGROUPS`).
+  if (turned) {
+    // The turned input gradient has one kernel — see `convDirect2d`.
+    if (!directFits(s)) throw new Error("turned weights are a direct-kernel matter");
     dev().run(
-      dev().pipeline(`cnd:${key}:${bias ? "b" : "n"}${tag}${turned ? ":t" : ""}`, () => convDirect2d(s, bias !== null, ep, turned)),
+      dev().pipeline(`cnd:${key}:${bias ? "b" : "n"}${tag}:t`, () => convDirect2d(s, bias !== null, ep, true)),
       [x, w, ...tail],
       directGrid(s),
     );
     return;
   }
-  if (turned) throw new Error("turned weights are a direct-kernel matter");
+  if (directFits(s) && !smallSubgroup && directGridFills(s) && !(Device.canTime && (dev().tuneMode === "collect" || Device.tune.size > 0))) {
+    // The narrow layers go direct — see `convDirect2d` for the measurement; a grid too
+    // small to fill the card goes to the split GEMM instead (`DIRECT_MIN_WORKGROUPS`).
+    // Where a tuner may have a say, the choice is made below among the scalar paths.
+    dev().run(
+      dev().pipeline(`cnd:${key}:${bias ? "b" : "n"}${tag}`, () => convDirect2d(s, bias !== null, ep, false)),
+      [x, w, ...tail],
+      directGrid(s),
+    );
+    return;
+  }
   if (smallSubgroup) {
     const pieces = sgfsSplit(s);
     const kSpace = s.kernel.reduce((a, b) => a * b, 1);
@@ -885,53 +897,58 @@ function convForwardRun(
     );
     return;
   }
-  // **The scalar staged convolution** (`convForwardStaged`, `docs/GEMM.md` §4): where no
-  // subgroup kernel took the shape, before the tiled GEMM whose gather it replaces. The
-  // weights are repacked tap-major-by-channel each call (hoisted under `compiled`, as the
-  // subgroup path's repack is); measured 1.2–1.25× the tiled kernel on the deep layers
-  // at batch 16 on both adapters and 2× at batch 1 on the 5080.
-  const stagedTile = stagedTileFor(s, Device.workgroupStorage);
-  if (stagedTile !== null) {
+  // **The scalar paths, chosen by measurement where a `compiled` step is tuning**
+  // (`docs/COMPILER.md` Step 5, `Device.choose`): the direct kernel where it fits (the
+  // rule takes it when its grid fills the card), the staged convolution's tiles that
+  // fit (`docs/GEMM.md` §4 — the rule's pick where the direct kernel is not it), and
+  // the tiled GEMM with its split policy. The rule's pick is first; the cached decision
+  // for this adapter and shape, if there is one, runs instead.
+  const candidates: TuneCandidate[] = [];
+  const directCand = (): TuneCandidate => ({
+    label: "direct", keys: [`cnd:${key}:${bias ? "b" : "n"}${tag}`],
+    run: () => dev().run(dev().pipeline(`cnd:${key}:${bias ? "b" : "n"}${tag}`, () => convDirect2d(s, bias !== null, ep, false)), [x, w, ...tail], directGrid(s)),
+  });
+  const stagedCand = (t: StagedTile): TuneCandidate => {
     const kSpace = s.kernel.reduce((a, b) => a * b, 1);
-    const coPad = stagedCoPad(s.O, stagedTile.TM);
-    const wc = dev().alloc(kSpace * s.C * coPad);
-    dev().run1d(dev().pipeline(`tmwc:${key}:${stagedTile.TM}`, () => tapMajorWeightsCo(s.O, s.C, kSpace, coPad)), [w, wc], kSpace * s.C * coPad);
-    const pieces = stagedSplit(s, stagedTile);
-    const tl = `${stagedTile.TM}x${stagedTile.TN}r${stagedTile.RM}x${stagedTile.RN}k${stagedTile.KB}`;
-    if (pieces === 1) {
-      dev().run(
-        dev().pipeline(`cnss:${key}:${tl}:${bias ? "b" : "n"}${tag}`, () => convForwardStaged(s, stagedTile, 1, bias !== null, ep)),
-        [x, wc, ...tail], stagedGrid(s, stagedTile, 1));
-      return;
-    }
-    const slab = dev().alloc(n * pieces);
-    dev().run(
-      dev().pipeline(`cnss:${key}:${tl}:s${pieces}`, () => convForwardStaged(s, stagedTile, pieces, false)),
-      [x, wc, slab], stagedGrid(s, stagedTile, pieces));
-    dev().run1d(
-      dev().pipeline(`ssc:${key}:${pieces}:${bias ? "b" : "n"}${tag}`, () => sumSplitsConv(s, pieces, bias !== null, ep)),
-      [slab, ...tail], n);
-    return;
-  }
-  if (splits === 1) {
-    dev().run(
-      dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}${tag}`, () => convNDForwardTiled(s, bias !== null, ep)),
-      [x, w, ...tail],
-      convTiledGrid(s),
-    );
-    return;
-  }
-  const parted = dev().alloc(n * splits);
-  dev().run(
-    dev().pipeline(`cnt:${key}:s`, () => convNDForwardTiled(s, false)),
-    [x, w, parted],
-    convTiledGrid(s),
-  );
-  dev().run1d(
-    dev().pipeline(`ssc:${key}:${bias ? "b" : "n"}${tag}`, () => sumSplitsConv(s, splits, bias !== null, ep)),
-    [parted, ...tail],
-    n,
-  );
+    const coPad = stagedCoPad(s.O, t.TM);
+    const pieces = stagedSplit(s, t);
+    const tl = `${t.TM}x${t.TN}r${t.RM}x${t.RN}k${t.KB}`;
+    const kk = pieces === 1 ? `cnss:${key}:${tl}:${bias ? "b" : "n"}${tag}` : `cnss:${key}:${tl}:s${pieces}`;
+    return {
+      label: `staged:${tl}`, keys: [`tmwc:${key}:${t.TM}`, kk, ...(pieces > 1 ? [`ssc:${key}:${pieces}:${bias ? "b" : "n"}${tag}`] : [])],
+      run: () => {
+        const wc = dev().alloc(kSpace * s.C * coPad);
+        dev().run1d(dev().pipeline(`tmwc:${key}:${t.TM}`, () => tapMajorWeightsCo(s.O, s.C, kSpace, coPad)), [w, wc], kSpace * s.C * coPad);
+        if (pieces === 1) {
+          dev().run(dev().pipeline(kk, () => convForwardStaged(s, t, 1, bias !== null, ep)), [x, wc, ...tail], stagedGrid(s, t, 1));
+          return;
+        }
+        const slab = dev().alloc(n * pieces);
+        dev().run(dev().pipeline(kk, () => convForwardStaged(s, t, pieces, false)), [x, wc, slab], stagedGrid(s, t, pieces));
+        dev().run1d(dev().pipeline(`ssc:${key}:${pieces}:${bias ? "b" : "n"}${tag}`, () => sumSplitsConv(s, pieces, bias !== null, ep)), [slab, ...tail], n);
+      },
+    };
+  };
+  const tiledCand = (): TuneCandidate => ({
+    label: "tiled", keys: splits === 1 ? [`cnt:${key}:${bias ? "b" : "n"}${tag}`] : [`cnt:${key}:s`, `ssc:${key}:${bias ? "b" : "n"}${tag}:${splits}`],
+    run: () => {
+      if (splits === 1) {
+        dev().run(dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}${tag}`, () => convNDForwardTiled(s, bias !== null, ep)), [x, w, ...tail], convTiledGrid(s));
+        return;
+      }
+      const parted = dev().alloc(n * splits);
+      dev().run(dev().pipeline(`cnt:${key}:s`, () => convNDForwardTiled(s, false)), [x, w, parted], convTiledGrid(s));
+      dev().run1d(dev().pipeline(`ssc:${key}:${bias ? "b" : "n"}${tag}:${splits}`, () => sumSplitsConv(s, splits, bias !== null, ep)), [parted, ...tail], n);
+    },
+  });
+  const direct = directFits(s) ? directCand() : null;
+  const stagedTiles = STAGED_TILES.filter((t) => stagedFits(s, t, Device.workgroupStorage)).map(stagedCand);
+  const tiled = tiledCand();
+  // The rule's order: direct first where its grid fills the card, else the first staged
+  // tile, else the tiled GEMM; the rest follow as candidates for the tuner.
+  if (direct && directGridFills(s)) candidates.push(direct, ...stagedTiles, tiled);
+  else candidates.push(...stagedTiles, tiled, ...(direct ? [direct] : []));
+  dev().choose(`conv:${key}:${bias ? "b" : "n"}${tag}`, candidates).run();
 }
 
 /** The values a binary op saves for its backward, gated by which operand needs a gradient.
@@ -2504,22 +2521,27 @@ export class Tensor implements Node<Tensor> {
         dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
       }
     } else if (!transA && !transB && Device.gemmConfigs.some((c) => tiledConfigFits(M, K, N, c, Device.workgroupStorage))) {
-      // **The re-tiled scalar GEMM** (`docs/GEMM.md`): the adapter's best configuration
-      // that the shape divides; untransposed operands only (the transposed reads stay
-      // on the tile below, whose staging reads along either layout).
-      const cfg = Device.gemmConfigs.find((c) => tiledConfigFits(M, K, N, c, Device.workgroupStorage));
-      if (cfg === undefined) throw new Error("unreachable: a configuration fit a moment ago");
-      const splits = tiledSplit(M, K, N, cfg);
-      const target = splits > 1 ? dev().alloc(M * N * splits) : out;
-      const label = `${cfg.TM}x${cfg.TN}r${cfg.RM}x${cfg.RN}k${cfg.KT}${cfg.vec4 ? "v" : ""}${cfg.dbuf ? "d" : ""}`;
-      dev().run(
-        dev().pipeline(`mmt:${M}:${K}:${N}:${label}:${splits}`, () => matmulTiled(M, K, N, cfg, splits)),
-        [this.buffer, mat2.weightBinding(), target],
-        tiledGrid(M, N, cfg, splits),
-      );
-      if (splits > 1) {
-        dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
-      }
+      // **The re-tiled scalar GEMM** (`docs/GEMM.md`): the adapter's configurations that
+      // the shape divides, best first, and the tile as it was — the rule's pick first,
+      // the tuner's decision where there is one (`Device.choose`). Untransposed operands
+      // only (the transposed reads stay on the old tile, whose staging reads along
+      // either layout).
+      const cands: TuneCandidate[] = Device.gemmConfigs.filter((c) => tiledConfigFits(M, K, N, c, Device.workgroupStorage)).map((cfg) => {
+        const splits = tiledSplit(M, K, N, cfg);
+        const label = `${cfg.TM}x${cfg.TN}r${cfg.RM}x${cfg.RN}k${cfg.KT}${cfg.vec4 ? "v" : ""}${cfg.dbuf ? "d" : ""}`;
+        return { label: `mmt:${label}`, keys: [`mmt:${M}:${K}:${N}:${label}:${splits}`, ...(splits > 1 ? [`sumsplits:${M * N}:${splits}`] : [])], run: () => {
+          const target = splits > 1 ? dev().alloc(M * N * splits) : out;
+          dev().run(dev().pipeline(`mmt:${M}:${K}:${N}:${label}:${splits}`, () => matmulTiled(M, K, N, cfg, splits)), [this.buffer, mat2.weightBinding(), target], tiledGrid(M, N, cfg, splits));
+          if (splits > 1) dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
+        } };
+      });
+      const oldSplits = scalarMatmulSplit(M, K, N);
+      cands.push({ label: "mm", keys: [`mm:${M}:${K}:${N}:${flags}:${oldSplits}`, ...(oldSplits > 1 ? [`sumsplits:${M * N}:${oldSplits}`] : [])], run: () => {
+        const target = oldSplits > 1 ? dev().alloc(M * N * oldSplits) : out;
+        dev().run(dev().pipeline(`mm:${M}:${K}:${N}:${flags}:${oldSplits}`, () => matmul(M, K, N, transA, transB, oldSplits)), [this.buffer, mat2.weightBinding(), target], [Math.ceil(N / 64), Math.ceil(M / 64), oldSplits]);
+        if (oldSplits > 1) dev().run1d(dev().pipeline(`sumsplits:${M * N}:${oldSplits}`, () => sumSplits(M * N, oldSplits)), [target, out], M * N);
+      } });
+      dev().choose(`mm:${M}:${K}:${N}:${flags}`, cands).run();
     } else {
       // The scalar tile splits its reduction the same way — see `scalarMatmulSplit`.
       const splits = scalarMatmulSplit(M, K, N);

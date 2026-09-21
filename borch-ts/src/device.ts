@@ -493,6 +493,16 @@ function subgroupMatrixF32(adapter: GPUAdapter): boolean {
 /** What a dispatch does to one binding: reads it, writes it, or both. */
 export type Access = "r" | "w" | "rw";
 
+/** One way of running a kernel a rule chooses among — see `Device.choose`. `keys` are the
+ *  pipeline keys its `run` dispatches under, which the profiler files times by. */
+export interface TuneCandidate { readonly label: string; readonly keys: readonly string[]; readonly run: () => void }
+
+/** One decision of `Device.runTuning`. */
+export interface TuneReport {
+  readonly key: string; readonly prior: string; readonly priorMs: number;
+  readonly chosen: string; readonly chosenMs: number; readonly candidates: readonly string[];
+}
+
 export interface Recorded {
   readonly pipeline?: GPUComputePipeline;
   readonly bindGroup?: GPUBindGroup;
@@ -735,6 +745,28 @@ export class Capture {
    * so activations such a kernel writes are counted too — more than needed, never less.
    */
   liveIns(): GPUBuffer[] {
+    const { live } = this.flows();
+    return [...live].map(bufOf).filter((b) => this.external(b));
+  }
+
+  /**
+   * Whether the recording writes any buffer that is not its own — a parameter, an
+   * optimizer's state, a batch norm's running statistic. A recording that does not is a
+   * pure function of its inputs (an inference forward) and can be made again without
+   * the world moving; one that does is a step, and is made once.
+   */
+  mutatesState(): boolean {
+    const { written } = this.flows();
+    return [...written].map(bufOf).some((b) => this.external(b));
+  }
+
+  /** A buffer the recording did not make (or made as an upload) and can read back. */
+  private external(b: GPUBuffer): boolean {
+    return (!this.pinned.has(b) || this.uploaded.has(b)) && (b.usage & GPUBufferUsage.COPY_SRC) !== 0;
+  }
+
+  /** The buffers read before any write in the recording (`live`), and every written one. */
+  private flows(): { live: Set<BindSlot>; written: Set<BindSlot> } {
     const written = new Set<BindSlot>();
     const live = new Set<BindSlot>();
     for (const r of this.records) {
@@ -769,8 +801,8 @@ export class Capture {
     // them as read (measured: the q, k, v slices an attention cuts from its weight,
     // rewritten by the replay and left alone by an eager rerun, read as differences).
     // A buffer that cannot be read back — the one-word offsets a gather carries — is a
-    // constant of the recording, not state.
-    return [...live].map(bufOf).filter((b) => (!this.pinned.has(b) || this.uploaded.has(b)) && (b.usage & GPUBufferUsage.COPY_SRC) !== 0);
+    // constant of the recording, not state. `external` says which.
+    return { live, written };
   }
 
   /**
@@ -1064,6 +1096,8 @@ export class Device {
         /* lost is not rejected, and even if it were there is nothing more to do here */
       });
     Device.readbackKicks = await calibrateKicks(device, canTime);
+    Device.canTime = canTime;
+    Device.loadTune();
     return made;
   }
 
@@ -2430,6 +2464,92 @@ export class Device {
   /** The re-tiled scalar GEMM's configurations for this adapter, best first — see
    *  `gemmConfigsFor`. Empty is the tile as it was. Settable, so a test can force a path. */
   static gemmConfigs: readonly TiledConfig[] = [];
+
+  // ── Kernel selection by measurement (`docs/COMPILER.md` Step 5) ─────────────────────
+  //
+  // Where a hand rule chooses among kernels — the convolution's path and tile, the
+  // product's tile — the choice is a `TuneCandidate` list with the rule's pick first, and
+  // `choose` decides: a cached decision for this adapter and key, if there is one; else,
+  // while a `compiled` step is collecting, the list is queued and the rule's pick runs;
+  // else the rule's pick. `runTuning` then times every queued list with the timestamp
+  // profiler and caches the fastest by `(adapter, key)` — in memory and in
+  // `localStorage`, so the next page load pays nothing. The hand rules stay the prior
+  // and the whole answer where timestamps are not available.
+
+  /** Whether the device has `timestamp-query` — the autotune's instrument. */
+  static canTime = false;
+  /** Decisions by `adapter|key` → the candidate's label. */
+  static tune = new Map<string, string>();
+  private static readonly TUNE_STORE = "borch-ts.tune.v1";
+  /** What a `compiled` step is doing with choices: collecting candidates, or nothing. */
+  tuneMode: "collect" | null = null;
+  private readonly tuneQueue = new Map<string, readonly TuneCandidate[]>();
+
+  /** Loads the decisions saved by earlier sessions on this adapter. */
+  static loadTune(): void {
+    try {
+      const raw = globalThis.localStorage?.getItem(Device.TUNE_STORE);
+      if (!raw) return;
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed !== "object" || parsed === null) return;
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) if (typeof v === "string") Device.tune.set(k, v);
+    } catch { /* no storage, or none of ours — the rules decide */ }
+  }
+
+  private static saveTune(): void {
+    try { globalThis.localStorage?.setItem(Device.TUNE_STORE, JSON.stringify(Object.fromEntries(Device.tune))); } catch { /* not persisted */ }
+  }
+
+  /** The candidate that runs for `key`: the cached decision, or the rule's pick (first). */
+  choose(key: string, candidates: readonly TuneCandidate[]): TuneCandidate {
+    const first = candidates[0];
+    if (first === undefined) throw new Error(`choose(${key}): no candidates`);
+    if (candidates.length === 1) return first;
+    const k = `${Device.adapterInfo}|${key}`;
+    const cached = Device.tune.get(k);
+    if (cached !== undefined) {
+      const hit = candidates.find((c) => c.label === cached);
+      if (hit) return hit;
+    }
+    if (this.tuneMode === "collect" && !this.tuneQueue.has(k)) this.tuneQueue.set(k, candidates);
+    return first;
+  }
+
+  /**
+   * Times every queued candidate list — each candidate's dispatches under the profiler,
+   * `TUNE_ROUNDS` rounds of `TUNE_REPS`, the minimum — and caches the fastest. Returns
+   * one line per decision, for the test that holds "nothing tuned is slower than the
+   * rule's pick" and the report that says what changed.
+   */
+  async runTuning(): Promise<TuneReport[]> {
+    const out: TuneReport[] = [];
+    for (const [k, candidates] of this.tuneQueue) {
+      const ms: number[] = [];
+      for (const cand of candidates) {
+        let best = Infinity;
+        for (let round = 0; round < Device.TUNE_ROUNDS; round++) {
+          await this.profile(async () => {
+            for (let r = 0; r < Device.TUNE_REPS; r++) cand.run();
+            this.flush();
+            await this.synchronize();
+          });
+          const ns = cand.keys.reduce((a, key) => a + (this.nsByKind.get(key) ?? 0), 0);
+          best = Math.min(best, ns / 1e6 / Device.TUNE_REPS);
+        }
+        ms.push(best);
+      }
+      let pick = 0;
+      for (let i = 1; i < ms.length; i++) if ((ms[i] ?? Infinity) < (ms[pick] ?? Infinity)) pick = i;
+      const chosen = candidates[pick];
+      if (chosen) Device.tune.set(k, chosen.label);
+      out.push({ key: k, prior: candidates[0]?.label ?? "", priorMs: ms[0] ?? 0, chosen: chosen?.label ?? "", chosenMs: ms[pick] ?? 0, candidates: candidates.map((c, i) => `${c.label} ${(ms[i] ?? 0).toFixed(3)}`) });
+    }
+    this.tuneQueue.clear();
+    if (out.length) Device.saveTune();
+    return out;
+  }
+  private static readonly TUNE_ROUNDS = 2;
+  private static readonly TUNE_REPS = 5;
 
   /** How many storage buffers one compute stage may bind — 8 is the guaranteed floor.
    *  The fusion pass sizes its trees by this. */
