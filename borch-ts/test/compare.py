@@ -61,6 +61,13 @@ def main(argv):
         if r.returncode:
             print("could not export the weights for the inference comparison", file=sys.stderr)
             return 2
+    # ORT's f16 and int8 forms of the ResNet, once (onnxruntime does the converting).
+    if "--only-vit" not in argv and not (out / "resnet18_cifar_int8.onnx").exists():
+        import subprocess
+        r = subprocess.run(["uv", "run", "--project", str(runner.ROOT), "--with", "onnx", "--with", "onnxruntime",
+                            "python", "-W", "ignore", "tests/browser/export_ort_variants.py"], cwd=str(runner.ROOT))
+        if r.returncode:
+            print("could not write ORT's f16/int8 files — their rows will say so", file=sys.stderr)
     # The transformer half's weights: timm's ViT-Tiny/16, once, the same way.
     if not all((out / f).exists() for f in ("vit_tiny.safetensors", "vit_tiny.onnx", "vit_tiny.probe.json")):
         import subprocess

@@ -254,7 +254,70 @@ async function reportAccuracy(): Promise<string[]> {
   } else {
     lines.push("accuracy: no int8 configuration on this adapter — the int8 gate runs where there is one");
   }
+  // **ORT's int8 on the same images** — quantised by onnxruntime from the trained network,
+  // calibrated on the other half of the slice as borch's static scales are. Its f32 file
+  // first, so the drop is ORT's own, not a difference between the two f32 forwards.
+  const trainedF32 = await maybeBytes(OUT + "resnet18_cifar_trained.onnx");
+  const trainedInt8 = await maybeBytes(OUT + "resnet18_cifar_trained_int8.onnx");
+  if (trainedF32 && trainedInt8) {
+    const o = ort();
+    const feed: Feed = (data, b) => ({ input: new o.Tensor("float32", data, [b, 3, 32, 32]) });
+    const s32 = await o.InferenceSession.create(trainedF32, { executionProviders: ["webgpu"] });
+    const a32 = await ortTop1(s32, feed, scorePix, scoreLab, BATCH);
+    const s8 = await o.InferenceSession.create(trainedInt8, { executionProviders: ["webgpu"] });
+    const a8 = await ortTop1(s8, feed, scorePix, scoreLab, BATCH);
+    lines.push(`accuracy on the same images: ORT Web f32 ${(100 * a32).toFixed(2)}% · ORT Web int8 (QDQ, per-channel, calibrated on the other ${n - half}) ${(100 * a8).toFixed(2)}% · ${a32 - a8 >= 0 ? "−" : "+"}${Math.abs(100 * (a32 - a8)).toFixed(2)} points`);
+  } else {
+    lines.push("accuracy: no trained ONNX pair for ORT (resnet18_cifar_trained.onnx + _int8.onnx) — ORT's int8 accuracy not measured");
+  }
   return lines;
+}
+
+type Feed = (data: Float32Array, b: number) => Record<string, unknown>;
+
+/** ORT's f16 and int8 (QDQ) forms of the same ResNet-18, on WebGPU — and the int8 on the
+ * wasm provider as well: **a WebGPU time that is the wasm time is a fallback**, whatever
+ * the session said about its providers, and the row has to be able to show it. Each is
+ * held to torch's logits like the f32 file; the gaps are printed, not gated (f16 and int8
+ * are not held to 1e-3 — the number that stands beside them is how far they are). */
+async function reportOrtVariants(o: Ort, probe: Probe, batches: readonly number[], feed: Feed): Promise<string[]> {
+  const lines: string[] = [];
+  let scale = 0; for (const v of probe.logits) scale = Math.max(scale, Math.abs(v));
+  for (const variant of ["f16", "int8"] as const) {
+    const file = await maybeBytes(OUT + `resnet18_cifar_${variant}.onnx`);
+    if (!file) { lines.push(`ORT Web ${variant}: no resnet18_cifar_${variant}.onnx (tests/browser/export_ort_variants.py writes it) — not measured`); continue; }
+    const providers = variant === "int8" ? ["webgpu", "wasm"] : ["webgpu"];
+    for (const ep of providers) {
+      const session = await o.InferenceSession.create(file, { executionProviders: [ep] });
+      const out = (await session.run(feed(Float32Array.from(probe.input), 1)))["logits"]?.data ?? new Float32Array();
+      const gap = maxAbsDiff(out, probe.logits);
+      const cells: string[] = [];
+      for (const b of batches) {
+        const data = new Float32Array(b * 3 * 32 * 32);
+        for (let i = 0; i < b; i++) data.set(probe.input, i * 3 * 32 * 32);
+        const ms = await timed(() => session.run(feed(data, b)), 3, 20);
+        cells.push(`batch ${b} ${ms.toFixed(2)} ms`);
+      }
+      lines.push(`ORT Web ${variant} on ${ep}: ${cells.join(" · ")} · max |logits − torch| ${gap.toExponential(1)} (${(gap / scale).toExponential(1)} of the logits' scale)`);
+    }
+  }
+  return lines;
+}
+
+/** Top-1 of an ORT session over the slice — the same images and batches as `top1`. */
+async function ortTop1(session: OrtSession, feed: Feed, pixels: Float32Array, labels: Uint32Array, batch: number): Promise<number> {
+  const n = labels.length;
+  let correct = 0;
+  for (let i = 0; i < n; i += batch) {
+    const b = Math.min(batch, n - i);
+    const out = (await session.run(feed(pixels.slice(i * 3072, (i + b) * 3072), b)))["logits"]?.data ?? new Float32Array();
+    for (let j = 0; j < b; j++) {
+      let best = 0;
+      for (let c = 1; c < 10; c++) if ((out[j * 10 + c] ?? 0) > (out[j * 10 + best] ?? 0)) best = c;
+      if (best === labels[i + j]) correct++;
+    }
+  }
+  return correct / n;
 }
 
 async function timed(run: () => Promise<unknown>, warmup = 2, steps = 5): Promise<number> {
@@ -330,6 +393,10 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
       + hot.slice(0, 8).map(([k, ms, n]) => `${k} ${ms.toFixed(2)}${n > 1 ? `×${n}` : ""}`).join(" · ")
       + (d.profileDropped ? ` · ${d.profileDropped} dropped` : ""));
   }
+
+  // **ORT at its own reduced precisions** — the int8 rows below stand beside these too,
+  // not only beside ORT's f32 (`tests/browser/export_ort_variants.py` writes the files).
+  lines.push(...await reportOrtVariants(o, probe, batches, feed));
 
   // The same network with every batch norm folded into the convolution before it —
   // `nn.fuseConvBnEval`, torch's `fuse_conv_bn_eval`. Gated the same way first.
