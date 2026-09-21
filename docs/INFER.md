@@ -489,6 +489,22 @@ prediction is written down so that the ledger can say which step was wrong.
   tables before this date was an allocator's number as much as a forward's; `docs/BOOK.md`
   says so above its table.
 
+- **2026-09-21, D3D12 again, with the staged convolution and the tuner — and a laptop
+  under use.** The same worker, three runs in a row (`fwd --sweep=staged`, `capture:ts`,
+  `compare:ts`, cb6d3b8): the staged kernel exact and 1.6–1.7× the tiled one, the tuner
+  moving a 64-channel layer to it (`docs/GEMM.md`, `docs/COMPILER.md`), `capture:ts`
+  20 / 20. The `compare:ts` that followed read **every library about 2× slower than the
+  morning's run** — borch's training step 32.3 → 43.5 ms at batch 16, TF.js 174.8 →
+  247.1, ORT Web 5.67 → 12.31 at batch 1 — and the captured forward 1.69 → 8.35 at batch
+  1, 7.29 → 8.69 at batch 16. That is not the code (the kernels measured faster the same
+  hour); it is the machine — a laptop its owner was using, on whatever power and thermal
+  state that put it in — and the reason every table here carries its adapter and its
+  day. **The ratios held**: the captured forward 0.49× ORT at batch 16 (7.29 / 15.69 in
+  the morning, 8.69 / 17.85 in the afternoon), the training step 5.4–5.7× TF.js. The
+  absolute numbers of the afternoon run are not quoted; the morning's stand, with this
+  note beside them. A bench on a shared machine wants the machine's state in the row —
+  a power-source and load line beside the adapter — which the runner does not print yet.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

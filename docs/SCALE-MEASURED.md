@@ -66,5 +66,8 @@
 | readback kicks | **on** — plain 4.43 ms for 0.88 of GPU, kicked 1.51 |
 | training step, ResNet-18 CIFAR (`compare:ts`) | 32.3 / 53.7 / 98.1 ms at batch 16 / 32 / 64 · TF.js 174.8 / 334.9 / 659.2 |
 | inference, ResNet-18 (`compare:ts`) | fused + captured **1.69 ms at batch 1, 7.29 at batch 16** · ORT Web 5.67 / 15.69 · eager (scoped) 5.81 / 8.65 — the first, unscoped, eager run read 152 ms at batch 16 for 22 ms of GPU: a buffer is milliseconds under D3D12 |
+| the staged convolution (`fwd --sweep=staged`, cb6d3b8) | exact; 512 → 512 at 4 × 4, batch 16, tiled 0.490 → **staged 128 × 64 r8×4 kb4 0.314**; 256 → 256 0.489 → 0.287; batch 1 512 → 512 0.114 → 0.071 |
+| the tuner (`capture:ts`, Step 5) | 9 decisions, **1 changed**: a 64-channel layer direct 0.717 → staged 0.473 ms; 20 / 20 |
+| the afternoon `compare:ts` | every library ~2× the morning (the laptop under use): training 43.5 / 68.9 / 120.4, TF.js 247 / 444 / 672, captured forward 8.35 / 8.69, ORT 12.3 / 17.9 — the ratios held (0.49× ORT at batch 16, 5.7× TF.js), the absolute numbers are the machine's state, not the code's |
 | validation faults | 0 |
 
