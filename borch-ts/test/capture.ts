@@ -355,13 +355,14 @@ async function inference(lines: string[]): Promise<void> {
   await scope(async () => noGrad(() => byHand.forward(x)).toArray());
   const missesAgain = dv.packMisses - m0, hitsAgain = dv.packHits - h0;
   want("eager pack cache: a second noGrad forward of the fused network repacks no weight", missesAgain === 0, `${missesAgain} repacks, ${hitsAgain} packs reused`);
-  // A 512 → 512 weight: one the deep layers pack (the 256 → 512 stride-2 layer beside it
-  // runs the tiled GEMM straight off the weight, and writing that one would repack nothing).
-  const deep = byHand.parameters().find((p) => p.shape.length === 4 && p.shape[0] === 512 && p.shape[1] === 512);
-  if (deep) noGrad(() => deep.mul_(1));
+  // Every convolution weight written in place: which layers pack is the tuner's to
+  // decide per adapter (on the 5080 it sent the 512 → 512 layers to the tiled GEMM,
+  // which reads the weight as it is — a test that picked one weight found no pack), so
+  // the count that must come back is the count that was reused.
+  noGrad(() => { for (const p of byHand.parameters()) if (p.shape.length === 4) p.mul_(1); });
   const m1 = dv.packMisses;
   await scope(async () => noGrad(() => byHand.forward(x)).toArray());
-  want("eager pack cache: a weight written in place is repacked on the next forward", hitsAgain === 0 || dv.packMisses - m1 >= 1, `${dv.packMisses - m1} repacks after the write`);
+  want("eager pack cache: the weights written in place are repacked on the next forward, and only those", dv.packMisses - m1 === hitsAgain, `${dv.packMisses - m1} repacks after the write, ${hitsAgain} packs in use`);
   const fc = step.firstCall[0];
   if (fc) lines.push(`compiled(model) first call: recording ${fc.record.toFixed(0)} + the forward's own first run ${fc.wait.toFixed(0)} + tuning ${fc.tuning.toFixed(0)} (compile wave ${fc.compile.toFixed(0)}; ${fc.candidates} candidates) + re-record ${fc.rerecord.toFixed(0)} ms${step.tuned.flat().some((t) => t.chosen !== t.prior) ? " (a decision changed; the pure forward was recorded again)" : ""}`);
   step.dispose();
