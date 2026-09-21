@@ -302,7 +302,12 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     const data = new Float32Array(b * 3 * 32 * 32);
     for (let i = 0; i < b; i++) data.set(probe.input, i * 3 * 32 * 32);
     const xb = Tensor.from(data, [b, 3, 32, 32]);
-    const oursMs = await timed(() => noGrad(() => model.forward(xb)).toArray(), 3, 20);
+    // **A scope a forward, as a page would run it.** Without one every forward makes its
+    // intermediates on fresh buffers, and on Direct3D 12 a buffer is milliseconds to make:
+    // the RTX 5050 Laptop read 152 ms for a batch-16 forward of 22 ms of GPU (2026-09-21)
+    // while its training step, scoped, read 32 for 28. The clock here is the forward's,
+    // not the allocator's.
+    const oursMs = await timed(() => scope(async () => noGrad(() => model.forward(xb)).toArray()), 3, 20);
     const theirsMs = await timed(() => session.run(feed(data, b)), 3, 20);
     lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts ${oursMs.toFixed(2).padStart(8)} ms · ORT Web ${theirsMs.toFixed(2).padStart(8)} ms · ratio ${(oursMs / theirsMs).toFixed(2)}× (borch/ORT)`);
     // Where our forward spends itself: dispatches per forward, and GPU time by kind of
@@ -343,7 +348,7 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     const data = new Float32Array(b * 3 * 32 * 32);
     for (let i = 0; i < b; i++) data.set(probe.input, i * 3 * 32 * 32);
     const xb = Tensor.from(data, [b, 3, 32, 32]);
-    const ms = await timed(() => noGrad(() => model.forward(xb)).toArray(), 3, 20);
+    const ms = await timed(() => scope(async () => noGrad(() => model.forward(xb)).toArray()), 3, 20);
     const d = dev();
     const d0 = d.dispatches;
     await noGrad(() => model.forward(xb)).toArray();
