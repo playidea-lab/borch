@@ -2713,6 +2713,7 @@ export class Device {
    */
   async runTuning(queue: Map<string, readonly TuneCandidate[]> = this.takeTuneQueue()): Promise<TuneReport[]> {
     const out: TuneReport[] = [];
+    this.tuneWarmMs = 0;
     if (queue.size === 0) return out;
     const all: { k: string; i: number; cand: TuneCandidate }[] = [];
     for (const [k, candidates] of queue) candidates.forEach((cand, i) => all.push({ k, i, cand }));
