@@ -185,6 +185,38 @@ else. `tileShape` / `tileDepth` / `scalarMatmulSplit` re-swept for the new tile.
   `convForwardSubgroupSmall` shape without the subgroup multiply. Size M, its own gate;
   not taken up here, and named in §4 beside int8 for the decision of what comes next.
 
+- **2026-09-21, the third adapter — Direct3D 12, and a third answer.** The Windows worker
+  (an RTX 5050 Laptop, Chrome on Windows 11, `nvidia / blackwell` through D3D12; the
+  app-control policy that had blocked it on the 18th was gone) ran the same sweep:
+
+  | shape | scalar tile | 64 × 64 r4×4 vec4 | 128 × 64 r8×4 vec4 | **128 × 128 r8×8 vec4** | r8×8 dbuf |
+  |---|---|---|---|---|---|
+  | 1024³ | 0.720 | 0.636 | 0.605 + 0.027 | **0.430 + 0.027** (split 4) · 0.539 unsplit | 0.501 + 0.027 |
+  | 2048³ | 6.353 | 5.558 | 4.875 | **3.596** (1.77×, 4.8 TFLOP/s) | 3.914 |
+  | 512 × 4608 × 256 | 0.425 + 0.004 | 0.345 + 0.005 | 0.343 + 0.008 | **0.248 + 0.014** | 0.292 + 0.014 |
+  | 256 × 2304 × 1024 | 0.447 + 0.008 | 0.359 + 0.008 | 0.338 + 0.009 | **0.251 + 0.014** | 0.287 + 0.014 |
+
+  **Under D3D12 the 8 × 8 micro-tile wins, 1.6–1.8×** — the configuration that lost on
+  Metal and on Vulkan, and Step 1's prediction as written. The compiler under D3D12 keeps
+  sixty-four accumulators in registers where the other two spill or lose occupancy; the
+  plain `vec4` staging alone is only 1.13× here (1.34× / 1.20× elsewhere), so on this API
+  the micro-tile is the lever and the loads are not. Double buffering loses on all three
+  (+9 % here). `gemmConfigsFor` therefore returns the 8 × 8 tile first on Windows —
+  the API is not in `GPUAdapterInfo`, and Chrome on Windows is D3D12 — then the 8 × 4,
+  then the 64 × 64 (d2e4e17). §2's risk ("D3D12 behaves unlike Vulkan") was real and is
+  now measured rather than named. **The convolutions, same sweep, same card**: the
+  micro-tiles do not help the gather kernel here either (512 → 512 at 4 × 4, batch 16:
+  64 × 64 0.505, 128 × 64 r8×4 0.497, 128 × 128 r8×8 0.645) — the conv verdict holds on
+  the third API. Two things the sweep says about this card that are not the GEMM's: the
+  split policy over-splits it (512 → 512 at 4 × 4, batch 16: the policy's 32 pieces
+  0.493 + 0.014 against 8 pieces 0.465 + 0.005; 64 → 64 at 32 × 32 the policy's 4 against
+  unsplit 0.505 — a laptop card with a quarter of the 5080's SMs wants a quarter of the
+  workgroups, and WebGPU does not say how many SMs there are); and the direct kernel
+  prefers a wider output-channel block (64 → 64 at 32 × 32: 4 × 16 with a slice of 14
+  0.289 against the default's 0.343). Both are 5–15 % and both would want a per-card
+  number the API does not give — a calibration at `create`, like the kicks. Named, not
+  taken.
+
 ## 4. After this
 
 Two candidates for the 5080's convolutions, which this plan did not move:
