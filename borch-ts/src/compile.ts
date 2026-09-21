@@ -27,7 +27,7 @@
  * bit for bit plain; fused, the outputs within `tol` and the state within `stateTol`.
  * A difference throws and names the worst buffer.
  */
-import { Capture, Device, type TuneReport } from "./device.js";
+import { Capture, Device, type TuneCandidate, type TuneReport } from "./device.js";
 import { fuseForInference, Module, quantizeForInt8 } from "./nn.js";
 import { device, noGrad, scope, Tensor } from "./tensor.js";
 
@@ -60,6 +60,15 @@ export interface CompiledOptions {
    * where the device has `timestamp-query`; the hand rules decide where it has not.
    */
   readonly tune?: boolean;
+  /**
+   * The step is a pure function of its arguments — it writes no parameter, no optimiser
+   * state, no buffer that outlives the call. `compiled(model)` sets it; a function form
+   * says so itself. A pure step's first call compiles its kernels side by side instead of
+   * one after another, and its tuning runs on a throwaway recording in idle time; a step
+   * that writes state is compiled as it runs and tuned at the start of its next call
+   * (`docs/FIRST.md` 1b).
+   */
+  readonly pure?: boolean;
 }
 
 export interface CheckReport {
@@ -74,6 +83,13 @@ export interface PlanReport {
 }
 
 interface Recording<R> { readonly cap: Capture; readonly inputs: readonly CompiledArg[]; readonly out: R }
+
+/** Idle time, where the page offers it (`requestIdleCallback`); the next turn otherwise. */
+function idle(f: () => void): void {
+  const g = globalThis as { requestIdleCallback?: (cb: () => void) => unknown };
+  if (typeof g.requestIdleCallback === "function") g.requestIdleCallback(f);
+  else setTimeout(f, 0);
+}
 
 /** The tensors in a returned value: one, or an array or object of them. */
 function tensorsOf(value: unknown): Tensor[] {
@@ -132,8 +148,13 @@ export async function captureAsync<T>(fn: () => Promise<T>): Promise<{ step: Cap
 
 /** The costs of a first call, ms of wall — `Compiled.firstCall`. */
 export interface FirstCallCost {
-  /** Recording the step: the JavaScript of one eager run, its dispatches encoded. */
+  /** Recording the step: the JavaScript of one eager run, its dispatches encoded — and,
+   *  for a pure step, the waves of its own kernels compiling side by side. */
   record: number;
+  /** Whether the tuning ran after the first call returned (a pure step, idle time; a
+   *  state-writing step, its next call) — then `tuning`, `compile`, `rerecord` and
+   *  `candidates` are filled in when it has. */
+  deferred: boolean;
   /** Waiting for that run's GPU work and reading its outputs back — the step's own first
    *  execution, paid here before the tuner runs on the same buffers; without a tuner the
    *  same wait comes when the caller reads the result. */
@@ -171,6 +192,11 @@ export class Compiled<A extends CompiledArg[], R> {
    *  pure step (0 where none) — and how many candidates the pass timed. The number the
    *  Step 5 gate is about (`docs/COMPILER.md`): a first load pays this once per shape. */
   readonly firstCall: FirstCallCost[] = [];
+  private readonly pure: boolean;
+  /** Tuning owed per shape key: the recording's candidate lists (a state-writing step —
+   *  closures over its live buffers) or none (a pure step tunes a throwaway recording),
+   *  with what the first call had. */
+  private readonly pending = new Map<string, { queue: Map<string, readonly TuneCandidate[]> | null; args: A; datas: (Float32Array | null)[]; cost: FirstCallCost }>();
   private readonly tune: boolean;
   /** Runs once before the first recording — the int8 quantisation of a model's weights. */
   private prepare: (() => Promise<void>) | null = null;
@@ -178,6 +204,7 @@ export class Compiled<A extends CompiledArg[], R> {
   constructor(private readonly fn: (...args: A) => R, opts: CompiledOptions = {}, prepare?: () => Promise<void>) {
     this.prepare = prepare ?? null;
     this.tune = opts.tune ?? true;
+    this.pure = opts.pure ?? false;
     this.fuse = opts.fuse ?? true;
     this.plan = opts.plan ?? true;
     this.check = opts.check ?? false;
@@ -204,6 +231,10 @@ export class Compiled<A extends CompiledArg[], R> {
     const key = keyOf(args);
     const rec = this.records.get(key);
     if (rec) {
+      // A state-writing step owes its tuning: it runs here, before the replay, on the
+      // recording's own buffers — the caller is done with the last call's outputs by now,
+      // and the replay overwrites them anyway.
+      if (this.pending.get(key)?.queue) await this.tuneNow(key);
       rec.inputs.forEach((held, i) => {
         if (held instanceof Tensor) held.copyFrom(args[i] as Tensor);
       });
@@ -214,13 +245,54 @@ export class Compiled<A extends CompiledArg[], R> {
     const datas = await Promise.all(args.map((a) => (a instanceof Tensor ? a.toArray() : Promise.resolve(null))));
     const d = device();
     const tuning = this.tune && Device.canTime;
-    const record = async (collect: boolean): Promise<{ cap: Capture; inputs: CompiledArg[]; out: Awaited<R> }> => {
+    const t0 = performance.now();
+    // A pure step's first recording compiles ahead and collects nothing (its tuning runs
+    // on a throwaway recording later); a state-writing step collects its candidates now,
+    // closures over the live recording, and is compiled as it runs.
+    const made = await this.record(args, datas, tuning && !this.pure, this.pure);
+    const cost: FirstCallCost = { record: performance.now() - t0, deferred: tuning, wait: 0, tuning: 0, compile: 0, rerecord: 0, candidates: 0 };
+    this.firstCall.push(cost);
+    this.finish(key, made);
+    if (this.check) this.checked.push(await this.verify(made.cap, made.inputs, made.out));
+    if (tuning) {
+      this.pending.set(key, { queue: this.pure ? null : d.takeTuneQueue(), args, datas, cost });
+      if (this.pure) idle(() => { void this.tuneNow(key); });
+    }
+    return made.out;
+  }
+
+  /** Runs the tuning still owed — every shape's — now. Tests call it; a page may, to
+   *  have the decisions before it measures. */
+  async settle(): Promise<void> {
+    for (const key of [...this.pending.keys()]) await this.tuneNow(key);
+    await Promise.all([...this.inflight.values()]);
+  }
+
+  /** The tuning owed for `key`, started once — a second asker waits on the first. */
+  private tuneNow(key: string): Promise<void> {
+    const running = this.inflight.get(key);
+    if (running) return running;
+    const p = this.tunePending(key).finally(() => { this.inflight.delete(key); });
+    this.inflight.set(key, p);
+    return p;
+  }
+  private readonly inflight = new Map<string, Promise<void>>();
+  private disposed = false;
+
+  /**
+   * One recording of the step for `args`. `collect` queues every kernel choice for the
+   * tuner (the rule's pick runs); `ahead` compiles the kernels the step meets for the
+   * first time side by side — a miss throws out of the step, the wave is awaited, the
+   * step is run again from the start — which only a pure step can afford.
+   */
+  private async record(args: A, datas: (Float32Array | null)[], collect: boolean, ahead: boolean): Promise<Recording<Awaited<R>>> {
+    const d = device();
+    for (let wave = 0; ; wave++) {
       d.beginCapture();
+      if (collect) d.tuneMode = "collect";
+      if (ahead) d.compileAhead(true);
       let inputs: CompiledArg[];
       let out: Awaited<R>;
-      // Collecting, every kernel choice in the step is queued for the tuner while the
-      // rule's pick is what is recorded.
-      if (collect) d.tuneMode = "collect";
       try {
         inputs = args.map((a, i) => (a instanceof Tensor
           ? Tensor.from(datas[i] as Float32Array, a.shape, { dtype: a.dtype })
@@ -229,46 +301,21 @@ export class Compiled<A extends CompiledArg[], R> {
         out = await this.fn(...(inputs as A));
       } catch (err) {
         d.tuneMode = null;
+        d.compileAhead(false);
         d.endCapture().dispose();
+        if (ahead && Device.isCompileMiss(err) && wave < 32) { await d.awaitCompiles(); continue; }
         throw err;
       }
       d.tuneMode = null;
+      d.compileAhead(false);
       return { cap: d.endCapture(), inputs, out };
-    };
-    const t0 = performance.now();
-    let { cap, inputs, out } = await record(tuning);
-    const cost: FirstCallCost = { record: performance.now() - t0, wait: 0, tuning: 0, compile: 0, rerecord: 0, candidates: 0 };
-    // **The tuning pass** (`docs/COMPILER.md` Step 5): the choices the recording collected
-    // are timed — every candidate's dispatches on the recording's own buffers, under
-    // the profiler — and the fastest is cached for this adapter, in memory and in
-    // `localStorage`. The recording's outputs are put back afterwards (a candidate
-    // rewrote them with its own rounding). Then, **where a decision changed and the
-    // recording is a pure function of its inputs** (`mutatesState` false — an inference
-    // forward), it is made again with the chosen kernels; a step that writes state is
-    // made once, and its decisions serve the next recording — the next shape, the next
-    // `compiled`, the next session. The first recording of a shape pays the timing once.
-    if (tuning) {
-      const t1 = performance.now();
-      const outs = tensorsOf(out);
-      d.flush();
-      const outBefore = await Promise.all(outs.map((o) => o.toArray()));
-      const t2 = performance.now();
-      cost.wait = t2 - t1;
-      const report = await scope(async () => d.runTuning());
-      this.tuned.push(report);
-      d.flush();
-      outs.forEach((o, i) => d.writeWords(o.buffer, words(outBefore[i] as Float32Array)));
-      cost.tuning = performance.now() - t2;
-      cost.compile = d.tuneWarmMs;
-      cost.candidates = report.reduce((a, t) => a + t.candidates.length, 0);
-      if (report.some((t) => t.chosen !== t.prior) && !cap.mutatesState()) {
-        const t2 = performance.now();
-        cap.dispose();
-        ({ cap, inputs, out } = await record(false));
-        cost.rerecord = performance.now() - t2;
-      }
     }
-    this.firstCall.push(cost);
+  }
+
+  /** The passes over a fresh recording — fusion, hoisting, the plan, the check — and its
+   *  place in the table. */
+  private finish(key: string, made: Recording<Awaited<R>>): void {
+    const { cap, inputs, out } = made;
     const held = tensorsOf(out).map((t) => t.buffer);
     if (this.fuse) cap.fuse(held);
     // The replay-invariant dispatches — a frozen weight's repack — run once and leave the
@@ -279,13 +326,70 @@ export class Compiled<A extends CompiledArg[], R> {
       const p = cap.plan(held);
       this.planned.push({ moved: p.moved, released: p.released, bytesBefore: p.bytesBefore, bytesAfter: p.bytesAfter, arenas: p.arenas });
     }
-    if (this.check) this.checked.push(await this.verify(cap, inputs, out));
     this.records.set(key, { cap, inputs, out });
-    return out;
+  }
+
+  /**
+   * **The tuning pass** (`docs/COMPILER.md` Step 5), owed from the first call. A pure
+   * step: the step is recorded once more, collecting, into a throwaway recording whose
+   * buffers the candidates may write, the candidates are timed there, and if a decision
+   * changed the step is recorded a third time with the chosen kernels and swapped in.
+   * A state-writing step: its candidates were collected on the live recording, and they
+   * run there — at the start of the next call, when the last outputs are spent — with
+   * nothing to re-record (its decisions serve the next recording). Either way the
+   * fastest is cached for this adapter, in memory and in `localStorage`.
+   */
+  private async tunePending(key: string): Promise<void> {
+    const p = this.pending.get(key);
+    if (!p) return;
+    this.pending.delete(key);
+    const rec = this.records.get(key);
+    if (!rec) return;
+    const d = device();
+    const t0 = performance.now();
+    let report: TuneReport[];
+    if (p.queue) {
+      const outs = tensorsOf(rec.out);
+      d.flush();
+      const outBefore = await Promise.all(outs.map((o) => o.toArray()));
+      if (this.disposed) return;
+      p.cost.wait = performance.now() - t0;
+      const queue = p.queue;
+      report = await scope(async () => d.runTuning(queue));
+      if (this.disposed) return;
+      d.flush();
+      outs.forEach((o, i) => d.writeWords(o.buffer, words(outBefore[i] as Float32Array)));
+    } else {
+      // In idle time the step may be disposed under this pass; every wait checks.
+      const scratch = await this.record(p.args, p.datas, true, false);
+      const queue = d.takeTuneQueue();
+      if (this.disposed) { scratch.cap.dispose(); return; }
+      report = await scope(async () => d.runTuning(queue));
+      scratch.cap.dispose();
+      if (this.disposed) return;
+    }
+    this.tuned.push(report);
+    p.cost.tuning = performance.now() - t0 - p.cost.wait;
+    p.cost.compile = d.tuneWarmMs;
+    p.cost.candidates = report.reduce((a, t) => a + t.candidates.length, 0);
+    // Where a decision changed and the recording is a pure function of its inputs —
+    // said so, or found so (`mutatesState`) — it is made again with the chosen kernels
+    // and swapped in; a step that writes state is made once.
+    if (report.some((t) => t.chosen !== t.prior) && (this.pure || !rec.cap.mutatesState())) {
+      const t1 = performance.now();
+      const fresh = await this.record(p.args, p.datas, false, false);
+      if (this.disposed) { fresh.cap.dispose(); return; }
+      this.finish(key, fresh);
+      if (this.check) this.checked.push(await this.verify(fresh.cap, fresh.inputs, fresh.out));
+      rec.cap.dispose();
+      p.cost.rerecord = performance.now() - t1;
+    }
   }
 
   /** Returns every recording's memory. The returned tensors are not to be used after. */
   dispose(): void {
+    this.disposed = true;
+    this.pending.clear();
     for (const r of this.records.values()) r.cap.dispose();
     this.records.clear();
   }
@@ -373,7 +477,7 @@ export function compiled(target: Module | ((...args: never[]) => unknown), opts:
     // Eval first: the fold reads the running statistics and refuses a training module.
     const model = target.eval();
     fuseForInference(model);
-    const step = new Compiled((x: Tensor) => noGrad(() => model.forward(x)), opts,
+    const step = new Compiled((x: Tensor) => noGrad(() => model.forward(x)), { ...opts, pure: true },
       opts.int8 ? async () => { step.int8Layers = await quantizeForInt8(model); } : undefined);
     return step;
   }

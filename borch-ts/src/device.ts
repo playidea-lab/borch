@@ -2597,9 +2597,37 @@ export class Device {
   /** The last `runTuning`'s warm wave in ms — the candidates' pipelines compiling, and one
    *  wait. Reported apart from the timing, since it is the platform's compile cost. */
   tuneWarmMs = 0;
-  /** The pipelines the last warm wave compiled, each with its wall time (they compile side
-   *  by side, so the times overlap; the order says which are dear) and its WGSL size. */
+  /** The pipelines the warm waves compiled so far — the tuner's candidates and, for a pure
+   *  `compiled` step, the step's own on its first call — each with its wall time (they
+   *  compile side by side, so the times overlap; the order says which are dear) and its
+   *  WGSL size. */
   tuneCompiles: { sig: string; ms: number; bytes: number }[] = [];
+
+  /** Whether `err` is `pipeline` refusing a miss while compiling ahead — the caller runs
+   *  its step again after `awaitCompiles`. */
+  static isCompileMiss(err: unknown): boolean {
+    return err instanceof PrewarmMiss;
+  }
+
+  /** Turns compiling-ahead on or off: on, a pipeline miss is made asynchronously and
+   *  thrown as a miss (`isCompileMiss`); off, misses compile as they come. */
+  compileAhead(on: boolean): void {
+    this.prewarming = on;
+  }
+
+  /** Waits for every pipeline a wave started. */
+  async awaitCompiles(): Promise<void> {
+    const pending = this.prewarmPending;
+    this.prewarmPending = [];
+    await Promise.all(pending);
+  }
+
+  /** The candidate lists queued since the last take — a recording's, for its tuner. */
+  takeTuneQueue(): Map<string, readonly TuneCandidate[]> {
+    const q = new Map(this.tuneQueue);
+    this.tuneQueue.clear();
+    return q;
+  }
   private readonly tuneQueue = new Map<string, readonly TuneCandidate[]>();
 
   /** Loads the decisions saved by earlier sessions on this adapter. */
@@ -2649,17 +2677,16 @@ export class Device {
    * whose kernel kinds overlap cannot share a pass (their times would add), so the
    * candidates are dealt into passes with no kind repeated.
    */
-  async runTuning(): Promise<TuneReport[]> {
+  async runTuning(queue: Map<string, readonly TuneCandidate[]> = this.takeTuneQueue()): Promise<TuneReport[]> {
     const out: TuneReport[] = [];
-    if (this.tuneQueue.size === 0) return out;
+    if (queue.size === 0) return out;
     const all: { k: string; i: number; cand: TuneCandidate }[] = [];
-    for (const [k, candidates] of this.tuneQueue) candidates.forEach((cand, i) => all.push({ k, i, cand }));
+    for (const [k, candidates] of queue) candidates.forEach((cand, i) => all.push({ k, i, cand }));
     // Warm: every candidate once, one wait. The compiles happen here — asynchronously,
     // in waves: a candidate whose pipeline is missing throws `PrewarmMiss` from `pipeline`
     // and runs again after every pending compile has resolved (a candidate can miss more
     // than once — its convolution, then its split sum).
     const tw = performance.now();
-    this.tuneCompiles = [];
     this.prewarming = true;
     try {
       let pending = all.map((e) => e.cand);
@@ -2706,7 +2733,7 @@ export class Device {
         }
       }
     }
-    for (const [k, candidates] of this.tuneQueue) {
+    for (const [k, candidates] of queue) {
       const ms = candidates.map((_, i) => best.get(`${k}#${i}`) ?? Infinity);
       let pick = 0;
       for (let i = 1; i < ms.length; i++) if ((ms[i] ?? Infinity) < (ms[pick] ?? Infinity)) pick = i;
@@ -2714,7 +2741,6 @@ export class Device {
       if (chosen) Device.tune.set(k, chosen.label);
       out.push({ key: k, prior: candidates[0]?.label ?? "", priorMs: ms[0] ?? 0, chosen: chosen?.label ?? "", chosenMs: ms[pick] ?? 0, candidates: candidates.map((c, i) => `${c.label} ${(ms[i] ?? 0).toFixed(3)}`) });
     }
-    this.tuneQueue.clear();
     if (out.length) Device.saveTune();
     return out;
   }

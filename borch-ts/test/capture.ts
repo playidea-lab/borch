@@ -151,6 +151,9 @@ async function resnet(lines: string[]): Promise<void> {
   }
   const worst = Math.max(...eager.map((v, i) => Math.abs(v - (replayed[i] as number))));
   want("ResNet-18: three replays are the three eager steps, bit for bit", worst === 0, `max |Δloss| ${worst.toExponential(1)}`);
+  // The tuning a state-writing step owes ran at its second call (`docs/FIRST.md` 1b);
+  // `settle` makes sure of it before the decisions are read.
+  await step.settle();
   const plan = step.planned[0];
   want("ResNet-18: the plan laid the step's intermediates into fewer bytes", !!plan && plan.moved > 0 && plan.bytesAfter < plan.bytesBefore,
     plan ? `${plan.moved} moved, ${(plan.bytesBefore / 1048576).toFixed(1)} MB → ${(plan.bytesAfter / 1048576).toFixed(1)} MB in ${plan.arenas} arenas` : "no plan");
@@ -208,11 +211,12 @@ async function resnet(lines: string[]): Promise<void> {
     return loss;
   }, { tune: false });
   await scope(async () => (await untuned.call(x, y)).item());
+  await untuned.settle();
   const plain = untuned.firstCall[0];
   untuned.dispose();
   if (cost && plain) {
     const perCand = cost.candidates ? cost.tuning / cost.candidates : 0;
-    lines.push(`autotune overhead: first call ${(cost.record + cost.wait + cost.tuning + cost.rerecord).toFixed(0)} ms = recording ${cost.record.toFixed(0)} + the step's own first run ${cost.wait.toFixed(0)} + tuning ${cost.tuning.toFixed(0)} (of which the candidates' pipelines compiling ${cost.compile.toFixed(0)}; ${cost.candidates} candidates, ${perCand.toFixed(1)} ms each) + re-record ${cost.rerecord.toFixed(0)} · the same step recorded with tune: false ${plain.record.toFixed(0)} ms · a replay ${replayMs.toFixed(1)} ms`);
+    lines.push(`autotune overhead: first call ${cost.record.toFixed(0)} ms (the recording; the tuning is ${cost.deferred ? "owed to the second call" : "not deferred"}) · then the step's own first run ${cost.wait.toFixed(0)} + tuning ${cost.tuning.toFixed(0)} (of which the candidates' pipelines compiling ${cost.compile.toFixed(0)}; ${cost.candidates} candidates, ${perCand.toFixed(1)} ms each) + re-record ${cost.rerecord.toFixed(0)} · the same step recorded with tune: false ${plain.record.toFixed(0)} ms · a replay ${replayMs.toFixed(1)} ms`);
   }
   // **The plan's bound (2 ms a candidate) and two after it (three replays of the step,
   // with and without the compile wave) were all guesses the measurement refused**: the
@@ -230,6 +234,7 @@ async function resnet(lines: string[]): Promise<void> {
     return loss;
   });
   await scope(async () => (await cached.call(x, y)).item());
+  await cached.settle();
   const second = cached.firstCall[0];
   cached.dispose();
   want("autotune: a second recording of the same step times nothing (the decisions are cached by adapter and key)",
@@ -341,6 +346,9 @@ async function inference(lines: string[]): Promise<void> {
   byHand.fuse();
   const step = compiled(byCall);
   const got = await (await step.call(x)).toArray();
+  // A pure step tunes in idle time on a throwaway recording; settled here so the second
+  // call replays the chosen kernels and the numbers below are its.
+  await step.settle();
   const again = await (await step.call(x)).toArray();
   const rec = step.recordingOf(x);
   // The eager reference after the first call: the tuner may have decided a kernel on
@@ -348,8 +356,12 @@ async function inference(lines: string[]): Promise<void> {
   // contract is eager and replay bit for bit, not the rule's kernels and the tuned ones,
   // which differ by a rounding.
   const ref = await noGrad(() => byHand.forward(x)).toArray();
-  want("compiled(model) on a model with its own fuse() is the hand-fused eval forward, bit for bit",
-    maxAbs(ref, got) === 0 && maxAbs(got, again) === 0, `max |Δ| ${maxAbs(ref, got).toExponential(1)} · ${rec ? rec.dispatches : 0} dispatches a replay`);
+  // The first call answered with the rule's kernels before the tuner ran (`docs/FIRST.md`
+  // 1b), so it may differ from the settled forward by a rounding; every call after the
+  // settle replays the chosen kernels, and eager makes the same decision — bit for bit.
+  let refScale = 0; for (const v of ref) refScale = Math.max(refScale, Math.abs(v));
+  want("compiled(model) on a model with its own fuse() is the hand-fused eval forward, bit for bit once settled",
+    maxAbs(ref, again) === 0 && maxAbs(ref, got) / refScale < 1e-5, `max |Δ| settled ${maxAbs(ref, again).toExponential(1)} · first call ${(maxAbs(ref, got) / refScale).toExponential(1)} rel · ${rec ? rec.dispatches : 0} dispatches a replay`);
   // **The eager pack cache** (`Device.packed`): the fused eval forward's deep layers read
   // the weight tap-major, and an eager forward repacked it every call. Under `noGrad` the
   // pack is kept beside the weight's write epoch — a second forward repacks nothing,
@@ -369,7 +381,7 @@ async function inference(lines: string[]): Promise<void> {
   await scope(async () => noGrad(() => byHand.forward(x)).toArray());
   want("eager pack cache: the weights written in place are repacked on the next forward, and only those", dv.packMisses - m1 === hitsAgain, `${dv.packMisses - m1} repacks after the write, ${hitsAgain} packs in use`);
   const fc = step.firstCall[0];
-  if (fc) lines.push(`compiled(model) first call: recording ${fc.record.toFixed(0)} + the forward's own first run ${fc.wait.toFixed(0)} + tuning ${fc.tuning.toFixed(0)} (compile wave ${fc.compile.toFixed(0)}; ${fc.candidates} candidates) + re-record ${fc.rerecord.toFixed(0)} ms${step.tuned.flat().some((t) => t.chosen !== t.prior) ? " (a decision changed; the pure forward was recorded again)" : ""}`);
+  if (fc) lines.push(`compiled(model) first call: recording ${fc.record.toFixed(0)} ms (its kernels compiled side by side; the answer is out) · then in idle time: tuning ${fc.tuning.toFixed(0)} (compile wave ${fc.compile.toFixed(0)}; ${fc.candidates} candidates) + re-record ${fc.rerecord.toFixed(0)} ms${step.tuned.flat().some((t) => t.chosen !== t.prior) ? " (a decision changed; the pure forward was recorded again)" : ""}`);
   step.dispose();
 
   const xs = Tensor.from(array(8 * 3 * 16 * 16, 78, 2), [8, 3, 16, 16]);
