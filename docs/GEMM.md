@@ -217,6 +217,45 @@ else. `tileShape` / `tileDepth` / `scalarMatmulSplit` re-swept for the new tile.
   number the API does not give — a calibration at `create`, like the kicks. Named, not
   taken.
 
+- **2026-09-21, the scalar staged convolution — built, measured, routed** (§4's first
+  candidate; c1b3644, f3455a3). `convForwardStaged`: a block of input channels' band of
+  padded rows staged from the unpadded input in row segments (the border is zero at the
+  staging, no pad pass), every tap of the block's weights staged as `vec4` rows of output
+  channels (`tapMajorWeightsCo`, `[tap][ci][co]`), then the tiled GEMM's inner loop — a
+  thread's `RM × RN` FMAs from one `vec4` of weights and `RN` consecutive floats of the
+  band. The gather is gone, and with it the reason the micro-tiles lost the convolution:
+  `kernel_bench fwd --sweep=staged`, ms, the slab sum counted, the repack (hoisted under
+  `compiled`) not:
+
+  | shape, batch 16 | tiled (as it was) | staged 64 × 64 r4×4 kb8 | **staged 128 × 64 r8×4 kb4** | direct |
+  |---|---|---|---|---|
+  | 512 → 512 at 4 × 4 · metal-3 | 0.318 + 0.024 | 0.302 + 0.133* | **0.264** | 0.796 |
+  | 512 → 512 at 4 × 4 · RTX 5080 | 0.100 + 0.007 | 0.099 + 0.040* | **0.080 + 0.007** | 0.238 |
+  | 256 → 256 at 8 × 8 · 5080 | 0.099 + 0.007 | 0.097 + 0.016 | **0.078 + 0.016** | 0.169 |
+  | 128 → 128 at 16 × 16 · 5080 | 0.098 + 0.007 | 0.097 | **0.077 + 0.012** | 0.093 |
+  | 64 → 64 at 32 × 32 · 5080 | 0.101 + 0.011 | 0.099 | 0.144 | **0.084** |
+  | 512 → 512 at 4 × 4, batch 1 · 5080 | 0.029 + 0.004 | 0.026 | **0.022** | 0.172 |
+  | 256 → 256 at 8 × 8, batch 1 · 5080 | 0.022 + 0.004 | **0.011** | 0.014 | 0.141 |
+
+  (* the "+" on those two rows is the repack, counted there because the row's split was
+  one and nothing else was extra.) Exact against the direct kernel on every shape. The
+  8 × 4 micro-tile on a 128 × 64 tile with a block of four channels wins the deep layers
+  on both adapters, **1.2–1.25× the tiled kernel at batch 16 and 2× at batch 1**, and
+  the 64-channel layer stays with the direct kernel. Routed (`STAGED_TILES`, the first
+  that fits; `convForwardRun` takes it where no subgroup kernel took the shape, before
+  the tiled GEMM). Held: `parity:ts` 229, `capture:ts` 18 / 18 on both adapters.
+  `compare:ts` on the 5080: the captured forward **0.66 → 0.54 ms at batch 1**; at
+  batch 16 **1.74 → 1.74** — the six deep dispatches went 0.73 → 0.51 ms of GPU, and the
+  wall did not follow, because the replay's forty dispatches sit at about 1.6 ms of GPU
+  now spread over layers that are each at their bench optimum (the 64- and 128-channel
+  direct layers 0.19 / 0.10 a dispatch) and a floor of launches under it. The eager
+  training step did not move either (10.6 ms): eager repacks the weights each step
+  (`tmwc`, 0.15 ms for a 512 × 512 × 9 weight, six of them) and that eats what the kernel
+  saves — the same bill the subgroup path pays in eager, and the reason `compiled`
+  hoists it. On metal-3 the stride-2 layers (which the subgroup kernels refuse) moved to
+  it: the unfused eager forward at batch 16 7.2 → 4.5 ms. **D3D12 is unmeasured** — the
+  Windows worker is in a lecture until its owner says otherwise.
+
 ## 4. After this
 
 Two candidates for the 5080's convolutions, which this plan did not move:

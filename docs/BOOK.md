@@ -2066,6 +2066,9 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts fused + captured, `nvidia / blackwell` **through Direct3D 12** (RTX 5050 Laptop, Chrome on Windows 11), **2026-09-21** — no subgroup matrices, scalar kernels throughout, the 8 × 8 GEMM tile | | **1.69 ms** | **7.29 ms** |
 | ONNX Runtime Web 1.29.0, D3D12, same run | | 5.67 ms | 15.69 ms |
 | ORT is faster than the captured network by | | 0.30× — borch ahead | **0.46×** — borch ahead |
+| borch.ts fused + captured, `nvidia / blackwell` (RTX 5080, Vulkan), **2026-09-21 (later)**, the deep layers on the scalar staged convolution (`docs/GEMM.md` §3) | | **0.54 ms** | 1.74 ms |
+| ONNX Runtime Web 1.29.0, same run | | 3.60 ms | 3.69 ms |
+| ORT is faster than the captured network by | | 0.15× — borch ahead | 0.47× — borch ahead |
 
 **The eager rows before 2026-09-21 timed the allocator with the forward.** The
 inference comparison's eager loop made each forward's intermediates on fresh buffers —
