@@ -1552,6 +1552,9 @@ export class Device {
       pass.setBindGroup(0, r.bindGroup);
       pass.dispatchWorkgroups(r.groups[0], r.groups[1], r.groups[2]);
       this.dispatches += 1;
+      // A replay writes what the recording wrote — an optimiser's step into a parameter
+      // among them — and the eager pack cache has to know.
+      this.noteWrites(r.buffers, r.access);
     }
   }
 
@@ -1572,6 +1575,7 @@ export class Device {
    */
   private returnToPool(buf: GPUBuffer): void {
     if (this.kept.has(buf)) return;
+    this.dropPacks(buf);
     if (this.inPool.has(buf)) {
       throw new Error(
         "a buffer was returned to the pool while already in it — the same memory would be " +
@@ -1788,6 +1792,85 @@ export class Device {
   private made = 0;
   private madeBytes = 0;
 
+  // ── Write epochs and the pack cache ───────────────────────────────────────────────
+  //
+  // **A weight that has not been written since is not repacked again.** The subgroup
+  // and staged convolutions read the weight tap-major (`tmw`, `tmwc`), and an eager
+  // forward laid that out on every call — a dispatch and a weight-sized write per deep
+  // layer per forward, three of the ResNet-18's twenty at 0.12–0.15 ms each of a 1.1 ms
+  // batch-1 GPU total (`compare:ts`, 2026-09-21). ORT prepacks at session creation. A
+  // recording hoists its own repacks (`Capture.hoist`); this is the eager forward's.
+  //
+  // What decides "written since" is not `Tensor.version` (only `mutate` bumps it — an
+  // optimiser's fused kernel writes a parameter without it) but the device: every
+  // dispatch bumps an epoch on each buffer its pipeline may write (`accesses`; all of
+  // them where the access is not declared), and so do copies, `writeWords` and a
+  // replay's records. A pack is kept beside its source's epoch and remade into the
+  // same buffer when the epoch has moved; it dies with its source.
+
+  private readonly writeEpoch = new WeakMap<GPUBuffer, number>();
+  private readonly packs = new WeakMap<GPUBuffer, Map<string, { epochs: number[]; buf: GPUBuffer }>>();
+  /** `packed` calls that returned a pack as it was, and that made or remade one. */
+  packHits = 0;
+  packMisses = 0;
+
+  /** The write epoch of `buffer` — how many times the device has been told it was written. */
+  epochOf(buffer: GPUBuffer): number {
+    return this.writeEpoch.get(buffer) ?? 0;
+  }
+
+  private noteWrites(buffers: readonly BindSlot[], access: readonly Access[] | undefined): void {
+    buffers.forEach((b, i) => {
+      if (access && access[i] === "r") return;
+      const buf = b instanceof GPUBuffer ? b : b.buffer;
+      this.writeEpoch.set(buf, (this.writeEpoch.get(buf) ?? 0) + 1);
+    });
+  }
+
+  private noteWrite(buffer: GPUBuffer): void {
+    this.writeEpoch.set(buffer, (this.writeEpoch.get(buffer) ?? 0) + 1);
+  }
+
+  /**
+   * A repack of `srcs[0]` (with the others, a bias say) under `key`, `count` words long,
+   * made by `make(dst)`. The first time, and whenever any source has been written since,
+   * `make` runs into a buffer kept outside every scope; otherwise the pack is returned as
+   * it is. **Under a capture the pack is made into a scope buffer as before** — the
+   * recording hoists what is replay-invariant and must not read a buffer it did not
+   * record the making of.
+   */
+  packed(srcs: readonly GPUBuffer[], key: string, count: number, make: (dst: GPUBuffer) => void): GPUBuffer {
+    const src = srcs[0];
+    if (src === undefined) throw new Error("packed: no source");
+    if (this.capturing) { const dst = this.alloc(count); make(dst); return dst; }
+    let m = this.packs.get(src);
+    if (!m) { m = new Map(); this.packs.set(src, m); }
+    const epochs = srcs.map((b) => this.epochOf(b));
+    const hit = m.get(key);
+    if (hit && hit.epochs.length === epochs.length && hit.epochs.every((e, i) => e === epochs[i])) {
+      this.packHits += 1;
+      return hit.buf;
+    }
+    this.packMisses += 1;
+    let dst = hit?.buf;
+    if (dst === undefined) {
+      dst = this.alloc(count);
+      this.rehome(dst, 0);
+      this.keep(dst);
+    }
+    make(dst);
+    m.set(key, { epochs, buf: dst });
+    return dst;
+  }
+
+  /** The packs made from `src` go with it. */
+  private dropPacks(src: GPUBuffer): void {
+    const m = this.packs.get(src);
+    if (!m) return;
+    this.packs.delete(src);
+    for (const { buf } of m.values()) this.unkeep(buf);
+  }
+
   /**
    * Keeps something alive regardless of scope. Parameters and optimizer
    * state use it.
@@ -1805,6 +1888,7 @@ export class Device {
    */
   unkeep(buffer: GPUBuffer): void {
     if (!this.kept.delete(buffer)) return;
+    this.dropPacks(buffer);
     this.flush();
     const size = this.sizes.get(buffer);
     if (size !== undefined) {
@@ -1966,6 +2050,7 @@ export class Device {
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(groups[0], groups[1], groups[2]);
     this.dispatches += 1;
+    this.noteWrites(buffers, this.accesses.get(pipeline));
     if (this.recording) {
       const access = this.accesses.get(pipeline);
       this.recording.push({ pipeline, bindGroup, groups: [groups[0], groups[1], groups[2]], buffers: [...buffers], sig: this.currentSig,
@@ -2013,6 +2098,7 @@ export class Device {
   /** Writes `words` at the start of `buffer` — a seed, a counter. */
   writeWords(buffer: GPUBuffer, words: Uint32Array<ArrayBuffer>): void {
     this.device.queue.writeBuffer(buffer, 0, words);
+    this.noteWrite(buffer);
   }
 
   /** A bind group for `pipeline` over `buffers`, in binding order. */
@@ -2098,6 +2184,7 @@ export class Device {
     // A copy cannot go inside a compute pass. Closing the pass and riding the same
     // encoder keeps the order and still submits once.
     this.openEncoder().copyBufferToBuffer(src, 0, dst, 0, bytes);
+    this.noteWrite(dst);
     // Under a capture the copy is part of the step — see `Recorded`.
     this.recording?.push({ copy: { bytes }, groups: [0, 0, 0], buffers: [src, dst] });
   }
@@ -2110,6 +2197,7 @@ export class Device {
    */
   copyRange(dst: GPUBuffer, dstOff: number, src: GPUBuffer, srcOff: number, bytes: number): void {
     this.openEncoder().copyBufferToBuffer(src, srcOff, dst, dstOff, bytes);
+    this.noteWrite(dst);
     this.recording?.push({ copy: { bytes, srcOff, dstOff }, groups: [0, 0, 0], buffers: [src, dst] });
   }
 

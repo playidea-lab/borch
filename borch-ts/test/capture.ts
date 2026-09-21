@@ -345,6 +345,23 @@ async function inference(lines: string[]): Promise<void> {
   const ref = await noGrad(() => byHand.forward(x)).toArray();
   want("compiled(model) on a model with its own fuse() is the hand-fused eval forward, bit for bit",
     maxAbs(ref, got) === 0 && maxAbs(got, again) === 0, `max |Δ| ${maxAbs(ref, got).toExponential(1)} · ${rec ? rec.dispatches : 0} dispatches a replay`);
+  // **The eager pack cache** (`Device.packed`): the fused eval forward's deep layers read
+  // the weight tap-major, and an eager forward repacked it every call. Under `noGrad` the
+  // pack is kept beside the weight's write epoch — a second forward repacks nothing,
+  // and a weight written in place (an in-place multiply, as an optimiser would) is
+  // repacked on the next. The reference forward above made the packs.
+  const dv = device();
+  const m0 = dv.packMisses, h0 = dv.packHits;
+  await scope(async () => noGrad(() => byHand.forward(x)).toArray());
+  const missesAgain = dv.packMisses - m0, hitsAgain = dv.packHits - h0;
+  want("eager pack cache: a second noGrad forward of the fused network repacks no weight", missesAgain === 0, `${missesAgain} repacks, ${hitsAgain} packs reused`);
+  // A 512 → 512 weight: one the deep layers pack (the 256 → 512 stride-2 layer beside it
+  // runs the tiled GEMM straight off the weight, and writing that one would repack nothing).
+  const deep = byHand.parameters().find((p) => p.shape.length === 4 && p.shape[0] === 512 && p.shape[1] === 512);
+  if (deep) noGrad(() => deep.mul_(1));
+  const m1 = dv.packMisses;
+  await scope(async () => noGrad(() => byHand.forward(x)).toArray());
+  want("eager pack cache: a weight written in place is repacked on the next forward", hitsAgain === 0 || dv.packMisses - m1 >= 1, `${dv.packMisses - m1} repacks after the write`);
   const fc = step.firstCall[0];
   if (fc) lines.push(`compiled(model) first call: recording ${fc.record.toFixed(0)} + the forward's own first run ${fc.wait.toFixed(0)} + tuning ${fc.tuning.toFixed(0)} (compile wave ${fc.compile.toFixed(0)}; ${fc.candidates} candidates) + re-record ${fc.rerecord.toFixed(0)} ms${step.tuned.flat().some((t) => t.chosen !== t.prior) ? " (a decision changed; the pure forward was recorded again)" : ""}`);
   step.dispose();
