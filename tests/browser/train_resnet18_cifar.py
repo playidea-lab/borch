@@ -1,6 +1,6 @@
 """A **trained** ResNet-18 (CIFAR-10) for the accuracy gates — `docs/INT8.md` Step 4.
 
-    uv run --with torch --with torchvision python tests/browser/train_resnet18_cifar.py [--epochs=20] [--slice=2000]
+    uv run --with torch --with torchvision --with onnx python tests/browser/train_resnet18_cifar.py [--epochs=20] [--slice=2000]
 
 The comparison's weights (`export_resnet18.py`) are torch's seed-0 draw: right for a
 logits gate, meaningless for a top-1. This trains the same network — the same class, so
@@ -75,9 +75,14 @@ def main(argv):
     state = {k: v for k, v in model.state_dict().items() if not k.endswith("num_batches_tracked")}
     (OUT / "resnet18_cifar_trained.safetensors").write_bytes(safetensors_bytes(state))
     x = torch.zeros(1, 3, 32, 32)
-    torch.onnx.export(model, x, str(OUT / "resnet18_cifar_trained.onnx"), input_names=["input"],
-                      output_names=["logits"], dynamic_axes={"input": {0: "batch"}, "logits": {0: "batch"}},
-                      opset_version=17, dynamo=False)
+    # The ONNX twin needs the `onnx` package (`--with onnx`); without it the rest is still
+    # written — the accuracy gate is borch.ts against torch, and ORT's row is a bonus.
+    try:
+        torch.onnx.export(model, x, str(OUT / "resnet18_cifar_trained.onnx"), input_names=["input"],
+                          output_names=["logits"], dynamic_axes={"input": {0: "batch"}, "logits": {0: "batch"}},
+                          opset_version=17, dynamo=False)
+    except Exception as e:  # noqa: BLE001 — the export is optional here, and the reason is printed
+        print(f"onnx export skipped: {str(e).splitlines()[0]}")
     s = 12345
     pix = np.empty(3 * 32 * 32, dtype=np.float32)
     for i in range(pix.size):
