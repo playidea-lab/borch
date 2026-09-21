@@ -1953,6 +1953,9 @@ prints the adapter:
 | `nvidia / blackwell` **through Direct3D 12** (RTX 5050 Laptop, Chrome on Windows 11), **2026-09-21** — borch.ts | **32.3** | **53.7** | **98.1** |
 | `nvidia / blackwell`, D3D12, same run — TF.js 4.22.0 | 174.8 | 334.9 | 659.2 |
 | ratio | **5.4×** | **6.2×** | **6.7×** |
+| `apple / metal-3`, **2026-09-22, borch-ts 0.6.0 as published** — borch.ts | **19.3** | **31.7** | **55.1** |
+| `apple / metal-3`, same run — TF.js 4.22.0 | 86.5 | 172.8 | 349.1 |
+| ratio | **4.5×** | **5.5×** | **6.3×** |
 
 The 2026-09-19 rows are the same page and the same TF.js bytes sixteen days later: TF.js
 did not move (86.4 → 86.5) and borch.ts went from 38.6 to 21.2 ms at batch 16 — the
@@ -1988,6 +1991,11 @@ borch's page, after borch:
 | `nvidia / blackwell`, **2026-09-21**, the scalar conv path swept on the card — borch.ts | **10.5** | **14.7** | **23.4** |
 | `nvidia / blackwell`, same run — jax-js 0.1.25 + optax 0.1.2 | 78.5 | 81.1 | 116.4 |
 | ratio | **7.5×** | **5.5×** | **5.0×** |
+| `apple / metal-3`, **2026-09-22, borch-ts 0.6.0 as published** — borch.ts | **19.3** | **31.8** | **55.3** |
+| `apple / metal-3`, same run — jax-js 0.1.25 + optax 0.1.2 | 68.1 | 97.1 | 152.2 |
+| ratio | **3.5×** | **3.1×** | **2.8×** |
+| `apple / metal-3`, same run — Burn 0.21 wgpu (wasm) | 264.7 | 520.7 | 1025.6 |
+| ratio | **13.7×** | **16.4×** | **18.5×** |
 
 Read with these attached. **jax-js**: it has no BatchNorm module and no cross-entropy, so
 both are written from its primitives the way its own MNIST example writes them; the
@@ -2073,6 +2081,9 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts **int8 static** + captured, same run | | **0.52 ms** | **0.94 ms** |
 | ONNX Runtime Web 1.29.0, same run | | 3.84 ms | 4.28 ms |
 | ORT is faster than the captured f32 / int8 network by | | 0.15× / 0.14× — borch ahead | 0.39× / 0.22× — borch ahead |
+| borch.ts fused + captured, `apple / metal-3`, **2026-09-22, 0.6.0 as published** | | **1.09 ms** | **4.12 ms** |
+| ONNX Runtime Web 1.29.0 f32 / **f16**, same run | | 4.35 / 3.29 ms | 5.30 / 4.26 ms |
+| ORT is faster than the captured network by (f32 / f16) | | 0.25× / 0.33× — borch ahead | 0.78× / **0.97×** — borch ahead of both |
 
 **ORT at its own reduced precisions, 2026-09-21.** The int8 rows above stood beside ORT
 running the f32 file, which is not the same question as "ORT at its best". So
@@ -2127,6 +2138,9 @@ mean of twenty after three warm-ups, a scope a forward, readback included:
 | borch.ts (bimm-ts) eager, the token row padded to 200 for the subgroup matrices | `apple / metal-3` | 4.45 ms | 12.52 ms |
 | borch.ts **captured** (`compiled` over the eval forward), 314 / 266 dispatches a replay | `apple / metal-3` | **2.05 ms** | **10.50 ms** |
 | ONNX Runtime Web 1.29.0 (WebGPU), same run | `apple / metal-3` | 5.01 ms | 19.32 ms |
+| ORT is faster than the captured network by | | 0.41× — borch ahead | **0.54×** — borch ahead |
+| borch.ts captured, `apple / metal-3`, **2026-09-22, 0.6.0 as published** | | **2.22 ms** | **10.64 ms** |
+| ONNX Runtime Web 1.29.0, same run | | 5.46 ms | 19.77 ms |
 | ORT is faster than the captured network by | | 0.41× — borch ahead | **0.54×** — borch ahead |
 | borch.ts eager, `nvidia / blackwell` (RTX 5080, Vulkan) — no f32 subgroup matrices on this card, the scalar GEMM throughout, 197 tokens unpadded | | 4.82 ms | 6.78 ms |
 | borch.ts captured, 298 / 274 dispatches a replay | `nvidia / blackwell` | **2.25 ms** | **4.94 ms** |
