@@ -386,6 +386,38 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   would there choose among scalar tiles only — a smaller question than the plan set, and
   one an int8 subgroup path would reopen.
 
+- **2026-09-21, Step 5 landed — kernel selection by measurement, cached** (c8c8db7f).
+  Not quite as written: the plan had the candidates timed "at the first recording of a
+  shape", and they are — but the recording is the timing's subject, not its victim.
+  `Device.choose(key, candidates)` sits where a rule picks among kernels (the
+  convolution's path — direct, the staged tiles that fit, the tiled GEMM — and the
+  product's tile among the adapter's configurations and the old tile), the rule's pick
+  first. A `compiled` step's first recording runs with `tuneMode = "collect"`: every
+  choice is queued, the rule's pick is what is recorded. Then `runTuning` times each
+  candidate's dispatches on the recording's own buffers under the profiler
+  (`TUNE_ROUNDS` × `TUNE_REPS`, the minimum), caches the fastest by `adapter|key` in
+  memory and in `localStorage` (`borch-ts.tune.v1` — the next session pays nothing), and
+  puts the recording's outputs back. Where a decision changed **and the recording writes
+  no state** (`Capture.mutatesState()` — an inference forward), the recording is made
+  again with the chosen kernels; a training step is made once, and its decisions serve
+  the next recording. Two tries before that: a separate tuning pass ahead of the
+  recording ran the optimizer a second time (Δloss 1.8 against eager — the tuner had
+  trained the model a step); a re-record after restoring the live-ins did the same
+  (the snapshot came after the step). The hand rules stay the prior and the whole answer
+  without `timestamp-query`.
+
+  metal-3, the ResNet-18 training step: **5 decisions, 2 changed** — two convolutions
+  the rule sent to the tiled GEMM (a grid under 64 workgroups) measured faster direct,
+  0.319 → 0.230 and 0.035 → 0.025 ms — 0.10 ms of GPU a step. `capture:ts` gains two
+  checks (nothing tuned slower than the rule's pick; decisions collected where the
+  device can time) and holds its bit-for-bit gates by taking the eager reference *after*
+  the first call: eager and replay make the same decision, the rule's kernels and the
+  tuned ones differ by a rounding. The gate's other half — "no shape in the three
+  models' recordings slower than the rule's choice, two runs" — is the minimum of two
+  rounds per candidate, by construction; the first-record overhead is the timing of
+  every candidate, once, and is not yet measured as a number. The 5080's numbers follow
+  when its worker answers.
+
 ## 6. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |
