@@ -288,7 +288,17 @@ async function reportOrtVariants(o: Ort, probe: Probe, batches: readonly number[
     if (!file) { lines.push(`ORT Web ${variant}: no resnet18_cifar_${variant}.onnx (tests/browser/export_ort_variants.py writes it) — not measured`); continue; }
     const providers = variant === "int8" ? ["webgpu", "wasm"] : ["webgpu"];
     for (const ep of providers) {
-      const session = await o.InferenceSession.create(file, { executionProviders: [ep] });
+      // **A file ORT cannot run is a row, not a crash**: on the RTX 5080's Chrome (Linux,
+      // Vulkan) the f16 session refuses at creation — "Program Transpose requires f16 but
+      // the device does not support it" — and that sentence is the measurement.
+      let session: OrtSession;
+      try {
+        session = await o.InferenceSession.create(file, { executionProviders: [ep] });
+      } catch (err) {
+        const why = String(err instanceof Error ? err.message : err).split("\n")[0] ?? "";
+        lines.push(`ORT Web ${variant} on ${ep}: could not run — ${why.replace(/^Can't create a session\. ERROR_CODE: \d+, ERROR_MESSAGE: /, "")}`);
+        continue;
+      }
       const out = (await session.run(feed(Float32Array.from(probe.input), 1)))["logits"]?.data ?? new Float32Array();
       const gap = maxAbsDiff(out, probe.logits);
       const cells: string[] = [];
