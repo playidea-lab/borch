@@ -308,10 +308,32 @@ async function calibrateKicks(device: GPUDevice, canTime: boolean): Promise<bool
 function gemmConfigsFor(_vendor: string): readonly TiledConfig[] {
   // A bench or a bisection may switch the re-tiled GEMM off; nothing else sets this.
   if ((globalThis as { BORCH_NO_RETILE?: boolean }).BORCH_NO_RETILE) return [];
+  // **Direct3D 12 is the third answer** (`docs/GEMM.md` ledger, 2026-09-21, an RTX 5050
+  // Laptop through Chrome on Windows 11): there the 8 × 8 micro-tile on a 128 × 128 tile
+  // wins — 2048³ 6.35 → 3.60 ms (1.77×) against the 8 × 4's 4.88 and the plain vec4's
+  // 5.56; the deep ResNet GEMM shapes 0.43 → 0.26. The compiler under D3D12 keeps
+  // sixty-four accumulators in registers where Metal's and Vulkan's do not. The API is
+  // not in `GPUAdapterInfo`; Chrome on Windows reaches WebGPU through D3D12 by default,
+  // so the platform stands for it.
+  if (isWindows()) {
+    return [
+      { TM: 128, TN: 128, RM: 8, RN: 8, KT: 16, vec4: true, dbuf: false },
+      { TM: 128, TN: 64, RM: 8, RN: 4, KT: 16, vec4: true, dbuf: false },
+      { TM: 64, TN: 64, RM: 4, RN: 4, KT: 16, vec4: true, dbuf: false },
+    ];
+  }
   return [
     { TM: 128, TN: 64, RM: 8, RN: 4, KT: 16, vec4: true, dbuf: false },
     { TM: 64, TN: 64, RM: 4, RN: 4, KT: 16, vec4: true, dbuf: false },
   ];
+}
+
+/** Whether the page runs on Windows — where Chrome's WebGPU is Direct3D 12. Read from
+ *  `userAgentData.platform` where it exists, `navigator.platform` otherwise. */
+function isWindows(): boolean {
+  const nav = globalThis.navigator as (Navigator & { userAgentData?: { platform?: string } }) | undefined;
+  const platform = nav?.userAgentData?.platform ?? nav?.platform ?? "";
+  return /^win/i.test(platform);
 }
 
 /** Which adapter, on one line. Empty fields are dropped — the browser hides most of
