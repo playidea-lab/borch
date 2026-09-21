@@ -23,7 +23,7 @@
 
 import { Tensor, noGrad } from "../src/tensor.js";
 import { Device } from "../src/device.js";
-import { clearInt8, fuseForInference, quantizeForInt8 } from "../src/nn.js";
+import { calibrateInt8, clearInt8, fuseForInference, quantizeForInt8 } from "../src/nn.js";
 import { compiled } from "../src/compile.js";
 import { load } from "../src/serialize.js";
 import { exportOnnx } from "../src/onnx.js";
@@ -230,15 +230,23 @@ async function reportAccuracy(): Promise<string[]> {
   model.eval();
   fuseForInference(model);
   const BATCH = 100;
-  const f32 = await top1((x) => model.forward(x), pixels, labels, BATCH);
-  const lines = [`accuracy on ${n} CIFAR-10 test images (trained weights): borch.ts f32 fused ${(100 * f32).toFixed(2)}%`];
+  // The slice is split: the second half calibrates the static scales, the first half is
+  // scored — so the static int8 forward is not measured on the images that set its scales.
+  const half = Math.floor(n / 2);
+  const scorePix = pixels.subarray(0, half * 3072), scoreLab = labels.subarray(0, half);
+  const calibPix = pixels.subarray(half * 3072);
+  const f32 = await top1((x) => model.forward(x), scorePix, scoreLab, BATCH);
+  const lines = [`accuracy on ${half} CIFAR-10 test images (trained weights): borch.ts f32 fused ${(100 * f32).toFixed(2)}%`];
   if (Device.subgroupInt8) {
     const layers = await quantizeForInt8(model);
-    const q = await top1((x) => model.forward(x), pixels, labels, BATCH);
+    const q = await top1((x) => model.forward(x), scorePix, scoreLab, BATCH);
+    await calibrateInt8(model, calibPix, BATCH, [3, 32, 32]);
+    const qs = await top1((x) => model.forward(x), scorePix, scoreLab, BATCH);
     clearInt8(model);
-    const drop = 100 * (f32 - q);
     const GATE_POINTS = 0.5;
-    lines.push(`accuracy on the same images: borch.ts int8 (${layers} layers) ${(100 * q).toFixed(2)}% · ${drop >= 0 ? "−" : "+"}${Math.abs(drop).toFixed(2)} points · gate within ${GATE_POINTS}: ${drop <= GATE_POINTS ? "passed" : "**FAILED — the int8 path is not routed to**"}`);
+    const verdict = (drop: number) => `${drop >= 0 ? "−" : "+"}${Math.abs(drop).toFixed(2)} points · gate within ${GATE_POINTS}: ${drop <= GATE_POINTS ? "passed" : "**FAILED — the int8 path is not routed to**"}`;
+    lines.push(`accuracy on the same images: borch.ts int8 dynamic (${layers} layers) ${(100 * q).toFixed(2)}% · ${verdict(100 * (f32 - q))}`);
+    lines.push(`accuracy on the same images: borch.ts int8 static (scales from the other ${n - half}) ${(100 * qs).toFixed(2)}% · ${verdict(100 * (f32 - qs))}`);
   } else {
     lines.push("accuracy: no int8 configuration on this adapter — the int8 gate runs where there is one");
   }
@@ -373,6 +381,18 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
       const qRec = q.recordingOf(xb);
       lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts int8 + captured ${qMs.toFixed(2).padStart(8)} ms · ${qRec ? qRec.dispatches : 0} dispatches/replay · ${q.int8Layers} layers int8 · max |int8 − f32| ${qGap.toExponential(1)} (${(qGap / scale).toExponential(1)} of the logits' scale)`);
       q.dispose();
+      // **The static scales**: calibrated on seeded pixels (the scales only have to be
+      // finite for a clock; the accuracy section calibrates on real images), then the
+      // same forward with the quantise passes gone where a layer feeds a layer.
+      const calib = seeded(64);
+      await calibrateInt8(model, calib.pixels, 16, [3, 32, 32]);
+      const st = compiled((x: Tensor) => noGrad(() => model.forward(x)));
+      const stOut = await (await st.call(xb)).toArray();
+      const stGap = maxAbsDiff(stOut, eagerFused);
+      const stMs = await timed(async () => (await st.call(xb)).toArray(), 3, 20);
+      const stRec = st.recordingOf(xb);
+      lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts int8 static + captured ${stMs.toFixed(2).padStart(8)} ms · ${stRec ? stRec.dispatches : 0} dispatches/replay · max |int8 − f32| ${stGap.toExponential(1)} (${(stGap / scale).toExponential(1)} of the logits' scale)`);
+      st.dispose();
       // The quantisation is a property of the model: back to f32 for the rows after this
       // one (the first run left it on, and the batch-16 f32 rows measured int8).
       clearInt8(model);

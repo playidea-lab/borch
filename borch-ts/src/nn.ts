@@ -26,7 +26,7 @@ import { convInt8CoPad } from "./kernels.js";
 import { quantizeConvWeightInt8TapMajor } from "./quant.js";
 import {
   device, type InterpolateMode, keepAlive, noGrad, type PadMode, type Reduction,
-  Tensor, batchedMatmul, type Int8ConvWeight } from "./tensor.js";
+  Tensor, batchedMatmul, type Int8ConvWeight, setInt8Calibrating } from "./tensor.js";
 
 /**
  * A number printed the way Python prints a float — `2.0`, not `2`.
@@ -6746,6 +6746,48 @@ export async function quantizeForInt8(m: Module): Promise<number> {
     if (mod instanceof ConvND && (await mod.quantizeInt8())) taken++;
   }
   return taken;
+}
+
+/**
+ * **The static scales** (`docs/INT8.md`): the int8 layers run f32 over the calibration
+ * images while accumulating `max|x|` of their input and `max|out|` of their output into
+ * two words each (an atomic maximum, no readback until the end), then each layer keeps
+ * both as its scales — its input quantised in one pass by the first, its output packed at
+ * its own store by the second for the next int8 layer, which then needs no pass at all.
+ * `pixels` is NCHW f32, `batch` images a forward. Returns how many layers were calibrated.
+ * After `quantizeForInt8`; `clearInt8` undoes both.
+ */
+export async function calibrateInt8(m: Module, pixels: Float32Array, batch: number, shape: readonly number[]): Promise<number> {
+  const layers: ConvND[] = [];
+  for (const [, mod] of m.namedModules()) if (mod instanceof ConvND && mod.int8) layers.push(mod);
+  const per = shape.reduce((a, b) => a * b, 1);
+  const count = Math.floor(pixels.length / per);
+  for (const conv of layers) {
+    const w = conv.int8;
+    if (!w) continue;
+    w.calib = { inMax: keepAlive(Tensor.owned([1], 0)).buffer, outMax: keepAlive(Tensor.owned([1], 0)).buffer };
+  }
+  setInt8Calibrating(true);
+  try {
+    for (let i = 0; i < count; i += batch) {
+      const b = Math.min(batch, count - i);
+      const x = Tensor.from(pixels.subarray(i * per, (i + b) * per), [b, ...shape]);
+      noGrad(() => m.forward(x));
+    }
+    await device().synchronize();
+  } finally {
+    setInt8Calibrating(false);
+  }
+  for (const conv of layers) {
+    const w = conv.int8;
+    if (!w || !w.calib) continue;
+    const inMax = (await new Tensor(w.calib.inMax, [1]).toArray())[0] ?? 0;
+    const outMax = (await new Tensor(w.calib.outMax, [1]).toArray())[0] ?? 0;
+    w.inMax = keepAlive(Tensor.owned([1], inMax)).buffer;
+    w.outMax = keepAlive(Tensor.owned([1], outMax)).buffer;
+    delete w.calib;
+  }
+  return layers.length;
 }
 
 /** Back to f32: every convolution's int8 weight dropped (the f32 weight never left). */

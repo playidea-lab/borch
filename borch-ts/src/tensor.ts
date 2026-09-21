@@ -916,6 +916,9 @@ function binarySaved(name: string, a: Tensor, b: Tensor): [readonly Tensor[], bo
 }
 
 export class Tensor implements Node<Tensor> {
+  /** The int8 twin of these values, when an int8 layer with a static output scale made
+   *  them (`Int8Twin`); read by the int8 layer that consumes this tensor directly. */
+  int8Twin: Int8Twin | null = null;
   /**
    * **Not `readonly`** — one place, `mutate`, edits it.
    *
@@ -11713,29 +11716,58 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       const n = s.N * s.C * IH * IW;
       const total = outShape.reduce((a, b) => a * b, 1);
       const d = dev();
-      // The per-tensor scale: max|x| by one atomic pass over a zeroed word.
-      const max = d.alloc(1);
-      d.copyInto(max, zeroWordBuffer(), 1);
       const parts = absMaxParts(n);
-      d.run(d.pipeline(`amx:${n}:${parts}`, () => absMaxAtomic(n, parts)), [this.buffer, max], [parts, 1, 1]);
-      const xq = d.alloc(n / 4);
-      d.run1d(d.pipeline(`qa8:${s.N}:${s.C}:${IH}:${IW}`, () => quantizeActivationInt8(s.N, s.C, IH, IW)), [this.buffer, max, xq], n / 4);
+      // **Calibrating**: the f32 layer, with max|x| and max|out| accumulated into the
+      // layer's two words across the calibration set — read back once at the end.
+      if (int8Calibrating && int8.calib) {
+        d.run(d.pipeline(`amx:${n}:${parts}`, () => absMaxAtomic(n, parts)), [this.buffer, int8.calib.inMax], [parts, 1, 1]);
+        const y = this.convNDFused(weight, bias, stride, padding, dilation, groups, relu, residual);
+        const po = absMaxParts(total);
+        d.run(d.pipeline(`amx:${total}:${po}`, () => absMaxAtomic(total, po)), [y.buffer, int8.calib.outMax], [po, 1, 1]);
+        return y;
+      }
+      // **The input's int8 words and scale — three ways, cheapest first.** The producer's
+      // twin (an int8 layer with a static output scale: no pass at all); the layer's own
+      // static input scale (one quantise pass); or the dynamic scale (a zeroing copy, the
+      // maximum, the quantise).
+      let xq: GPUBuffer;
+      let max: GPUBuffer;
+      if (this.int8Twin) {
+        ({ words: xq, max } = this.int8Twin);
+      } else {
+        if (int8.inMax) {
+          max = int8.inMax;
+        } else {
+          max = d.alloc(1);
+          d.copyInto(max, zeroWordBuffer(), 1);
+          d.run(d.pipeline(`amx:${n}:${parts}`, () => absMaxAtomic(n, parts)), [this.buffer, max], [parts, 1, 1]);
+        }
+        xq = d.alloc(n / 4);
+        d.run1d(d.pipeline(`qa8:${s.N}:${s.C}:${IH}:${IW}`, () => quantizeActivationInt8(s.N, s.C, IH, IW)), [this.buffer, max, xq], n / 4);
+      }
       const out = d.alloc(total);
       const ep: ConvEpilogue = { relu, residual: residual !== null };
       const tag = `${relu ? "r" : ""}${residual ? "a" : ""}`;
-      const tail = [...(bias ? [bias.buffer] : []), ...(residual ? [residual.buffer] : []), out];
+      // With a static output scale the store also packs the output — the twin for the next
+      // int8 layer. Four channels a word wants O in fours, which O in sixteens gives.
+      const qo = int8.outMax !== undefined;
+      const outQ = qo ? d.alloc(total / 4) : null;
+      const qTail = qo && outQ && int8.outMax ? [int8.outMax, outQ] : [];
+      const tail = [...(bias ? [bias.buffer] : []), ...(residual ? [residual.buffer] : []), out, ...qTail];
       const splits = convInt8Split(s);
       if (splits === 1) {
-        d.run(d.pipeline(`ci8:${key}:${bias ? "b" : "n"}:${tag}`, () => convForwardInt8(s, 1, bias !== null, ep)),
+        d.run(d.pipeline(`ci8:${key}:${bias ? "b" : "n"}:${tag}${qo ? ":q" : ""}`, () => convForwardInt8(s, 1, bias !== null, ep, qo)),
           [xq, int8.packed, max, int8.scales, ...tail], convInt8Grid(s, 1));
       } else {
         const slab = d.alloc(total * splits);
         d.run(d.pipeline(`ci8:${key}:s${splits}`, () => convForwardInt8(s, splits, false)),
           [xq, int8.packed, max, int8.scales, slab], convInt8Grid(s, splits));
-        d.run1d(d.pipeline(`ssc8:${key}:${splits}:${bias ? "b" : "n"}:${tag}`, () => sumSplitsConv(s, splits, bias !== null, ep)),
-          [slab, ...tail], total);
+        d.run1d(d.pipeline(`ssc8:${key}:${splits}:${bias ? "b" : "n"}:${tag}${qo ? ":q" : ""}`, () => sumSplitsConv(s, splits, bias !== null, ep, qo)),
+          [slab, ...tail], qo ? total / 4 : total);
       }
-      return new Tensor(out, outShape);
+      const y = new Tensor(out, outShape);
+      if (qo && outQ && int8.outMax) y.int8Twin = { words: outQ, max: int8.outMax };
+      return y;
     });
   }
 
@@ -13843,8 +13875,25 @@ function zeroWordBuffer(): GPUBuffer {
   return zeroWordTensor.buffer;
 }
 
-/** A convolution weight quantised for the int8 kernel — see `ConvND.quantizeInt8`. */
-export interface Int8ConvWeight { readonly packed: GPUBuffer; readonly scales: GPUBuffer; readonly coPad: number }
+/** A convolution weight quantised for the int8 kernel — see `ConvND.quantizeInt8` — and,
+ *  after `calibrateInt8`, the layer's static scales: one word each, `max|x|` of its input
+ *  and of its output over the calibration set (`docs/INT8.md`, the static scale). */
+export interface Int8ConvWeight {
+  readonly packed: GPUBuffer; readonly scales: GPUBuffer; readonly coPad: number;
+  inMax?: GPUBuffer; outMax?: GPUBuffer;
+  /** During calibration: the two words the forward accumulates `max|x|` / `max|out|` into. */
+  calib?: { readonly inMax: GPUBuffer; readonly outMax: GPUBuffer };
+}
+
+/** An int8 twin of a tensor's values — packed four channels a word with the scale word
+ *  they were quantised by — left on the output of an int8 layer whose output scale is
+ *  static, for the int8 layer that reads it next. */
+export interface Int8Twin { readonly words: GPUBuffer; readonly max: GPUBuffer }
+
+/** Whether the int8 layers are calibrating: running f32 and accumulating their input and
+ *  output maxima (`calibrateInt8`), rather than running int8. */
+let int8Calibrating = false;
+export function setInt8Calibrating(on: boolean): void { int8Calibrating = on; }
 
 /** Folds a broadcast gradient back to the target shape. Identical shapes pass
  *  through. */

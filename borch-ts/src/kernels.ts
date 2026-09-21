@@ -2137,7 +2137,13 @@ export function convInt8Grid(s: ConvNDShape, splits: number): [number, number, n
  * workgroup memory and the lanes write `f32(c) · (Max[0] / 127) · SW[co] + B[co]`, the
  * residual and the relu, in NCHW.
  */
-export function convForwardInt8(s: ConvNDShape, splits: number, hasBias: boolean, epilogue?: ConvEpilogue): string {
+/** The WGSL that packs four consecutive channels' values `q0..q3` (already clamped
+ *  i32 in [-127, 127]) into one word. */
+function packWord(names: readonly string[]): string {
+  return names.map((q, j) => `(u32(${q}) & 0xffu)${j ? ` << ${j * 8}u` : ""}`).join(" | ");
+}
+
+export function convForwardInt8(s: ConvNDShape, splits: number, hasBias: boolean, epilogue?: ConvEpilogue, quantOut = false): string {
   const [IH = 1, IW = 1] = s.inDims;
   const [OH = 1, OW = 1] = s.outDims;
   const [KH = 1, KW = 1] = s.kernel;
@@ -2158,6 +2164,11 @@ export function convForwardInt8(s: ConvNDShape, splits: number, hasBias: boolean
   const XS = KW * TN * 8;                           // words: the taps of a kernel row, a tile each
   const slot = direct && hasBias ? 4 : 3;
   const OT = CI8_SUBGROUPS * TN * CI8_CO_SG;
+  // **Quantised on the way out** (`docs/INT8.md`, the static scale): with a calibrated
+  // maximum of this layer's output, the store also packs the output four channels a
+  // word — the next int8 layer's input, with no quantise pass of its own. Unsplit only.
+  const qo = direct && quantOut;
+  const outSlot = direct && epilogue?.residual ? slot + 2 : slot + 1;
   const mma: string[] = [];
   for (let kw = 0; kw < KW; kw++) {
     mma.push(`      { let wBase = ((kh * ${KW}u + ${kw}u) * ${s.C}u + ci0) * ${Op}u + co;
@@ -2178,7 +2189,9 @@ enable chromium_experimental_subgroup_matrix;
 @group(0) @binding(3) var<storage, read> SW: array<f32>;
 ${direct && hasBias ? "@group(0) @binding(4) var<storage, read> B: array<f32>;" : ""}
 ${direct ? residualBinding(epilogue, slot + 1) : ""}
-@group(0) @binding(${direct && epilogue?.residual ? slot + 2 : slot + 1}) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(${outSlot}) var<storage, read_write> Out: array<f32>;
+${qo ? `@group(0) @binding(${outSlot + 1}) var<storage, read> OutMax: array<f32>;
+@group(0) @binding(${outSlot + 2}) var<storage, read_write> OutQ: array<i32>;` : ""}
 var<workgroup> pl: array<i32, ${stage}>;
 var<workgroup> xs: array<i32, ${XS}>;
 var<workgroup> ot: array<i32, ${OT}>;
@@ -2243,7 +2256,27 @@ ${mma.join("\n")}
   subgroupMatrixStore(&ot, sid * ${TN * CI8_CO_SG}u + ${16 * CI8_CO_SG + 16}u, c11, false, ${CI8_CO_SG}u);
   workgroupBarrier();
   let sA = Max[0] / 127.0;
-  for (var e = siv; e < ${TN * CI8_CO_SG}u; e = e + 32u) {
+${qo ? `  let invOut = select(0.0, 127.0 / OutMax[0], OutMax[0] > 0.0);
+  // Four channels a lane: the f32 values out, and their word.
+  for (var e = siv; e < ${TN * (CI8_CO_SG / 4)}u; e = e + 32u) {
+    let px = e / ${CI8_CO_SG / 4}u;
+    let w = e - px * ${CI8_CO_SG / 4}u;
+    let p = p0 + px;
+    let o0 = co + w * 4u;
+    if (p < ${P}u && o0 < ${s.O}u) {
+      let n = p / ${plane}u;
+      let q = p - n * ${plane}u;
+      var qs = array<i32, 4>();
+      for (var j = 0u; j < 4u; j = j + 1u) {
+        let o = o0 + j;
+        let idx = (n * ${s.O}u + o) * ${plane}u + q;
+        var v = f32(ot[sid * ${TN * CI8_CO_SG}u + px * ${CI8_CO_SG}u + w * 4u + j]) * sA * SW[o];
+${hasBias ? "        v = v + B[o];\n" : ""}${epilogueWgsl(epilogue, "v", "idx").split("\n").map((l) => (l ? "      " + l : l)).join("\n")}        Out[idx] = v;
+        qs[j] = clamp(i32(round(v * invOut)), -127, 127);
+      }
+      OutQ[(n * ${s.O / 4}u + o0 / 4u) * ${plane}u + q] = i32(${packWord(["qs[0]", "qs[1]", "qs[2]", "qs[3]"])});
+    }
+  }` : `  for (var e = siv; e < ${TN * CI8_CO_SG}u; e = e + 32u) {
     let px = e / ${CI8_CO_SG}u;
     let cl = e - px * ${CI8_CO_SG}u;
     let p = p0 + px;
@@ -2255,7 +2288,7 @@ ${mma.join("\n")}
       var v = f32(ot[sid * ${TN * CI8_CO_SG}u + e]) * sA * SW[o];
 ${direct ? `${hasBias ? "      v = v + B[o];\n" : ""}${epilogueWgsl(epilogue, "v", "idx").split("\n").map((l) => (l ? "    " + l : l)).join("\n")}      Out[idx] = v;` : `      Out[part * ${total}u + idx] = v;`}
     }
-  }
+  }`}
 }`;
 }
 
@@ -5423,11 +5456,46 @@ export function convForwardSplit(s: ConvNDShape): number {
 
 /** Sums a split forward's partials and adds the bias per output channel. */
 export function sumSplitsConv(
-  s: ConvNDShape, splits: number, hasBias: boolean, epilogue?: ConvEpilogue,
+  s: ConvNDShape, splits: number, hasBias: boolean, epilogue?: ConvEpilogue, quantOut = false,
 ): string {
   const outSpace = s.outDims.reduce((a, b) => a * b, 1);
   const n = s.N * s.O * outSpace;
   const slot = hasBias ? 2 : 1;
+  const outSlot = epilogue?.residual ? slot + 1 : slot;
+  if (quantOut) {
+    // **Quantised on the way out** (`docs/INT8.md`, the static scale): a thread a word of
+    // four consecutive channels at one position — the sum, the bias, the epilogue and
+    // the f32 value for each, then the packed word for the next int8 layer.
+    const words = n / 4;
+    return `
+@group(0) @binding(0) var<storage, read> Parts: array<f32>;
+${hasBias ? "@group(0) @binding(1) var<storage, read> B: array<f32>;" : ""}
+${residualBinding(epilogue, slot)}
+@group(0) @binding(${outSlot}) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(${outSlot + 1}) var<storage, read> OutMax: array<f32>;
+@group(0) @binding(${outSlot + 2}) var<storage, read_write> OutQ: array<i32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(words)}
+  let invOut = select(0.0, 127.0 / OutMax[0], OutMax[0] > 0.0);
+  let q = gid % ${outSpace}u;
+  let no4 = gid / ${outSpace}u;
+  let nn = no4 / ${s.O / 4}u;
+  let o0 = (no4 - nn * ${s.O / 4}u) * 4u;
+  var qs = array<i32, 4>();
+  for (var j = 0u; j < 4u; j = j + 1u) {
+    let o = o0 + j;
+    let idx = (nn * ${s.O}u + o) * ${outSpace}u + q;
+    var v = 0.0;
+    for (var s = 0u; s < ${splits}u; s = s + 1u) {
+      v = v + Parts[s * ${n}u + idx];
+    }
+${hasBias ? `    v = v + B[o];\n` : ""}${epilogueWgsl(epilogue, "v", "idx").split("\n").map((l) => (l ? "  " + l : l)).join("\n")}    Out[idx] = v;
+    qs[j] = clamp(i32(round(v * invOut)), -127, 127);
+  }
+  OutQ[gid] = i32(${packWord(["qs[0]", "qs[1]", "qs[2]", "qs[3]"])});
+}`;
+  }
   return `
 @group(0) @binding(0) var<storage, read> Parts: array<f32>;
 ${hasBias ? "@group(0) @binding(1) var<storage, read> B: array<f32>;" : ""}
