@@ -431,3 +431,102 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
   }
   return lines.join("\n");
 }
+
+
+// ── transformer inference: ViT-Tiny/16 in borch.ts (bimm-ts) and in ORT Web ─────────
+//
+// The ResNet above is convolutions; a transformer forward is batched matmuls, softmax,
+// layer norms and GELU over a token row — a different set of kernels, and ORT has ones
+// written for each (a fused attention among them). The weights are timm's
+// `vit_tiny_patch16_224` at seed 0, exported by `tests/browser/export_vit_tiny.py`; the
+// borch side is bimm-ts's `vitTinyPatch16`, which keys its state dict as timm does. The
+// page imports bimm (this package does not depend on it, as `cpu.ts` says) and passes the
+// factory in.
+
+/** What this file needs of bimm-ts: the ViT-Tiny factory and the module it returns. */
+export interface VitModule {
+  loadStateDict(table: Record<string, Tensor>, strict: boolean): { missing: string[]; unexpected: string[] };
+  eval(): unknown;
+  forward(x: Tensor): Tensor;
+  alignTokens: boolean;
+}
+export interface Bimm { vitTinyPatch16(numClasses: number): VitModule }
+
+interface VitProbe extends Probe { timm: string; model: string }
+
+const VIT_CLASSES = 1000;
+const VIT_PIXELS = 3 * 224 * 224;
+
+/** GPU time by kind of kernel over one profiled forward, hottest first, with counts. */
+function gpuByKind(d: Device): string {
+  const hot: [string, number, number][] = [];
+  for (const [kind, ns] of d.nsByKind) hot.push([kind, ns / 1e6, d.countByKind.get(kind) ?? 1]);
+  hot.sort((p, q) => q[1] - p[1]);
+  const total = hot.reduce((a, [, ms]) => a + ms, 0);
+  return `GPU time (ms, total ${total.toFixed(1)}, ×count): `
+    + hot.slice(0, 8).map(([k, ms, n]) => `${k} ${ms.toFixed(2)}${n > 1 ? `×${n}` : ""}`).join(" · ")
+    + (d.profileDropped ? ` · ${d.profileDropped} dropped` : "");
+}
+
+export async function reportInferVit(bimm: Bimm, batches: readonly number[] = [1, 16]): Promise<string> {
+  const probeBytes = await maybeBytes(OUT + "vit_tiny.probe.json");
+  const weights = await maybeBytes(OUT + "vit_tiny.safetensors");
+  if (!probeBytes || !weights) return "ViT-Tiny/16: no exported weights (tests/browser/export_vit_tiny.py writes them) — not measured";
+  const probe = JSON.parse(new TextDecoder().decode(probeBytes)) as VitProbe;
+  const lines: string[] = [`${probe.model} — weights from timm ${probe.timm} / torch ${probe.torch}, exported by tests/browser/export_vit_tiny.py`];
+
+  const model = bimm.vitTinyPatch16(VIT_CLASSES);
+  const report = model.loadStateDict(load(weights) as Record<string, Tensor>, true);
+  if (report.missing.length || report.unexpected.length) {
+    throw new Error(`ViT state dict did not fit: missing ${report.missing.join(",")} unexpected ${report.unexpected.join(",")}`);
+  }
+  model.eval();
+  const x1 = Tensor.from(Float32Array.from(probe.input), probe.shape);
+  const ours = await noGrad(() => model.forward(x1)).toArray();
+  const oursGap = maxAbsDiff(ours, probe.logits);
+
+  const o = ort();
+  o.env.wasm.wasmPaths = "../../vendor/";
+  const session = await o.InferenceSession.create(OUT + "vit_tiny.onnx", { executionProviders: ["webgpu"] });
+  const feed = (data: Float32Array, b: number) => ({ input: new o.Tensor("float32", data, [b, 3, 224, 224]) });
+  const theirs = (await session.run(feed(Float32Array.from(probe.input), 1)))["logits"]?.data ?? new Float32Array();
+  const theirsGap = maxAbsDiff(theirs, probe.logits);
+
+  const GATE = 1e-3;
+  let scale = 0; for (const v of probe.logits) scale = Math.max(scale, Math.abs(v));
+  lines.push(`gate: max |logits − torch| on the probe input — borch.ts ${oursGap.toExponential(2)} · ORT Web ${theirsGap.toExponential(2)} · limit ${GATE} (logits' scale ${scale.toFixed(2)})`
+    + ` · tokens ${model.alignTokens && Device.subgroupMatrix ? "padded 197 → 200 for the subgroup matrices" : "197, unpadded"}`);
+  if (oursGap > GATE || theirsGap > GATE) {
+    lines.push("**a runtime does not reproduce torch's logits — its speed below is a speed of something else**");
+  }
+
+  for (const b of batches) {
+    const data = new Float32Array(b * VIT_PIXELS);
+    for (let i = 0; i < b; i++) data.set(probe.input, i * VIT_PIXELS);
+    const xb = Tensor.from(data, [b, 3, 224, 224]);
+    // A scope a forward, as the ResNet rows (the allocator's time is not the forward's).
+    const oursMs = await timed(() => scope(async () => noGrad(() => model.forward(xb)).toArray()), 3, 20);
+    const theirsMs = await timed(() => session.run(feed(data, b)), 3, 20);
+    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts eager ${oursMs.toFixed(2).padStart(8)} ms · ORT Web ${theirsMs.toFixed(2).padStart(8)} ms · ratio ${(oursMs / theirsMs).toFixed(2)}× (borch/ORT)`);
+    const d = dev();
+    const d0 = d.dispatches;
+    await scope(async () => noGrad(() => model.forward(xb)).toArray());
+    const dispatches = d.dispatches - d0;
+    await scope(() => d.profile(() => noGrad(() => model.forward(xb)).toArray()));
+    lines.push(`           borch.ts eager ${dispatches} dispatches/forward · ${gpuByKind(d)}`);
+    // The forward recorded and replayed, held to torch's logits like the eager one (the
+    // tuner may pick another matmul configuration for the replay, so it is not held to
+    // the eager forward bit for bit — the gate is the same for both).
+    const step = compiled((x: Tensor) => noGrad(() => model.forward(x)));
+    const captured = await (await step.call(xb)).toArray();
+    const capGap = maxAbsDiff(captured.subarray(0, VIT_CLASSES), probe.logits);
+    const capMs = await timed(async () => (await step.call(xb)).toArray(), 3, 20);
+    const rec = step.recordingOf(xb);
+    await scope(() => d.profile(async () => (await step.call(xb)).toArray()));
+    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts captured ${capMs.toFixed(2).padStart(8)} ms · ORT Web ${theirsMs.toFixed(2).padStart(8)} ms · ratio ${(capMs / theirsMs).toFixed(2)}× (borch/ORT)`
+      + ` · ${rec ? rec.dispatches : 0} dispatches/replay · max |replay − torch| ${capGap.toExponential(1)}` + (capGap > GATE ? " **— the replay does not reproduce torch's logits**" : ""));
+    lines.push(`           borch.ts captured ${gpuByKind(d)}`);
+    step.dispose();
+  }
+  return lines.join("\n");
+}

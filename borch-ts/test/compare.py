@@ -1,7 +1,7 @@
 """Runs the comparison bench — borch.ts and TF.js, the same training step, one page.
 
     npm run build:ts
-    uv run --with playwright python borch-ts/test/compare.py [--headed] [--only-infer]
+    uv run --with playwright python borch-ts/test/compare.py [--headed] [--only-infer | --only-vit]
 
 It measures the same thing as `tests/browser/run.py --bench` without going through
 Pyodide — borch.ts is JS a browser simply reads.
@@ -54,12 +54,20 @@ def main(argv):
 
     # The inference half needs the exported weights; torch makes them once.
     out = runner.ROOT / "borch-ts" / "test" / "out"
-    if not all((out / f).exists() for f in ("resnet18_cifar.safetensors", "resnet18_cifar.onnx", "resnet18_cifar.probe.json")):
+    if "--only-vit" not in argv and not all((out / f).exists() for f in ("resnet18_cifar.safetensors", "resnet18_cifar.onnx", "resnet18_cifar.probe.json")):
         import subprocess
         r = subprocess.run(["uv", "run", "--project", str(runner.ROOT), "--with", "torch", "--with", "onnx",
                             "python", "-W", "ignore", "tests/browser/export_resnet18.py"], cwd=str(runner.ROOT))
         if r.returncode:
             print("could not export the weights for the inference comparison", file=sys.stderr)
+            return 2
+    # The transformer half's weights: timm's ViT-Tiny/16, once, the same way.
+    if not all((out / f).exists() for f in ("vit_tiny.safetensors", "vit_tiny.onnx", "vit_tiny.probe.json")):
+        import subprocess
+        r = subprocess.run(["uv", "run", "--project", str(runner.ROOT), "--with", "torch", "--with", "timm", "--with", "onnx",
+                            "python", "-W", "ignore", "tests/browser/export_vit_tiny.py"], cwd=str(runner.ROOT))
+        if r.returncode:
+            print("could not export the ViT weights for the transformer comparison", file=sys.stderr)
             return 2
     port, stop = runner.serve(runner.ROOT)
     try:
@@ -72,7 +80,8 @@ def main(argv):
             page.on("console", lambda m: print(f"  [browser] {m.text}")
                     if m.type == "error" else None)
             page.on("pageerror", lambda e: print(f"  [browser exception] {e}"))
-            page.goto(f"http://127.0.0.1:{port}{PAGE}" + ("?only=infer" if "--only-infer" in argv else ""))
+            only = "vit" if "--only-vit" in argv else "infer" if "--only-infer" in argv else ""
+            page.goto(f"http://127.0.0.1:{port}{PAGE}" + (f"?only={only}" if only else ""))
             # Refuse a software adapter before the minutes of measuring, not after them
             # (the reasoning is on compare_peers.py, where it cost fifteen minutes first).
             page.wait_for_function("window.__borchAdapter !== undefined || window.__borchCompare !== undefined",

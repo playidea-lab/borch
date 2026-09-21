@@ -11,7 +11,11 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>borch.ts vs TF.js vs ONNX Runtime Web — ResNet-18 (CIFAR)</title>
+  <title>borch.ts vs TF.js vs ONNX Runtime Web — ResNet-18 (CIFAR), ViT-Tiny/16</title>
+  <!-- bimm-ts owns the ViT; it imports the same borch-ts emit this page does (one module instance). -->
+  <script type="importmap">
+  { "imports": { "borch-ts": "/borch-ts/dist/src/index.js", "bimm-ts": "/node_modules/bimm-ts/dist/src/index.js" } }
+  </script>
   <style>
     body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
            margin: 2rem; max-width: 60rem; }
@@ -29,7 +33,7 @@
     import { init } from "../dist/src/tensor.js";
     import { Device } from "../dist/src/device.js";
     import { report } from "../dist/test/bench.js";
-    import { reportTf, reportInfer } from "../dist/test/compare.js";
+    import { reportTf, reportInfer, reportInferVit } from "../dist/test/compare.js";
     import { why } from "./why.js";
 
     const out = document.getElementById("out");
@@ -40,7 +44,10 @@
       window.__borchAdapter = Device.adapterInfo;
       // `?only=infer` skips the two training halves — the inference half alone is what
       // a kernel change is measured against, and the training halves take minutes.
-      const onlyInfer = new URLSearchParams(location.search).get("only") === "infer";
+      // `?only=vit` is the transformer half alone (a kernel change to attention's
+      // matmuls is measured against it, and the ResNet half takes minutes too).
+      const only = new URLSearchParams(location.search).get("only");
+      const onlyInfer = only === "infer" || only === "vit";
       let text = "";
       if (!onlyInfer) {
         const ours = await report();
@@ -49,8 +56,14 @@
         text = "borch.ts\n" + ours + "\n\nTF.js\n" + theirs + "\n\n";
         out.textContent = text + "inference: measuring…";
       }
-      const infer = await reportInfer();
-      text += "inference — borch.ts vs ONNX Runtime Web (WebGPU)\n" + infer;
+      if (only !== "vit") {
+        const infer = await reportInfer();
+        text += "inference — borch.ts vs ONNX Runtime Web (WebGPU)\n" + infer + "\n\n";
+        out.textContent = text + "ViT-Tiny/16: measuring…";
+      }
+      const bimm = await import("bimm-ts");
+      const vit = await reportInferVit(bimm);
+      text += "transformer inference — ViT-Tiny/16, borch.ts (bimm-ts) vs ONNX Runtime Web (WebGPU)\n" + vit;
       window.__borchCompare = { text, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {
