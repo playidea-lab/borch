@@ -60,7 +60,9 @@ And one cost that is in every bucket: **the subgroup forward repacks its weights
 call.** `convNDForward` allocates `turned` and dispatches `tmw` (tap-major weights) on each
 forward, because in training the weights change every step. In `eval()` they do not, and
 the repack is a dispatch plus a weight-sized write per layer per forward — ORT prepacks at
-session creation and never again.
+session creation and never again. *Taken 2026-09-21 (ledger): under `noGrad` the pack is
+kept beside the weight's write epoch on the device, and remade only when something has
+written the weight.*
 
 ## 2. What ORT does that the forward does not — and which of it is ours to take
 
@@ -540,6 +542,25 @@ prediction is written down so that the ledger can say which step was wrong.
   amendment: at batch 16 on Metal, ORT's best draws. Details in `docs/BOOK.md` and
   `docs/INT8.md` §6. The laptop's D3D12 run of the same afternoon read 3× its morning on
   every row (borch, TF.js and ORT alike) and its pair is not quoted.
+
+- **2026-09-21, the eager repack cache (e837205).** §1's "one cost in every bucket":
+  the subgroup and staged convolutions read the weight tap-major and the eager forward
+  laid it out on every call. Now the device bumps a **write epoch** on every buffer a
+  dispatch may write (its declared accesses; every binding where none are declared), on
+  copies, `writeWords` and a replay's records — `Tensor.version` was not the signal, it
+  moves only under `mutate` and an optimiser's kernel writes a parameter without it —
+  and `Device.packed` keeps a pack beside its sources' epochs, remakes it into the same
+  buffer when one has moved, drops it with its source, and stays out of a capture (the
+  recording hoists its own). The call sites take it under `noGrad` only: a training
+  step's weight moves every step and a kept pack per weight would be memory for nothing.
+  **metal-3: the eager fused forward 61 → 48 dispatches, GPU 1.1 → 0.8 ms at batch 1 and
+  4.6 → 3.9 at batch 16; the 5080: unfused 2.27 → 1.92 ms at batch 1 (0.52× ORT), fused
+  4.66 → 3.28 and 2.23 → 1.90 at batch 16.** The captured rows do not move — the
+  capture had hoisted the repack since Step 1 — and neither does the golden (4,057 /
+  4,057); `capture:ts` holds two checks (a second `noGrad` forward repacks nothing; a
+  weight written in place is repacked on the next). The M4's batch-1 wall still swings
+  run to run (1.50 → 1.59 fused this time, for 0.3 ms less GPU) — the GPU-time column
+  and the dispatch count are the measurement there.
 
 ## 7. Risks, and the sentence that retires each
 
