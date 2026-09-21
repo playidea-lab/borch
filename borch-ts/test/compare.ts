@@ -162,7 +162,7 @@ export async function reportTf(batches: readonly number[] = [16, 32, 64]): Promi
 // seeded input to 1e-3. A speed without that gate is a speed of something else.
 
 interface OrtTensorLike { data: Float32Array }
-interface OrtSession { run(feeds: Record<string, unknown>): Promise<Record<string, OrtTensorLike>> }
+interface OrtSession { run(feeds: Record<string, unknown>): Promise<Record<string, OrtTensorLike>>; release(): Promise<void> }
 interface Ort {
   env: { wasm: { wasmPaths: string } };
   Tensor: new (type: string, data: Float32Array, dims: number[]) => unknown;
@@ -309,6 +309,10 @@ async function reportOrtVariants(o: Ort, probe: Probe, batches: readonly number[
         cells.push(`batch ${b} ${ms.toFixed(2)} ms`);
       }
       lines.push(`ORT Web ${variant} on ${ep}: ${cells.join(" · ")} · max |logits − torch| ${gap.toExponential(1)} (${(gap / scale).toExponential(1)} of the logits' scale)`);
+      // **Released, not left.** The rows after these read 3× slower on the 5080 with the
+      // sessions alive — the wasm provider's threads, or the WebGPU provider's device,
+      // keep the machine busy after `run` returns (`docs/FIRST.md` 2a).
+      await session.release();
     }
   }
   return lines;
@@ -429,6 +433,7 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     const d = dev();
     const d0 = d.dispatches;
     await noGrad(() => model.forward(xb)).toArray();
+    const perForward = d.dispatches - d0;
     // **Where the eager wall goes** (`docs/FIRST.md` 2a): the JavaScript of the forward
     // — encoding, bind groups, tensor bookkeeping — timed on its own (the forward is
     // synchronous; the readback after it is the GPU's), and the bind groups it made.
@@ -441,7 +446,7 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
         await y.toArray();
       });
     }
-    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${d.dispatches - d0} dispatches/forward · JavaScript ${(js / 10).toFixed(2)} ms of it (${Math.round((d.bindGroups - bg0) / 10)} bind groups)`);
+    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${perForward} dispatches/forward · JavaScript ${(js / 10).toFixed(2)} ms of it (${Math.round((d.bindGroups - bg0) / 10)} bind groups)`);
     // The fused forward's GPU time by kind — what of the wall is the GPU's (INFER Step 0).
     await d.profile(() => noGrad(() => model.forward(xb)).toArray());
     const hot: [string, number, number][] = [];
