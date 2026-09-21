@@ -1950,6 +1950,9 @@ prints the adapter:
 | `nvidia / blackwell`, **2026-09-21**, the scalar conv path swept on the card — borch.ts | **10.6** | **14.7** | **23.2** |
 | `nvidia / blackwell`, same run — TF.js 4.22.0 | 75.4 | 122.0 | 236.7 |
 | ratio | **7.1×** | **8.3×** | **10.2×** |
+| `nvidia / blackwell` **through Direct3D 12** (RTX 5050 Laptop, Chrome on Windows 11), **2026-09-21** — borch.ts | **32.3** | **53.7** | **98.1** |
+| `nvidia / blackwell`, D3D12, same run — TF.js 4.22.0 | 174.8 | 334.9 | 659.2 |
+| ratio | **5.4×** | **6.2×** | **6.7×** |
 
 The 2026-09-19 rows are the same page and the same TF.js bytes sixteen days later: TF.js
 did not move (86.4 → 86.5) and borch.ts went from 38.6 to 21.2 ms at batch 16 — the
@@ -2060,6 +2063,20 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts **int8 static** + captured, `nvidia / blackwell`, **2026-09-21** — the scales calibrated once, the output packed at the store, the next layer's quantise pass gone (44 dispatches against the f32 forward's 40); top-1 on 1,000 held-out images f32 92.40 %, int8 static 92.50 % | | 0.77 ms | **1.15 ms** |
 | ONNX Runtime Web 1.29.0, same run | | 3.32–3.65 ms | 3.67–3.72 ms |
 | ORT is faster than the static int8 network by | | 0.21–0.23× — borch ahead | **0.31×** — borch ahead |
+| borch.ts fused + captured, `nvidia / blackwell` **through Direct3D 12** (RTX 5050 Laptop, Chrome on Windows 11), **2026-09-21** — no subgroup matrices, scalar kernels throughout, the 8 × 8 GEMM tile | | **1.69 ms** | **7.29 ms** |
+| ONNX Runtime Web 1.29.0, D3D12, same run | | 5.67 ms | 15.69 ms |
+| ORT is faster than the captured network by | | 0.30× — borch ahead | **0.46×** — borch ahead |
+
+**The eager rows before 2026-09-21 timed the allocator with the forward.** The
+inference comparison's eager loop made each forward's intermediates on fresh buffers —
+no `scope` around it, where the training bench has one — and a buffer costs what the
+API charges for it: on Direct3D 12 milliseconds (the RTX 5050 Laptop read 152 ms for a
+batch-16 forward of 22 ms of GPU), on Vulkan and Metal less but not nothing. Scoped, the
+5080's unfused eager forward at batch 16 went 5.9–9.0 → **2.52 ms** and metal-3's 8.7 →
+7.2; the captured rows never had the problem (a replay allocates nothing). The eager
+figures above this line are the unscoped ones and read as an upper bound; the tables
+from this date on are scoped. The lesson is the one `scope()` was written for, and it
+is now in the number.
 
 **The NVIDIA rows are a different kernel set.** On the RTX 5080 through Chrome 151 and
 Vulkan, `chromium-experimental-subgroup-matrix` is present but its configurations are

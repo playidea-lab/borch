@@ -472,6 +472,23 @@ prediction is written down so that the ledger can say which step was wrong.
   batch. The time it bought (0.68 → 0.38 ms a deep layer) stands; the bill is written
   here so the next reader of that number does not chase the GEMM again.
 
+- **2026-09-21, the third adapter — Direct3D 12 — and the eager rows corrected.** The
+  Windows worker (RTX 5050 Laptop, Chrome on Windows 11; the app-control policy was
+  gone) ran `capture:ts` (18 / 18, kicks calibrated **on** — the readback stall is on
+  D3D12 too, plain 4.4 ms for 0.9 of GPU) and `compare:ts`: training 32.3 / 53.7 / 98.1
+  ms at batch 16 / 32 / 64 against TF.js 174.8 / 334.9 / 659.2 (5.4× / 6.2× / 6.7×);
+  the captured forward **1.69 ms at batch 1 and 7.29 at batch 16 against ORT's 5.67 and
+  15.69** — ahead at both on the third API, on scalar kernels throughout (no subgroup
+  matrices under D3D12, so the int8 path does not exist there and the GEMM plan's 8 × 8
+  tile is the one that runs). The first D3D12 run also read the **eager** forward at
+  152 ms for 22 ms of GPU, and that was the bench: its eager loop had no `scope`, so
+  every forward made its intermediates on fresh buffers, and under D3D12 a buffer costs
+  milliseconds. Scoped (aec5e91), the eager rows fell everywhere — the 5080's unfused
+  batch-16 forward 5.9–9.0 → 2.52 ms, the 5050's 152 → 8.65 — and the captured rows did
+  not move, because a replay allocates nothing. Every eager inference number in the
+  tables before this date was an allocator's number as much as a forward's; `docs/BOOK.md`
+  says so above its table.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

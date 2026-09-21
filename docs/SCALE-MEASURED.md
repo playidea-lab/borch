@@ -64,5 +64,7 @@
 | the convolutions (`fwd --sweep=all`) | the micro-tiles do not help the gather kernel (512 → 512 at 4 × 4, b16: 64 × 64 0.505, r8×4 0.497, r8×8 0.645); the split policy over-splits this card (32 pieces 0.493 + 0.014 against 8 pieces 0.465 + 0.005); the direct kernel prefers 4 × 16 (64 → 64 at 32 × 32: 0.289 against 0.343) |
 | captured training step, ResNet-18 CIFAR batch 16 (`capture:ts`) | eager 32.1 → replay 27.5 ms; 400 intermediates 600.3 → 171.8 MB in 4 arenas; **18 / 18 bit for bit** |
 | readback kicks | **on** — plain 4.43 ms for 0.88 of GPU, kicked 1.51 |
+| training step, ResNet-18 CIFAR (`compare:ts`) | 32.3 / 53.7 / 98.1 ms at batch 16 / 32 / 64 · TF.js 174.8 / 334.9 / 659.2 |
+| inference, ResNet-18 (`compare:ts`) | fused + captured **1.69 ms at batch 1, 7.29 at batch 16** · ORT Web 5.67 / 15.69 · eager (scoped) 5.81 / 8.65 — the first, unscoped, eager run read 152 ms at batch 16 for 22 ms of GPU: a buffer is milliseconds under D3D12 |
 | validation faults | 0 |
 
