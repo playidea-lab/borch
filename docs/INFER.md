@@ -505,6 +505,31 @@ prediction is written down so that the ledger can say which step was wrong.
   note beside them. A bench on a shared machine wants the machine's state in the row —
   a power-source and load line beside the adapter — which the runner does not print yet.
 
+- **2026-09-21, the transformer half (935893e).** Every row above is a ResNet, and the
+  claim "ahead of ORT" was a claim about convolutions. `compare:ts` now runs **ViT-Tiny/16**
+  as well — timm's `vit_tiny_patch16_224` at seed 0 exported by
+  `tests/browser/export_vit_tiny.py`, bimm-ts's model on the borch side (the page imports
+  bimm; this package does not), both gated on torch's logits (7.8e-7 to 1.3e-6, limit
+  1e-3), `--only-vit` for the half alone. **metal-3: captured 2.05 / 10.50 ms against
+  ORT's 5.01 / 19.32 (0.41× / 0.54×); RTX 5080 Vulkan: 2.25 / 4.94 against 6.89 / 14.22
+  (0.33× / 0.35×); RTX 5050 Laptop D3D12: 3.37 / 27.83 against 11.80 / 61.02 (0.29× /
+  0.46×)** — ahead at both batches on all three adapters, by more than the ResNet. On
+  D3D12 the eager forward is 10.8 ms for 3.2 of GPU at batch 1 — a dispatch is dearer
+  there, and the capture's 3.37 is the row that counts.
+  Nothing was written for it: no fused attention, no layout, no int8 (the int8 path is
+  the convolution's); the linear layers run the GEMM tiles of `docs/GEMM.md` (on the
+  5080, which has no f32 subgroup configuration, the scalar 128 × 64 tile throughout),
+  attention runs `bmm` and the subgroup softmax, and the capture removes 38 dispatches a
+  forward (352 → 314 at batch 1). Where it spends itself: the GPU (9.8 of 10.5 ms at
+  batch 16 on metal-3), and of the GPU two thirds is the three wide matmuls of every
+  block (MLP 3200 × 192 ⇄ 768, qkv 3200 × 192 → 576) — the same kernel the convolution
+  gathers into. What is left on the table, in order: the 36 `gt:` permute copies a
+  forward (q·k·v split and the head merge, 0.43 ms of 9.8 at batch 16 — a strided read
+  in the matmul would remove them), the qkv bias add fused into the GEMM epilogue in
+  eager (the capture already fuses it), and a flash-style attention that never writes
+  the 200 × 200 scores — worth 0.8 + 0.5 ms at batch 16 here, more as tokens grow. None
+  is started; the table is ahead without them and the mainline is elsewhere.
+
 ## 7. Risks, and the sentence that retires each
 
 | risk | what would show it | retirement |

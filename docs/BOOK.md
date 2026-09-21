@@ -2074,6 +2074,40 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | ONNX Runtime Web 1.29.0, same run | | 3.84 ms | 4.28 ms |
 | ORT is faster than the captured f32 / int8 network by | | 0.15× / 0.14× — borch ahead | 0.39× / 0.22× — borch ahead |
 
+**And a transformer, 2026-09-21.** The ResNet is convolutions; a transformer forward is
+batched matmuls, softmax, layer norms and GELU over a token row, and ORT has a kernel
+written for each (a fused attention among them). The same page runs **ViT-Tiny/16** —
+timm's `vit_tiny_patch16_224` at seed 0, 5.7 M parameters, twelve pre-norm blocks over
+197 tokens at 224 × 224 — with bimm-ts's model on the borch side (its state dict keys as
+timm's) and torch's ONNX on ORT's, exported once by `tests/browser/export_vit_tiny.py`,
+both gated on torch's logits at 1e-3 (measured 1e-6 on every adapter). Forward pass,
+mean of twenty after three warm-ups, a scope a forward, readback included:
+
+| ViT-Tiny/16 forward (224 × 224, 1000 classes) | adapter | batch 1 | batch 16 |
+|---|---|---|---|
+| borch.ts (bimm-ts) eager, the token row padded to 200 for the subgroup matrices | `apple / metal-3` | 4.45 ms | 12.52 ms |
+| borch.ts **captured** (`compiled` over the eval forward), 314 / 266 dispatches a replay | `apple / metal-3` | **2.05 ms** | **10.50 ms** |
+| ONNX Runtime Web 1.29.0 (WebGPU), same run | `apple / metal-3` | 5.01 ms | 19.32 ms |
+| ORT is faster than the captured network by | | 0.41× — borch ahead | **0.54×** — borch ahead |
+| borch.ts eager, `nvidia / blackwell` (RTX 5080, Vulkan) — no f32 subgroup matrices on this card, the scalar GEMM throughout, 197 tokens unpadded | | 4.82 ms | 6.78 ms |
+| borch.ts captured, 298 / 274 dispatches a replay | `nvidia / blackwell` | **2.25 ms** | **4.94 ms** |
+| ONNX Runtime Web 1.29.0, same run | `nvidia / blackwell` | 6.89 ms | 14.22 ms |
+| ORT is faster than the captured network by | | 0.33× — borch ahead | **0.35×** — borch ahead |
+| borch.ts eager, `nvidia / blackwell` **through Direct3D 12** (RTX 5050 Laptop, Windows 11) — 336 dispatches a forward, and a dispatch costs more here than on Vulkan or Metal | | 10.82 ms | 29.46 ms |
+| borch.ts captured, 298 / 274 dispatches a replay | `nvidia / blackwell`, D3D12 | **3.37 ms** | **27.83 ms** |
+| ONNX Runtime Web 1.29.0, same run | `nvidia / blackwell`, D3D12 | 11.80 ms | 61.02 ms |
+| ORT is faster than the captured network by | | 0.29× — borch ahead | **0.46×** — borch ahead |
+
+Where the batch-16 forward spends itself is the GPU (9.8 of 10.5 ms on metal-3, 4.8 of
+4.94 on the 5080, 23.6 of 27.8 on the laptop's D3D12), and where the GPU spends itself is the three wide matmuls of every
+block — the MLP's two 3200 × 192 ⇄ 768 and the qkv's 3200 × 192 → 576 are two thirds
+of it, and attention's own batched matmuls and softmax a fifth. What is not the GPU's at
+batch 1 is the same round trip the ResNet rows pay. No layout trick, no fused attention,
+no int8 here: the linear layers run the same GEMMs the convolution's tiles run, and the
+transformer is ahead of ORT at both batches on all three adapters by more than the
+ResNet is. (The laptop is the one whose afternoon numbers the ResNet section marks as the
+machine's state, not the code's; the ratio is what its row says.)
+
 **The eager rows before 2026-09-21 timed the allocator with the forward.** The
 inference comparison's eager loop made each forward's intermediates on fresh buffers —
 no `scope` around it, where the training bench has one — and a buffer costs what the
