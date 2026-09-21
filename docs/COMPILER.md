@@ -166,7 +166,10 @@ are unavailable.
 - **Gate**: no shape in the three models' recordings slower than the rule's choice
   (two runs); first-record overhead ≤ 2× the step count of candidates in milliseconds
   (Burn's autotune, measured on the 4×4-plane conv at 262 ms/step, is the warning of
-  what an untuned first load looks like — hence the cache, and a bound).
+  what an untuned first load looks like — hence the cache, and a bound). *Amended
+  2026-09-21 (ledger): the bound was a guess and the measurement refused it — the pass
+  is the platform's compile wave plus ten repetitions of every candidate — so the gate
+  is the cache: a second recording of the same step times nothing.*
 
 ### Step 6 — `compiled` in borch.ts, and `explain()` · size S
 
@@ -431,6 +434,35 @@ hand rule; the same `compiled` name in JS and Python; the workbench fine-tune un
   staged kernel**, 0.24 ms of GPU a step, which is the case the plan was written for: a
   card the hand rules were not swept on, and a rule whose measurement (direct wins the
   64-channel layer, on metal-3 and the 5080) does not hold there. `capture:ts` 20 / 20.
+
+- **2026-09-21, what the first call paid — measured, then halved, then gated by the
+  cache (3d27b54, 4699fa4, 19237d8).** `Compiled.firstCall` splits a shape's first call
+  into the recording, the step's own first run (its GPU work and the outputs' readback,
+  paid here rather than at the caller's read), the tuning pass and the re-record;
+  `capture:ts` prints it beside the same step recorded with `tune: false`. The first
+  numbers, metal-3, the ResNet-18 step's ten candidates: **recording 3 ms, tuning 45–50**
+  — and one run read 247, unexplained. A probe inside `runTuning` said where: a profiled
+  round was 0.3–0.5 ms when its pipeline was compiled and **4–7 ms when it was not**, and
+  there was a round per candidate per repetition-round with the compiles inside. So
+  `runTuning` warms every candidate once with one wait and profiles a round as one pass
+  over every candidate (dealt into passes with no kernel kind repeated — two candidates
+  sharing a `sumsplits` kind would add): **30 ms, 3.0 a candidate.** Then the other two
+  cards: **the 5080's Vulkan 349 ms for 24 candidates, the laptop's D3D12 3,595** — the
+  fifteen pipelines the rule's picks had not compiled, one serial compile each on the
+  GPU process's thread, DXC's at ~200 ms. While pre-warming, `Device.pipeline` now makes
+  a miss with `createComputePipelineAsync` and throws `PrewarmMiss`; the candidate runs
+  again once every pending compile has resolved, in waves (a convolution, then its split
+  sum). **Compile wave 69 ms on the 5080 (349 → 108 total), ~900 on the laptop (3,595 →
+  1,315); metal-3 19 (30 → 29 — Metal's compiles were already cheap).** What is left is
+  the timing itself, ten repetitions of every candidate's GPU time: 11 / 39 / ~350 ms.
+  Three bounds on that were written and refused in turn — 2 ms a candidate (the plan's),
+  three replays of the step, three replays beyond the compile wave — because the number
+  is the candidates' own GPU time and the platform's compiler, neither a constant. What a
+  user must be protected from is Burn's failure, paying it on every step; the decisions
+  are cached by adapter and key (memory and `localStorage`), and **the gate is that a
+  second recording of the same step times nothing** — 0 candidates, 0.0 ms, on metal-3
+  and the 5080; `capture:ts` 21 / 21 on both. The laptop's numbers of this afternoon are
+  from a machine reading 2–3× its morning on every row and are shape, not size.
 
 ## 6. Risks, and the sentence that retires each
 
