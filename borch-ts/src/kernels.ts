@@ -2140,7 +2140,7 @@ export function convInt8Grid(s: ConvNDShape, splits: number): [number, number, n
 /** The WGSL that packs four consecutive channels' values `q0..q3` (already clamped
  *  i32 in [-127, 127]) into one word. */
 function packWord(names: readonly string[]): string {
-  return names.map((q, j) => `(u32(${q}) & 0xffu)${j ? ` << ${j * 8}u` : ""}`).join(" | ");
+  return names.map((q, j) => (j ? `((u32(${q}) & 0xffu) << ${j * 8}u)` : `(u32(${q}) & 0xffu)`)).join(" | ");
 }
 
 export function convForwardInt8(s: ConvNDShape, splits: number, hasBias: boolean, epilogue?: ConvEpilogue, quantOut = false): string {
