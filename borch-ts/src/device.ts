@@ -2516,28 +2516,60 @@ export class Device {
   }
 
   /**
-   * Times every queued candidate list — each candidate's dispatches under the profiler,
-   * `TUNE_ROUNDS` rounds of `TUNE_REPS`, the minimum — and caches the fastest. Returns
-   * one line per decision, for the test that holds "nothing tuned is slower than the
-   * rule's pick" and the report that says what changed.
+   * Times every queued candidate list and caches the fastest. Returns one line per
+   * decision, for the test that holds "nothing tuned is slower than the rule's pick" and
+   * the report that says what changed.
+   *
+   * **The cost is round trips and shader compiles, not GPU time — so both are paid
+   * once, not per candidate.** Measured on metal-3 (2026-09-21, the ResNet-18 step's ten
+   * candidates): a profiled round was 0.3–0.5 ms of readback when its pipeline was
+   * compiled and 4–7 ms when it was not, and a round per candidate per repetition made
+   * 45–50 ms of the first call. So every candidate runs once first, unprofiled, with
+   * one wait — the pipelines compile there, side by side in the GPU process — and then
+   * each of `TUNE_ROUNDS` rounds is one profiled pass over every candidate of every
+   * decision, `TUNE_REPS` repetitions each, one readback for the lot; a candidate's
+   * time is the minimum over rounds of its kinds' summed nanoseconds. Two candidates
+   * whose kernel kinds overlap cannot share a pass (their times would add), so the
+   * candidates are dealt into passes with no kind repeated.
    */
   async runTuning(): Promise<TuneReport[]> {
     const out: TuneReport[] = [];
-    for (const [k, candidates] of this.tuneQueue) {
-      const ms: number[] = [];
-      for (const cand of candidates) {
-        let best = Infinity;
-        for (let round = 0; round < Device.TUNE_ROUNDS; round++) {
-          await this.profile(async () => {
-            for (let r = 0; r < Device.TUNE_REPS; r++) cand.run();
-            this.flush();
-            await this.synchronize();
-          });
-          const ns = cand.keys.reduce((a, key) => a + (this.nsByKind.get(key) ?? 0), 0);
-          best = Math.min(best, ns / 1e6 / Device.TUNE_REPS);
-        }
-        ms.push(best);
+    if (this.tuneQueue.size === 0) return out;
+    const all: { k: string; i: number; cand: TuneCandidate }[] = [];
+    for (const [k, candidates] of this.tuneQueue) candidates.forEach((cand, i) => all.push({ k, i, cand }));
+    // Warm: every candidate once, one wait. The compiles happen here.
+    for (const { cand } of all) cand.run();
+    this.flush();
+    await this.synchronize();
+    // Passes with no kernel kind repeated.
+    const passes: { k: string; i: number; cand: TuneCandidate }[][] = [];
+    for (const entry of all) {
+      let placed = false;
+      for (const pass of passes) {
+        const used = new Set(pass.flatMap((e) => e.cand.keys));
+        if (entry.cand.keys.some((key) => used.has(key))) continue;
+        pass.push(entry); placed = true; break;
       }
+      if (!placed) passes.push([entry]);
+    }
+    const best = new Map<string, number>();   // `${k}#${i}` → ms
+    for (let round = 0; round < Device.TUNE_ROUNDS; round++) {
+      for (const pass of passes) {
+        await this.profile(async () => {
+          for (const { cand } of pass) for (let r = 0; r < Device.TUNE_REPS; r++) cand.run();
+          this.flush();
+          await this.synchronize();
+        });
+        for (const { k, i, cand } of pass) {
+          const ns = cand.keys.reduce((a, key) => a + (this.nsByKind.get(key) ?? 0), 0);
+          const ms = ns / 1e6 / Device.TUNE_REPS;
+          const id = `${k}#${i}`;
+          best.set(id, Math.min(best.get(id) ?? Infinity, ms));
+        }
+      }
+    }
+    for (const [k, candidates] of this.tuneQueue) {
+      const ms = candidates.map((_, i) => best.get(`${k}#${i}`) ?? Infinity);
       let pick = 0;
       for (let i = 1; i < ms.length; i++) if ((ms[i] ?? Infinity) < (ms[pick] ?? Infinity)) pick = i;
       const chosen = candidates[pick];

@@ -130,6 +130,21 @@ export async function captureAsync<T>(fn: () => Promise<T>): Promise<{ step: Cap
   return { step: d.endCapture(), result };
 }
 
+/** The costs of a first call, ms of wall — `Compiled.firstCall`. */
+export interface FirstCallCost {
+  /** Recording the step: the JavaScript of one eager run, its dispatches encoded. */
+  record: number;
+  /** Waiting for that run's GPU work and reading its outputs back — the step's own first
+   *  execution, paid here before the tuner runs on the same buffers; without a tuner the
+   *  same wait comes when the caller reads the result. */
+  wait: number;
+  /** The tuning pass proper: every candidate warmed once, then timed. */
+  tuning: number;
+  /** Recording again with the chosen kernels, where a decision changed a pure step. */
+  rerecord: number;
+  candidates: number;
+}
+
 export class Compiled<A extends CompiledArg[], R> {
   private readonly records = new Map<string, Recording<Awaited<R>>>();
   private readonly fuse: boolean;
@@ -148,6 +163,11 @@ export class Compiled<A extends CompiledArg[], R> {
   int8Layers = -1;
   /** The tuner's decisions, one list per recording (empty where nothing was collected). */
   readonly tuned: TuneReport[][] = [];
+  /** What the first call for a shape cost, per recording, in ms of wall: the recording
+   *  itself, the tuning pass (0 without one), the re-recording where a decision changed a
+   *  pure step (0 where none) — and how many candidates the pass timed. The number the
+   *  Step 5 gate is about (`docs/COMPILER.md`): a first load pays this once per shape. */
+  readonly firstCall: FirstCallCost[] = [];
   private readonly tune: boolean;
   /** Runs once before the first recording — the int8 quantisation of a model's weights. */
   private prepare: (() => Promise<void>) | null = null;
@@ -212,7 +232,9 @@ export class Compiled<A extends CompiledArg[], R> {
       d.tuneMode = null;
       return { cap: d.endCapture(), inputs, out };
     };
+    const t0 = performance.now();
     let { cap, inputs, out } = await record(tuning);
+    const cost: FirstCallCost = { record: performance.now() - t0, wait: 0, tuning: 0, rerecord: 0, candidates: 0 };
     // **The tuning pass** (`docs/COMPILER.md` Step 5): the choices the recording collected
     // are timed — every candidate's dispatches on the recording's own buffers, under
     // the profiler — and the fastest is cached for this adapter, in memory and in
@@ -223,18 +245,26 @@ export class Compiled<A extends CompiledArg[], R> {
     // made once, and its decisions serve the next recording — the next shape, the next
     // `compiled`, the next session. The first recording of a shape pays the timing once.
     if (tuning) {
+      const t1 = performance.now();
       const outs = tensorsOf(out);
       d.flush();
       const outBefore = await Promise.all(outs.map((o) => o.toArray()));
+      const t2 = performance.now();
+      cost.wait = t2 - t1;
       const report = await scope(async () => d.runTuning());
       this.tuned.push(report);
       d.flush();
       outs.forEach((o, i) => d.writeWords(o.buffer, words(outBefore[i] as Float32Array)));
+      cost.tuning = performance.now() - t2;
+      cost.candidates = report.reduce((a, t) => a + t.candidates.length, 0);
       if (report.some((t) => t.chosen !== t.prior) && !cap.mutatesState()) {
+        const t2 = performance.now();
         cap.dispose();
         ({ cap, inputs, out } = await record(false));
+        cost.rerecord = performance.now() - t2;
       }
     }
+    this.firstCall.push(cost);
     const held = tensorsOf(out).map((t) => t.buffer);
     if (this.fuse) cap.fuse(held);
     // The replay-invariant dispatches — a frozen weight's repack — run once and leave the
