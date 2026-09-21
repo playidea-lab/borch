@@ -318,12 +318,68 @@
       </script>
     </div>
 
+    <h2>라이브러리가 먼저 하는 말</h2>
+    <p>
+      첫 페이지가 저지르는, 조용히 느려지거나 틀려지는 일 다섯 가지가 있고, 라이브러리는 각각에
+      한 문장을 콘솔에 말한다 — 숫자가 틀리기 전에, 한 번만: <code>scope</code> 없는 추론
+      루프(밖에서 붙든 버퍼가 2,000 개째일 때), gradient 가 켜진 채 돈 <code>eval()</code>
+      모델, 빠른 커널이 원하는 8 의 배수에서 벗어난 큰 행렬곱, 배터리로 도는 노트북, 그리고
+      오래 걸린 첫 호출(커널 컴파일). <code>Device.advised</code> 가 말한 것을 들고 있고,
+      <code>Device.advice = false</code> 는 무엇을 하는지 아는 벤치를 조용히 시킨다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        const lin = new nn.Linear(16, 16).eval();
+        for (const p of lin.parameters()) keepAlive(p);
+        const x = keepAlive(Tensor.randn([8, 16]));
+
+        const toldBefore = Device.advised.has("eval-grad");
+        await scope(async () => { await noGrad(() => lin.call(x)).toArray(); });
+        log("scope 안, noGrad 아래       : 말함 =", Device.advised.has("eval-grad") && !toldBefore ? "예" : "아니오 — 올바른 코드에는 아무 말도 없다");
+
+        await scope(async () => { await lin.call(x).toArray(); });     // eval 모델, 테이프 켜짐
+        log("eval 모델, gradient 켜짐    : 말함 =", Device.advised.has("eval-grad") ? "예 — 한 번, 콘솔(F12)에" : "아니오");
+
+        await scope(async () => { await lin.call(x).toArray(); });
+        log("같은 실수를 또             : 더는 말하지 않음 —", [...Device.advised].join(", ") || "(아직 아무 말 없음)");
+        log("");
+        log("다섯 키: unscoped · eval-grad · eights · battery · first-call");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import js
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        lin = nn.Linear(16, 16).eval()
+        x = torch.randn(8, 16)
+        advised = js.borch.Device.advised
+
+        told_before = advised.has("eval-grad")
+        with torch.scope(), torch.no_grad():
+            lin(x).tolist()
+        print("scope 안, no_grad 아래      : 말함 =", "예" if advised.has("eval-grad") and not told_before else "아니오 — 올바른 코드에는 아무 말도 없다")
+
+        with torch.scope():
+            lin(x).tolist()                           # eval 모델, 테이프 켜짐
+        print("eval 모델, gradient 켜짐    : 말함 =", "예 — 한 번, 콘솔(F12)에" if advised.has("eval-grad") else "아니오")
+
+        with torch.scope():
+            lin(x).tolist()
+        print("같은 실수를 또             : 더는 말하지 않음 —", ", ".join(list(advised)) or "(아직 아무 말 없음)")
+        print("")
+        print("다섯 키: unscoped · eval-grad · eights · battery · first-call")
+      </script>
+    </div>
+
     <h2>기억할 것</h2>
     <ul>
       <li>수가 틀렸는데 아무것도 안 터졌을 때는 장치에 물어라: 모양·dtype·NaN/Inf 를 확인.</li>
       <li>기울기가 실제로 흐르는지 확인 — 0 이거나 없는 <code>.grad</code> 는 끊긴 그래프.</li>
       <li>중간 값을 읽어라(print 또는 <code>show</code>); 추측하지 말 것.</li>
       <li>평평하거나 폭발하는 손실은 미스터리가 아니라 신호다(<em>버그 고쳐 보기</em> 참고).</li>
+      <li>콘솔을 한 번 읽어라: 흔한 함정 다섯을 라이브러리가 먼저, 각각 한 번 말한다.</li>
     </ul>
 
     <div class="note-box">

@@ -944,7 +944,7 @@ random, so it cannot be measured".
 
 It does not go through Python. **It does not go through TF.js either** — the
 kernels are written directly in WGSL. **Zero** runtime dependencies, and it is
-an ES module a browser simply reads (186KB gzipped, 663KB before compression).
+an ES module a browser simply reads (214KB gzipped, 754KB before compression).
 
 ```bash
 npm install borch-ts

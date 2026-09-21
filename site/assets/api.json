@@ -4,7 +4,7 @@
  "korean": {
   "done": 791,
   "stale": 0,
-  "missing": 522
+  "missing": 587
  },
  "modules": [
   {
@@ -335,6 +335,12 @@
      "signature": "export declare class Tensor implements Node<Tensor>",
      "doc": "The types of the methods hung from the table above. Paired with the loop\nabove; fix one alone and they fall out of step.",
      "members": [
+      {
+       "name": "int8Twin",
+       "signature": "int8Twin: Int8Twin | null",
+       "doc": "The int8 twin of these values, when an int8 layer with a static output scale made\n them (`Int8Twin`); read by the int8 layer that consumes this tensor directly.",
+       "torch": "int8_twin"
+      },
       {
        "name": "shape",
        "signature": "shape: readonly number[]",
@@ -2615,6 +2621,16 @@
         "en": "Losses and distances"
        },
        "doc_ko": "배치 행렬곱. `(B, N, K) × (B, K, M)`.\n\n배치를 풀어 `mm` 을 되풀이한 뒤 쌓는다 — 배치 커널을 따로 두면 `mm` 과 두 벌을\n고치게 된다. 배치가 커지면 그때 커널을 세울 자리다."
+      },
+      {
+       "name": "fusedAttention",
+       "signature": "static fusedAttention(qkv: Tensor, heads: number, opts?: { scale?: number; keyLen?: number; bias?: Tensor | null; }): Tensor",
+       "doc": "**Attention in one kernel, for inference** — `F.fusedQkvAttention`. `qkv` is the\n`[B, N, 3·H·D]` output of a `Linear(dim, 3·dim)` without its bias (`bias` is added\nin the kernel), `heads` splits the last axis, keys from `keyLen` on are not visited;\nthe result is `[B, N, H·D]`, the heads merged as the output projection reads them\n— the same values the split / permute / `bmm` / mask / `softmax` / `bmm` / merge\nchain gives, to a rounding (`test/device.ts`), in one dispatch instead of nine.\nInference only: it records no backward, and refuses under gradient mode when an\ninput wants one — a training step keeps the composed chain.",
+       "torch": "fused_attention",
+       "section": {
+        "ko": "Losses and distances",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "batchedMatmul",
@@ -5928,6 +5944,16 @@
        }
       },
       {
+       "name": "convNDFusedInt8",
+       "signature": "convNDFusedInt8(weight: Tensor, int8: Int8ConvWeight, bias: Tensor | null, stride: number | readonly number[], padding: number | readonly number[], dilation: number | readonly number[], groups: number, relu: boolean, residual: Tensor | null): Tensor",
+       "doc": "`convNDFused` on the int8 subgroup path (`docs/INT8.md` Step 5): the input quantised\nper tensor on the GPU (a zeroing copy, `absMaxAtomic`, `quantizeActivationInt8`), the\nweight already quantised (`ConvND.quantizeInt8`), `convForwardInt8` with the bias and\nthe epilogue at its store — split, through a slab and `sumSplitsConv`. A shape the\nkernel does not take (`convInt8Fits`: the tile's band rules) falls back to the f32\nfused convolution with the f32 weight, which is why it is still passed. Traced for\nONNX as the f32 nodes: int8 is how it runs, not what it means.",
+       "torch": "conv_n_d_fused_int8",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
+      },
+      {
        "name": "convTransposeND",
        "signature": "convTransposeND(weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor",
        "doc": "Transposed convolution independent of dimensionality.\n\n**There is no new kernel.** A transposed convolution's forward is the\nsame computation as an ordinary convolution's flow towards its input,\nso `convNDGradInputTiled` is used as-is. The backward flips likewise —\nthe input-side gradient is an ordinary convolution's forward, and the\nweight side is the same kernel with two arguments exchanged. The same\ncomputation in two copies means a day when one of them is fixed.\n\n**The weight axes are flipped relative to `convND`** — `(in, out, …)`.\nWith a square kernel the shape still matches when flipped, so only the\nvalues diverge.",
@@ -7598,6 +7624,76 @@
     },
     {
      "kind": "interface",
+     "name": "Int8ConvWeight",
+     "signature": "export interface Int8ConvWeight",
+     "doc": "A convolution weight quantised for the int8 kernel — see `ConvND.quantizeInt8` — and,\n after `calibrateInt8`, the layer's static scales: one word each, `max|x|` of its input\n and of its output over the calibration set (`docs/INT8.md`, the static scale).",
+     "members": [
+      {
+       "name": "packed",
+       "signature": "readonly packed: GPUBuffer",
+       "doc": ""
+      },
+      {
+       "name": "scales",
+       "signature": "readonly scales: GPUBuffer",
+       "doc": ""
+      },
+      {
+       "name": "coPad",
+       "signature": "readonly coPad: number",
+       "doc": "",
+       "torch": "co_pad"
+      },
+      {
+       "name": "inMax",
+       "signature": "inMax?: GPUBuffer",
+       "doc": "",
+       "optional": true,
+       "torch": "in_max"
+      },
+      {
+       "name": "outMax",
+       "signature": "outMax?: GPUBuffer",
+       "doc": "",
+       "optional": true,
+       "torch": "out_max"
+      },
+      {
+       "name": "calib",
+       "signature": "calib?: { readonly inMax: GPUBuffer; readonly outMax: GPUBuffer; }",
+       "doc": "During calibration: the two words the forward accumulates `max|x|` / `max|out|` into.",
+       "optional": true
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "Int8Twin",
+     "signature": "export interface Int8Twin",
+     "doc": "An int8 twin of a tensor's values — packed four channels a word with the scale word\n they were quantised by — left on the output of an int8 layer whose output scale is\n static, for the int8 layer that reads it next.",
+     "members": [
+      {
+       "name": "words",
+       "signature": "readonly words: GPUBuffer",
+       "doc": ""
+      },
+      {
+       "name": "max",
+       "signature": "readonly max: GPUBuffer",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "setInt8Calibrating",
+     "signature": "export declare function setInt8Calibrating(on: boolean): void",
+     "doc": "",
+     "members": [],
+     "torch": "set_int8_calibrating"
+    },
+    {
+     "kind": "interface",
      "name": "Scope",
      "signature": "export interface Scope extends Disposable",
      "doc": "One open scope. `using` closes it at the end of the block.",
@@ -7657,7 +7753,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 783,
+   "count": 797,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -7722,6 +7818,12 @@
        "name": "children",
        "signature": "children(): Module[]",
        "doc": ""
+      },
+      {
+       "name": "fuseEval",
+       "signature": "fuseEval(): void",
+       "doc": "Folds this module's eval-only pairs in place — a batch norm into the convolution\nbefore it, a relu into that convolution's epilogue — where the structure makes the\npairing certain: inside a `Sequential`, where the order is the list. A module that\nknows its own pairs (a residual block, whose add is in its forward) overrides\n`fuse()` instead; `fuseForInference` prefers that. Recurses into the children.",
+       "torch": "fuse_eval"
       },
       {
        "name": "namedModules",
@@ -7858,6 +7960,12 @@
        "signature": "constructor(...layers: readonly (Module | readonly Module[])[])",
        "doc": "**Layers are simply listed** — `new Sequential(a, b, c)`. That is\ntorch's shape.\n\nTaking a single array made the very first example in `index.ts` wrong.\nSomeone copying torch code across leaves the brackets off by default,\nand the default should be the one that is right. An array is still\naccepted — there is already code written that way.",
        "doc_ko": "**층을 그냥 나열한다** — `new Sequential(a, b, c)`. torch 가 그 모양이다.\n\n배열 하나를 받게 두었더니 `index.ts` 에 적은 첫 예시부터 틀렸다. 쓰는 사람이\ntorch 코드를 옮겨 적을 때 대괄호를 빼먹는 것이 기본값이고, 그 기본값이 맞는\n쪽이어야 한다. 배열도 그대로 받는다 — 이미 그렇게 쓰던 자리가 있다."
+      },
+      {
+       "name": "fuseEval",
+       "signature": "fuseEval(): void",
+       "doc": "The `Sequential` fold: `Conv → BatchNorm` becomes one convolution\n(`fuseConvBnEval`, the norm's affine in the weights), then `Conv → ReLU` becomes\n`ConvReLU2d` (the relu in the convolution's epilogue). Eval only — the fold reads\nthe running statistics — and in place: the list is rewritten. Then the children.",
+       "torch": "fuse_eval"
       },
       {
        "name": "children",
@@ -8141,6 +8249,17 @@
        "signature": "readonly bias: Tensor | null",
        "doc": "The bias may be absent — with normalisation following, the bias is\nabsorbed as a constant term.",
        "doc_ko": "편향이 없을 수도 있다 — 뒤에 정규화가 오면 편향이 상수항으로 흡수된다."
+      },
+      {
+       "name": "int8",
+       "signature": "int8: Int8ConvWeight | null",
+       "doc": "**The weight quantised for the int8 convolution** (`docs/INT8.md` Step 5) — set by\n`quantizeInt8`, read by the intrinsic modules' forwards where the device has the int8\nconfiguration and the shape fits; `null` until then, and the f32 weight stays."
+      },
+      {
+       "name": "quantizeInt8",
+       "signature": "quantizeInt8(): Promise<boolean>",
+       "doc": "Quantises this convolution's weight once for the int8 path — per output channel,\ntap-major, packed (`quantizeConvWeightInt8TapMajor`) — where the layer is one the\nint8 kernel takes (two spatial axes, a 3 × 3 or smaller kernel, stride one, no groups\nor dilation, input channels in thirty-twos, output channels in sixteens). Reads the\nweight back once; the packed words and scales live as kept tensors. A layer the\nkernel does not take is left alone and runs f32.",
+       "torch": "quantize_int8"
       },
       {
        "name": "constructor",
@@ -12530,9 +12649,17 @@
      ]
     },
     {
+     "kind": "function",
+     "name": "fusedQkvAttention",
+     "signature": "export declare function fusedQkvAttention(qkv: Tensor, heads: number, opts?: { scale?: number; keyLen?: number; bias?: Tensor | null; }): Tensor",
+     "doc": "Attention from a packed `qkv` projection, in one kernel — `Tensor.fusedAttention`.\nNot a torch name: torch's `scaled_dot_product_attention` takes split heads and this\ntakes the projection before the split, which is where the copies were. A model whose\nattention is written as `qkv → split → sdpa → merge` (timm's, bimm's) calls this under\n`noGrad` and keeps the chain for training. **Measured slower than the chain on\nmetal-3 today** (`docs/INFER.md` ledger, 2026-09-21: the chain's batched products run\non subgroup matrices, and a scalar kernel does not catch them) — bimm does not call it;\nit stands for the card where it measures faster, and as the base of a subgroup-matrix\nversion.",
+     "members": [],
+     "torch": "fused_qkv_attention"
+    },
+    {
      "kind": "const",
      "name": "functional",
-     "signature": "export declare const functional: { affineGrid: typeof affineGrid; batchNorm: typeof batchNorm; ctcLoss: typeof ctcLoss; embedding: typeof embedding; embeddingBag: typeof embeddingBag; gridSample: typeof gridSample; gumbelSoftmax: typeof gumbelSoftmax; multiHeadAttentionForward: typeof multiHeadAttentionForward; scaledDotProductAttention: typeof scaledDotProductAttention; alphaDropout(input: Tensor, p?: number, training?: boolean, perChannel?: boolean): Tensor; avgPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; bilinear(input: Tensor, other: Tensor, weight: Tensor, bias?: Tensor | null): Tensor; celu(input: Tensor, alpha?: number): Tensor; channelShuffle(input: Tensor, groups: number): Tensor; conv1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number, dilation?: number | readonly number[], groups?: number): Tensor; conv2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number, dilation?: number | readonly number[], groups?: number): Tensor; conv3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number, dilation?: number | readonly number[], groups?: number): Tensor; cosineEmbeddingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; cosineSimilarity(input: Tensor, other: Tensor, dim?: number, eps?: number): Tensor; crossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction, labelSmoothing?: number): Tensor; dropout(input: Tensor, p?: number, training?: boolean): Tensor; fold(input: Tensor, outputSize: number | [number, number], kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; gaussianNllLoss(input: Tensor, target: Tensor, variance: Tensor, full?: boolean, eps?: number, reduction?: Reduction): Tensor; glu(input: Tensor, dim?: number): Tensor; groupNorm(input: Tensor, numGroups: number, eps?: number): Tensor; hardshrink(input: Tensor, lambd?: number): Tensor; hardtanh(input: Tensor, minVal?: number, maxVal?: number): Tensor; hingeEmbeddingLoss(input: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; instanceNorm(input: Tensor, eps?: number): Tensor; klDiv(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction | \"batchmean\", logTarget?: boolean): Tensor; l1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor; leakyRelu(input: Tensor, slope?: number): Tensor; linear(input: Tensor, weight: Tensor): Tensor; linearCrossEntropy(input: Tensor, linearWeight: Tensor, target: Tensor, linearBias?: Tensor, weight?: Tensor, reduction?: Reduction, ignoreIndex?: number | null, labelSmoothing?: number, options?: unknown): Tensor; localResponseNorm(input: Tensor, size: number, alpha?: number, beta?: number, k?: number): Tensor; logSoftmax(input: Tensor, dim?: number): Tensor; marginRankingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; maxPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; mseLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor; multiMarginLoss(input: Tensor, target: Tensor, p?: number, margin?: number, weight?: Tensor | null, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; multilabelMarginLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; multilabelSoftMarginLoss(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; nllLoss(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction): Tensor; normalize(input: Tensor, dim?: number, eps?: number): Tensor; oneHot(input: Tensor, classes: number): Tensor; pairwiseDistance(input: Tensor, other: Tensor, p?: number, eps?: number, keepdim?: boolean): Tensor; pdist(input: Tensor, p?: number): Tensor; pixelShuffle(input: Tensor, upscaleFactor: number): Tensor; pixelUnshuffle(input: Tensor, downscaleFactor: number): Tensor; poissonNllLoss(input: Tensor, target: Tensor, logInput?: boolean, full?: boolean, sizeAverage?: boolean | null, eps?: number, reduce?: boolean | null, reduction?: Reduction): Tensor; prelu(input: Tensor, weight: Tensor): Tensor; rrelu(input: Tensor, lower?: number, upper?: number, training?: boolean): Tensor; smoothL1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, beta?: number): Tensor; softMarginLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; softmax(input: Tensor, dim?: number): Tensor; softmin(input: Tensor, dim?: number): Tensor; softplus(input: Tensor, beta?: number, threshold?: number): Tensor; softshrink(input: Tensor, lambd?: number): Tensor; threshold(input: Tensor, t: number, value: number): Tensor; tripletMarginLoss(input: Tensor, positive: Tensor, negative: Tensor, margin?: number, p?: number, eps?: number, swap?: boolean, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; unfold(input: Tensor, kernelSize: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; huberLoss(input: Tensor, target: Tensor, reduction?: Reduction, delta?: number): Tensor; relu(input: Tensor): Tensor; relu6(input: Tensor): Tensor; sigmoid(input: Tensor): Tensor; hardsigmoid(input: Tensor): Tensor; hardswish(input: Tensor): Tensor; logsigmoid(input: Tensor): Tensor; mish(input: Tensor): Tensor; selu(input: Tensor): Tensor; softsign(input: Tensor): Tensor; tanh(input: Tensor): Tensor; tanhshrink(input: Tensor): Tensor; avgPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; avgPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; convTranspose1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; lpPool1d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool2d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool3d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; maxPool1dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool2dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool3dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxUnpool1d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool2d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool3d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; fractionalMaxPool2d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool2dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; binaryCrossEntropyWithLogits(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, posWeight?: Tensor): Tensor; binaryCrossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; adaptiveAvgPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool2dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool3dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; tripletMarginWithDistanceLoss(anchor: Tensor, positive: Tensor, negative: Tensor, distanceFunction?: ((u: Tensor, v: Tensor) => Tensor) | null, margin?: number, swap?: boolean, reduction?: Reduction): Tensor; }",
+     "signature": "export declare const functional: { affineGrid: typeof affineGrid; fusedQkvAttention: typeof fusedQkvAttention; batchNorm: typeof batchNorm; ctcLoss: typeof ctcLoss; embedding: typeof embedding; embeddingBag: typeof embeddingBag; gridSample: typeof gridSample; gumbelSoftmax: typeof gumbelSoftmax; multiHeadAttentionForward: typeof multiHeadAttentionForward; scaledDotProductAttention: typeof scaledDotProductAttention; alphaDropout(input: Tensor, p?: number, training?: boolean, perChannel?: boolean): Tensor; avgPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; bilinear(input: Tensor, other: Tensor, weight: Tensor, bias?: Tensor | null): Tensor; celu(input: Tensor, alpha?: number): Tensor; channelShuffle(input: Tensor, groups: number): Tensor; conv1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number, dilation?: number | readonly number[], groups?: number): Tensor; conv2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number, dilation?: number | readonly number[], groups?: number): Tensor; conv3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number, dilation?: number | readonly number[], groups?: number): Tensor; cosineEmbeddingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; cosineSimilarity(input: Tensor, other: Tensor, dim?: number, eps?: number): Tensor; crossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction, labelSmoothing?: number): Tensor; dropout(input: Tensor, p?: number, training?: boolean): Tensor; fold(input: Tensor, outputSize: number | [number, number], kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; gaussianNllLoss(input: Tensor, target: Tensor, variance: Tensor, full?: boolean, eps?: number, reduction?: Reduction): Tensor; glu(input: Tensor, dim?: number): Tensor; groupNorm(input: Tensor, numGroups: number, eps?: number): Tensor; hardshrink(input: Tensor, lambd?: number): Tensor; hardtanh(input: Tensor, minVal?: number, maxVal?: number): Tensor; hingeEmbeddingLoss(input: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; instanceNorm(input: Tensor, eps?: number): Tensor; klDiv(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction | \"batchmean\", logTarget?: boolean): Tensor; l1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor; leakyRelu(input: Tensor, slope?: number): Tensor; linear(input: Tensor, weight: Tensor): Tensor; linearCrossEntropy(input: Tensor, linearWeight: Tensor, target: Tensor, linearBias?: Tensor, weight?: Tensor, reduction?: Reduction, ignoreIndex?: number | null, labelSmoothing?: number, options?: unknown): Tensor; localResponseNorm(input: Tensor, size: number, alpha?: number, beta?: number, k?: number): Tensor; logSoftmax(input: Tensor, dim?: number): Tensor; marginRankingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; maxPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; mseLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor; multiMarginLoss(input: Tensor, target: Tensor, p?: number, margin?: number, weight?: Tensor | null, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; multilabelMarginLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; multilabelSoftMarginLoss(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; nllLoss(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction): Tensor; normalize(input: Tensor, dim?: number, eps?: number): Tensor; oneHot(input: Tensor, classes: number): Tensor; pairwiseDistance(input: Tensor, other: Tensor, p?: number, eps?: number, keepdim?: boolean): Tensor; pdist(input: Tensor, p?: number): Tensor; pixelShuffle(input: Tensor, upscaleFactor: number): Tensor; pixelUnshuffle(input: Tensor, downscaleFactor: number): Tensor; poissonNllLoss(input: Tensor, target: Tensor, logInput?: boolean, full?: boolean, sizeAverage?: boolean | null, eps?: number, reduce?: boolean | null, reduction?: Reduction): Tensor; prelu(input: Tensor, weight: Tensor): Tensor; rrelu(input: Tensor, lower?: number, upper?: number, training?: boolean): Tensor; smoothL1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, beta?: number): Tensor; softMarginLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; softmax(input: Tensor, dim?: number): Tensor; softmin(input: Tensor, dim?: number): Tensor; softplus(input: Tensor, beta?: number, threshold?: number): Tensor; softshrink(input: Tensor, lambd?: number): Tensor; threshold(input: Tensor, t: number, value: number): Tensor; tripletMarginLoss(input: Tensor, positive: Tensor, negative: Tensor, margin?: number, p?: number, eps?: number, swap?: boolean, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; unfold(input: Tensor, kernelSize: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; huberLoss(input: Tensor, target: Tensor, reduction?: Reduction, delta?: number): Tensor; relu(input: Tensor): Tensor; relu6(input: Tensor): Tensor; sigmoid(input: Tensor): Tensor; hardsigmoid(input: Tensor): Tensor; hardswish(input: Tensor): Tensor; logsigmoid(input: Tensor): Tensor; mish(input: Tensor): Tensor; selu(input: Tensor): Tensor; softsign(input: Tensor): Tensor; tanh(input: Tensor): Tensor; tanhshrink(input: Tensor): Tensor; avgPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; avgPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; convTranspose1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; lpPool1d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool2d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool3d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; maxPool1dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool2dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool3dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxUnpool1d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool2d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool3d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; fractionalMaxPool2d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool2dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; binaryCrossEntropyWithLogits(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, posWeight?: Tensor): Tensor; binaryCrossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; adaptiveAvgPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool2dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool3dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; tripletMarginWithDistanceLoss(anchor: Tensor, positive: Tensor, negative: Tensor, distanceFunction?: ((u: Tensor, v: Tensor) => Tensor) | null, margin?: number, swap?: boolean, reduction?: Reduction): Tensor; }",
      "doc": "",
      "members": []
     },
@@ -12851,6 +12978,38 @@
      ]
     },
     {
+     "kind": "function",
+     "name": "fuseForInference",
+     "signature": "export declare function fuseForInference(m: Module): void",
+     "doc": "The whole model folded for inference: a module that defines its own `fuse()` (a\nresidual block, whose add is in its forward and which no container can see) is\nasked; any other module folds its `Sequential`s and recurses (`Module.fuseEval`).\nWhat `torch.compiled(model)` runs before it records (`docs/INFER.md` Step 6).",
+     "members": [],
+     "torch": "fuse_for_inference"
+    },
+    {
+     "kind": "function",
+     "name": "quantizeForInt8",
+     "signature": "export declare function quantizeForInt8(m: Module): Promise<number>",
+     "doc": "**Every convolution of the model quantised for the int8 path** (`docs/INT8.md` Step 5)\n— what `torch.compiled(model, { int8: true })` runs after the fold and before it\nrecords. Returns how many layers took it; the rest run f32, and the count is printed\nbeside the number so a table never quotes an int8 forward that was mostly f32.\nRefused by name on an adapter without the int8 configuration: the path is an\naccuracy trade a caller asks for, and it should not silently become the f32 forward.",
+     "members": [],
+     "torch": "quantize_for_int8"
+    },
+    {
+     "kind": "function",
+     "name": "calibrateInt8",
+     "signature": "export declare function calibrateInt8(m: Module, pixels: Float32Array, batch: number, shape: readonly number[]): Promise<number>",
+     "doc": "**The static scales** (`docs/INT8.md`): the int8 layers run f32 over the calibration\nimages while accumulating `max|x|` of their input and `max|out|` of their output into\ntwo words each (an atomic maximum, no readback until the end), then each layer keeps\nboth as its scales — its input quantised in one pass by the first, its output packed at\nits own store by the second for the next int8 layer, which then needs no pass at all.\n`pixels` is NCHW f32, `batch` images a forward. Returns how many layers were calibrated.\nAfter `quantizeForInt8`; `clearInt8` undoes both.",
+     "members": [],
+     "torch": "calibrate_int8"
+    },
+    {
+     "kind": "function",
+     "name": "clearInt8",
+     "signature": "export declare function clearInt8(m: Module): void",
+     "doc": "Back to f32: every convolution's int8 weight dropped (the f32 weight never left).",
+     "members": [],
+     "torch": "clear_int8"
+    },
+    {
      "kind": "const",
      "name": "intrinsic",
      "signature": "export declare const intrinsic: { ConvReLU2d: typeof ConvReLU2d; ConvAdd2d: typeof ConvAdd2d; ConvAddReLU2d: typeof ConvAddReLU2d; }",
@@ -12858,7 +13017,7 @@
      "members": []
     }
    ],
-   "count": 872,
+   "count": 881,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -13996,6 +14155,18 @@
        "doc": ""
       },
       {
+       "name": "stateDict",
+       "signature": "stateDict(): { tensors: Record<string, Tensor>; numbers: Record<string, number>; }",
+       "doc": "`m`/`v` live in the arena during training; bring them back into the state banks so the base\n serializes the current values, as SGD does for its momentum.",
+       "torch": "state_dict"
+      },
+      {
+       "name": "loadStateDict",
+       "signature": "loadStateDict(state: { tensors: Record<string, Tensor>; numbers: Record<string, number>; }): void",
+       "doc": "",
+       "torch": "load_state_dict"
+      },
+      {
        "name": "counters",
        "signature": "protected counters(): Record<string, number>",
        "doc": "",
@@ -14796,7 +14967,7 @@
      "doc_ko": "값이 나아지지 않으면 학습률을 줄인다.\n\n다른 스케줄과 달리 **값을 받아야** 움직인다 — 그래서 `step(metric)` 이다."
     }
    ],
-   "count": 178,
+   "count": 180,
    "doc_ko": "옵티마이저와 학습률 스케줄.\n\n## 파라미터를 제자리에서 고친다\n\n새 텐서를 만들어 갈아끼우지 않는다. 모델이 들고 있는 손잡이와 옵티마이저가 보는\n손잡이가 같아야 하고, 갈아끼우면 그 둘이 갈려서 **학습은 도는데 파라미터가 안\n움직이는** 상태가 된다. 제자리 수정은 기울기가 켜진 잎에서 막혀 있으므로\n`no_grad` 안에서 한다 — torch 의 옵티마이저도 정확히 그렇게 한다.\n\n## 상태를 텐서로 든다\n\n모멘텀 버퍼 같은 것을 **기울기 텐서 그대로 물고 있으면 안 된다.** 다음 스텝에서\n그 기울기가 새것으로 바뀌면 버퍼가 엉뚱한 것을 가리킨다 — 이 저장소가 모멘텀\n없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다."
   },
   {
@@ -22399,9 +22570,102 @@
     },
     {
      "kind": "interface",
+     "name": "SubgroupInt8Config",
+     "signature": "export interface SubgroupInt8Config",
+     "doc": "The int8 subgroup-matrix configuration an adapter offers — `i8 × i8 → i32` at\n 16 × 16 × 32 — or `null`. What the RTX 5080 through Chrome 151 / Vulkan has *instead\n of* the f32 one (`docs/INT8.md`); read from the configurations, never from the\n feature name.",
+     "members": [
+      {
+       "name": "M",
+       "signature": "readonly M: number",
+       "doc": ""
+      },
+      {
+       "name": "N",
+       "signature": "readonly N: number",
+       "doc": ""
+      },
+      {
+       "name": "K",
+       "signature": "readonly K: number",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "type",
+     "name": "Access",
+     "signature": "export type Access = \"r\" | \"w\" | \"rw\"",
+     "doc": "What a dispatch does to one binding: reads it, writes it, or both.",
+     "members": []
+    },
+    {
+     "kind": "interface",
+     "name": "TuneCandidate",
+     "signature": "export interface TuneCandidate",
+     "doc": "One way of running a kernel a rule chooses among — see `Device.choose`. `keys` are the\n pipeline keys its `run` dispatches under, which the profiler files times by.",
+     "members": [
+      {
+       "name": "label",
+       "signature": "readonly label: string",
+       "doc": ""
+      },
+      {
+       "name": "keys",
+       "signature": "readonly keys: readonly string[]",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "readonly run: () => void",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "TuneReport",
+     "signature": "export interface TuneReport",
+     "doc": "One decision of `Device.runTuning`.",
+     "members": [
+      {
+       "name": "key",
+       "signature": "readonly key: string",
+       "doc": ""
+      },
+      {
+       "name": "prior",
+       "signature": "readonly prior: string",
+       "doc": ""
+      },
+      {
+       "name": "priorMs",
+       "signature": "readonly priorMs: number",
+       "doc": "",
+       "torch": "prior_ms"
+      },
+      {
+       "name": "chosen",
+       "signature": "readonly chosen: string",
+       "doc": ""
+      },
+      {
+       "name": "chosenMs",
+       "signature": "readonly chosenMs: number",
+       "doc": "",
+       "torch": "chosen_ms"
+      },
+      {
+       "name": "candidates",
+       "signature": "readonly candidates: readonly string[]",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "interface",
      "name": "Recorded",
      "signature": "export interface Recorded",
-     "doc": "One dispatch as recorded under a capture — or one buffer copy: every in-place\noperation is a copy back into the original buffer (`copyInto`), and an optimizer's\nweight decay is one. Left out of the recording, a replay silently skipped them: AdamW\ntrained a GPT to a loss 3e-6 away from eager while Adam's U-Net replayed bit for bit\n(measured 2026-09-07). A copy has `copy` set and `buffers` as `[src, dst]`.",
+     "doc": "One dispatch recorded under a capture — or one buffer copy. Every in-place operation\n is a copy back into the original buffer (`copyInto`) and an optimizer step is made of\n them, so a recording that holds dispatches and copies replays a whole step.",
      "members": [
       {
        "name": "pipeline",
@@ -22440,6 +22704,18 @@
        "doc_ko": "원소별 dispatch라면 무엇을 계산했는지 — `Elementwise` 참조; 리덕션이라면 무엇을 한 번씩 읽는지 — `Reduce` 참조."
       },
       {
+       "name": "access",
+       "signature": "readonly access?: readonly Access[]",
+       "doc": "Per binding, what the kernel does to it — read off the WGSL when the pipeline was\nbuilt (`bindingAccess`). A recipe (`meta`) says the same more precisely for the\nkernels that carry one; every other kernel used to be taken to read and write\neverything it binds, which made `liveIns` and the fusion graph conservative by\nexactly that much (`docs/COMPILER.md` Step 0). Absent only for a pipeline this\ndevice did not build.",
+       "optional": true
+      },
+      {
+       "name": "refill",
+       "signature": "readonly refill?: { readonly win: Window; readonly data: Float32Array | Uint16Array | Uint32Array; }",
+       "doc": "A window refill: the host bytes a streamed weight was placed from, written into\n`buffers[0]` (its slot) again on every replay. Not a dispatch and not a copy the\ndevice can re-encode — the bytes come from the host through a staging map, which is\nwhy a recording with refills replays through `replayAsync`. `docs/COMPILER.md` Step 7.",
+       "optional": true
+      },
+      {
        "name": "sig",
        "signature": "readonly sig?: string",
        "doc": "The pipeline's signature at the time of recording — what the profiler files a\n replayed dispatch under. Without it a replay is one kind: the last signature set.",
@@ -22462,6 +22738,14 @@
      "doc": "The GPUBuffer behind a slot — for a usage or pool check, never for identity.",
      "members": [],
      "torch": "buf_of"
+    },
+    {
+     "kind": "function",
+     "name": "bindingAccess",
+     "signature": "export declare function bindingAccess(code: string): Access[]",
+     "doc": "What a kernel does to each of its bindings, read off its WGSL. `var<uniform>` and\n`var<storage, read>` are reads. A `read_write` binding is a write when every use of\nits name in the body is an assignment (`Name[i] = …`) — the common output — and\nread-and-write when any use is a read, a compound assignment (`+=`), or the name is\ntaken by address (`&Name`: a pointer, an atomic, `arrayLength`), where the scan\ncannot follow it and says the conservative thing. Never less than the kernel does.",
+     "members": [],
+     "torch": "binding_access"
     },
     {
      "kind": "class",
@@ -22492,16 +22776,59 @@
        "doc": ""
       },
       {
+       "name": "hasRefills",
+       "signature": "get hasRefills(): boolean",
+       "doc": "Whether the recording carries window refills (`Recorded.refill`).",
+       "torch": "has_refills"
+      },
+      {
+       "name": "replayAsync",
+       "signature": "replayAsync(): Promise<void>",
+       "doc": "The replay for a recording that streams: the dispatches between two refills are\nencoded as one run and submitted, then the refill writes the block's bytes into the\nsame slot it had — the queue keeps submit order, so the dispatches already submitted\nread the old bytes and the ones after read the new — and the walk goes on. The\nwindow's own bookkeeping is not touched: the slots a replay writes are the slots the\nrecording chose, and they were free then exactly as they are now.",
+       "torch": "replay_async"
+      },
+      {
+       "name": "coverage",
+       "signature": "coverage(): { dispatches: number; exact: number; declared: number; guessed: number; copies: number; readWrite: number; refills: number; }",
+       "doc": "How well the recording knows what its dispatches touch — the gate of\n`docs/COMPILER.md` Step 0. `exact`: a recipe says which binding is read and which\nwritten. `declared`: read off the kernel's WGSL. `guessed`: neither — taken to read\nand write everything it binds. `copies` are exact by construction. `readWrite` counts\nthe declared bindings the scan could not call write-only (a pointer, a compound\nassignment) — conservative, and a place to look when a planner wants more."
+      },
+      {
+       "name": "horizontal",
+       "signature": "horizontal(): { runs: number; dispatches: number; largest: number; buffersMax: number; }",
+       "doc": "What a horizontal fusion pass would find — **counted before any pass is written**\n(`docs/COMPILER.md` Step 3). A run is consecutive elementwise dispatches with the same\nrecipe (expression, prelude, operand count and layout — the element count may differ)\nand no dependence between them: none writes what another in the run reads or writes.\n`buffersMax` is the most distinct buffers one run binds; a kernel that merged the run\nwould bind them all, and the device allows ten storage buffers a stage."
+      },
+      {
+       "name": "explain",
+       "signature": "explain(ns?: ReadonlyMap<string, number>, head?: number): string",
+       "doc": "The recording as a person reads it: one line a dispatch — its index, the pipeline's\nkey, the workgroup grid, the buffers it binds as small ids with their bytes — and,\ngiven a profile (`Device.nsByKind` after a replay run under `profile`), the GPU time\nof that kind divided among its dispatches here. `head` limits the lines."
+      },
+      {
        "name": "liveIns",
        "signature": "liveIns(): GPUBuffer[]",
        "doc": "The buffers the recording reads before it writes them — the step's inputs and its\nstate: parameters, the optimizer's moments and counters, running statistics. A\nreplay starts from what they hold; snapshot them and the step can be run again from\nthe same place. A dispatch without a recipe is taken to read every buffer it binds,\nso activations such a kernel writes are counted too — more than needed, never less.",
        "torch": "live_ins"
       },
       {
+       "name": "mutatesState",
+       "signature": "mutatesState(): boolean",
+       "doc": "Whether the recording writes any buffer that is not its own — a parameter, an\noptimizer's state, a batch norm's running statistic. A recording that does not is a\npure function of its inputs (an inference forward) and can be made again without\nthe world moving; one that does is a step, and is made once.",
+       "torch": "mutates_state"
+      },
+      {
        "name": "fuse",
        "signature": "fuse(held?: Iterable<GPUBuffer>): { before: number; after: number; fused: number; unwritten: number; }",
        "doc": "Merges elementwise dispatches that feed each other into single kernels, and into the\nreductions that read them — see `fuse.ts`. The recording is rewritten in place;\n`replay` runs the fused list. Returns how many dispatches there were and are, and\nhow many intermediates the fused kernels leave unwritten.\n\n`held` — the buffers of every tensor the caller still holds. Given, an intermediate\nmade with autograd off that nobody holds and nothing later reads is never written;\nleft out, only autograd's own intermediates are.",
        "doc_ko": "서로를 먹이는 원소별 dispatch를 하나의 커널로, 그리고 그것을 읽는 리덕션 안으로 합친다 — `fuse.ts` 참조. 녹화는 제자리에서 다시 쓰이고 `replay`가 융합된 목록을 돌린다. dispatch가 몇이었고 몇이 되었는지, 융합 커널이 쓰지 않고 남기는 중간값이 몇인지 돌려준다.\n\n`held` — 호출자가 아직 쥐고 있는 모든 텐서의 버퍼. 주어지면 autograd가 꺼진 채 만들어져 아무도 쥐지 않고 뒤에서 아무도 읽지 않는 중간값은 쓰지 않는다; 없으면 autograd 자신의 중간값만 그렇게 한다."
+      },
+      {
+       "name": "hoist",
+       "signature": "hoist(): { hoisted: number; bytes: number; }",
+       "doc": "**Runs the replay-invariant dispatches once and takes them out of the replay.** A\ndispatch whose every read is a constant of the recording — a buffer no record writes,\nnot an input uploaded under the capture (the caller rewrites those before each\nreplay), not a window slot (refilled) — and whose writes are pure (no binding read\nand written) produces the same bytes on every replay; it ran when the step was\nrecorded, its outputs are pinned for the capture's life, and a replay has no reason\nto run it again. Found to a fixed point, so a chain of such dispatches hoists whole.\n\nWhat it is in practice: the eval forward's weight repacks (`tmw`, the subgroup\nconv's tap-major copy of a frozen weight — 0.7 ms a forward on ResNet-18's 512-channel\nlayer, measured), a padded constant, a block of ones. In a training step the weights\nare written by the optimizer and nothing is hoisted — the fixed point finds that on\nits own. `docs/INFER.md` Step 2 and `docs/COMPILER.md`. Run after `fuse`, before\n`plan`."
+      },
+      {
+       "name": "plan",
+       "signature": "plan(held?: Iterable<GPUBuffer>): { moved: number; released: number; bytesBefore: number; bytesAfter: number; arenas: number; kept: { liveIn: number; subRange: number; }; }",
+       "doc": "Lays the step's intermediates into arenas so that buffers whose lives do not overlap\nshare bytes, and releases the buffers they replace — see `plan.ts`. Run after\n`fuse()` (a fused tree leaves intermediates untouched, and those are released here\ntoo). `held` — the buffers of every tensor the caller still holds, as for `fuse`;\na held buffer stays where it is. Returns what moved and what it saved."
       },
       {
        "name": "dispose",
@@ -22521,6 +22848,24 @@
        "name": "create",
        "signature": "static create(options?: InitOptions): Promise<Device>",
        "doc": ""
+      },
+      {
+       "name": "readbackKicks",
+       "signature": "static readbackKicks: boolean",
+       "doc": "**Whether this browser has to be kicked to notice a finished fence.** Measured\nonce at `create` by `calibrateKicks`, and read by `kicked`, which is what every wait\nfor the GPU in this class goes through.\n\nChrome on Linux over Vulkan (RTX 5080, 2026-09-20, `roundtrip:probe`): forty tiny\ndispatches are 0.08 ms of GPU and **2.6 ms of wall** under `onSubmittedWorkDone` or\n`mapAsync`; a 1.57 ms kernel is 2.5. Everything past a few hundred microseconds\nlands at the same 2.5 — the GPU process polls its fences on a backoff, and a fence\nthat signals between polls waits for the next one. A cheap round trip on the wire\n(`pushErrorScope`/`popErrorScope`, 0.04 ms) makes it look, and a loop of them until\nthe wait resolves brings the wall to the GPU's time plus 0.1. metal-3 needs none of\nit: the wall follows the GPU within 0.2 ms whatever the wait, and a loop of kicks\nthere is only chatter — which is why it is measured rather than assumed.",
+       "torch": "readback_kicks"
+      },
+      {
+       "name": "kickCalibration",
+       "signature": "static kickCalibration: { plainMs: number; kickedMs: number; gpuMs: number; }",
+       "doc": "What `calibrateKicks` measured in its worst round, ms — the plain median, the\n kernel's GPU time under it (−1 without `timestamp-query`) and the kicked median — so\n a table can print the numbers the decision came from rather than only the decision.",
+       "torch": "kick_calibration"
+      },
+      {
+       "name": "readbackNote",
+       "signature": "static get readbackNote(): string",
+       "doc": "The kick decision and its numbers on one line, for the adapter line of a table.",
+       "torch": "readback_note"
       },
       {
        "name": "lost",
@@ -22616,6 +22961,16 @@
        }
       },
       {
+       "name": "accessOf",
+       "signature": "accessOf(pipeline: GPUComputePipeline): readonly Access[] | undefined",
+       "doc": "What a pipeline does to each binding, read off its WGSL at build (`bindingAccess`) —\n for a record made outside `run`, such as a fused kernel's.",
+       "torch": "access_of",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
+      },
+      {
        "name": "keyOf",
        "signature": "keyOf(pipeline: GPUComputePipeline): string | undefined",
        "doc": "The key a pipeline was built under, or undefined for one this device did not build.",
@@ -22635,6 +22990,25 @@
         "en": "Capture and replay"
        },
        "doc_ko": "캡처가 열려 있는지."
+      },
+      {
+       "name": "unrecorded",
+       "signature": "unrecorded<T>(fn: () => T): T",
+       "doc": "Runs `fn` with the open capture set aside: nothing it dispatches is recorded and\nnothing it allocates is pinned. The window's refill copy takes this — what the\nrecording keeps of a refill is the host bytes (`Recorded.refill`), not the copy from\na staging buffer whose contents will be another block's by the time of a replay.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
+      },
+      {
+       "name": "recordRefill",
+       "signature": "recordRefill(win: Window, slot: BindSlot, data: Float32Array | Uint16Array | Uint32Array): void",
+       "doc": "Records a window refill — see `Recorded.refill`. A no-op outside a capture.",
+       "torch": "record_refill",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
       },
       {
        "name": "replayRecorded",
@@ -22666,6 +23040,46 @@
         "en": "Capture and replay"
        },
        "doc_ko": "캡처가 붙잡아 둔 버퍼를 풀에 돌려준다. `Capture.dispose`가 부른다."
+      },
+      {
+       "name": "allocOwned",
+       "signature": "allocOwned(count: number): GPUBuffer",
+       "doc": "A buffer a capture owns from the start — an arena `Capture.plan` lays intermediates\ninto. Made outside any scope (a scope closing must not pool it) and marked owned, as\n`alloc` under an open capture does; the capture adds it to its pinned set and\n`dispose` returns it.",
+       "torch": "alloc_owned",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
+      },
+      {
+       "name": "bytesOf",
+       "signature": "bytesOf(buf: GPUBuffer): number",
+       "doc": "The bytes a buffer was allocated with — the pool's bucket, and a slot's size.",
+       "torch": "bytes_of",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
+      },
+      {
+       "name": "offsetAlignment",
+       "signature": "get offsetAlignment(): number",
+       "doc": "`minStorageBufferOffsetAlignment` — what a bound sub-range's offset must be a multiple of.",
+       "torch": "offset_alignment",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
+      },
+      {
+       "name": "maxBinding",
+       "signature": "get maxBinding(): number",
+       "doc": "`maxStorageBufferBindingSize` — the most one binding, and so one arena, can be.",
+       "torch": "max_binding",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
       },
       {
        "name": "endScope",
@@ -22729,12 +23143,43 @@
        "doc_ko": "통을 비운다. `torch.cuda.empty_cache()` 자리다.\n\n**통은 스스로 줄지 않는다.** 학습 루프처럼 모양이 반복되면 그것이 옳다 — 매번\n다시 만들면 그게 비용이다. 그런데 모양이 **바뀌면** 옛 모양의 버퍼가 영영\n남는다. 브라우저는 GPU 메모리를 탭이 나눠 쓰는 자리라 그 값이 데스크톱보다 크다.\n\n되돌려 준 버퍼를 아직 안 보낸 명령이 가리킬 수 있으므로 **보내고 나서** 놓는다."
       },
       {
+       "name": "packHits",
+       "signature": "packHits: number",
+       "doc": "`packed` calls that returned a pack as it was, and that made or remade one.",
+       "torch": "pack_hits"
+      },
+      {
+       "name": "packMisses",
+       "signature": "packMisses: number",
+       "doc": "",
+       "torch": "pack_misses"
+      },
+      {
+       "name": "epochOf",
+       "signature": "epochOf(buffer: GPUBuffer): number",
+       "doc": "The write epoch of `buffer` — how many times the device has been told it was written.",
+       "torch": "epoch_of",
+       "section": {
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
+       }
+      },
+      {
+       "name": "packed",
+       "signature": "packed(srcs: readonly GPUBuffer[], key: string, count: number, make: (dst: GPUBuffer) => void): GPUBuffer",
+       "doc": "A repack of `srcs[0]` (with the others, a bias say) under `key`, `count` words long,\nmade by `make(dst)`. The first time, and whenever any source has been written since,\n`make` runs into a buffer kept outside every scope; otherwise the pack is returned as\nit is. **Under a capture the pack is made into a scope buffer as before** — the\nrecording hoists what is replay-invariant and must not read a buffer it did not\nrecord the making of.",
+       "section": {
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
+       }
+      },
+      {
        "name": "keep",
        "signature": "keep(buffer: GPUBuffer): void",
        "doc": "Keeps something alive regardless of scope. Parameters and optimizer\nstate use it.",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "구역과 무관하게 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다."
       },
@@ -22743,8 +23188,8 @@
        "signature": "unkeep(buffer: GPUBuffer): void",
        "doc": "The inverse of {@link keep}, for a caller that owns a kept buffer's whole life and is\ndone with it — the SGD arena on a resume, where the next step rebuilds it. It leaves\n`kept` and is destroyed; a pending command may still bind it, so the destroy waits\nbehind a flush, the order {@link emptyCache} uses. The `made`/`madeBytes` tally is\ncorrected as `emptyCache` does, so a released buffer stops counting as held.",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        }
       },
       {
@@ -22752,8 +23197,8 @@
        "signature": "rehome(buffer: GPUBuffer, depth: number): void",
        "doc": "Moves a buffer `alloc` just filed under the innermost scope to the frame `depth`\nscopes deep — `0` is outside every scope. `Tensor.ensureOwned` uses it so an owned\ncopy lives as long as the tensor it replaces, not as long as the scope that\nhappened to be open when the write came.",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        }
       },
       {
@@ -22762,8 +23207,8 @@
        "doc": "The depth of open scopes. Tests look at it for balance.",
        "torch": "scope_depth",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "열려 있는 구역의 깊이. 테스트가 균형을 본다."
       },
@@ -22778,8 +23223,8 @@
         }
        ],
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "**올리기는 꺼내 쓰면 안 된다.** `writeBuffer` 는 큐의 지금 자리에서 도는데, 우리는\n명령을 쌓아 두었다가 나중에 보낸다 — 통에서 꺼낸 버퍼를 아직 안 보낸 dispatch 가\n읽을 참이면 그것을 덮어쓰게 된다. 새로 만들면 그 자리가 아예 없다."
       },
@@ -22788,8 +23233,8 @@
        "signature": "upload(data: Float32Array): GPUBuffer",
        "doc": "",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        }
       },
       {
@@ -22797,8 +23242,8 @@
        "signature": "word(value: number): GPUBuffer",
        "doc": "One `u32` for a kernel to read at run time — an offset, a padding width.\n\n**Cached by value, for the life of the device.** The first version allocated a fresh\nfour-byte buffer per dispatch; a grouped convolution issues one such dispatch per\ngroup, and an EfficientNet-B4 forward asked for 83,724 of them — which is why the\nword is not a pooled buffer either. Slices repeat their offsets far more than they\nvary them (11,042 distinct against 55,794 asked, measured on that model), so a map\nfrom value to buffer is small, and a buffer that lives outside the scopes cannot be\nreleased under a dispatch that has not run yet.\n\nIt cannot be one buffer rewritten per dispatch: the dispatches are recorded now and\nsubmitted later, and `writeBuffer` lands before the submission — every dispatch\nwould read the last value written.\n\nA storage buffer like the rest, so the shader declares `array<u32>` and no new usage\nflag or pool appears.",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        }
       },
       {
@@ -22806,8 +23251,8 @@
        "signature": "run(pipeline: GPUComputePipeline, buffers: readonly BindSlot[], groups: readonly [number, number, number], meta?: Elementwise | Reduce): void",
        "doc": "One kernel. `groups` is the **workgroup count**, and the per-axis limit\nis rechecked here — `kernels.ts` folds the grid, but a hand-called path\nmay appear.",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "커널 한 번. `groups` 는 **워크그룹 수**이고, 축당 한계를 여기서 다시 확인한다 —\n`kernels.ts` 가 격자를 접어 주지만 손으로 부르는 경로가 생길 수 있다."
       },
@@ -22816,8 +23261,8 @@
        "signature": "run1d(pipeline: GPUComputePipeline, buffers: readonly BindSlot[], n: number, meta?: Elementwise | Reduce): void",
        "doc": "Runs one-dimensional work spread over a grid. Paired with the indexing\nin `kernels.ts`.",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "1차원 작업을 격자로 펴서 돌린다. `kernels.ts` 의 인덱싱과 짝이다."
       },
@@ -22827,10 +23272,16 @@
        "doc": "Writes `words` at the start of `buffer` — a seed, a counter.",
        "torch": "write_words",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "`buffer`의 앞에 `words`를 쓴다 — 시드, 카운터."
+      },
+      {
+       "name": "bindGroups",
+       "signature": "bindGroups: number",
+       "doc": "Bind groups made so far — one a dispatch on the eager path; `docs/FIRST.md` 2a.",
+       "torch": "bind_groups"
       },
       {
        "name": "bindGroupFor",
@@ -22838,8 +23289,8 @@
        "doc": "A bind group for `pipeline` over `buffers`, in binding order.",
        "torch": "bind_group_for",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "`buffers`를 바인딩 순서로 묶은 `pipeline`용 바인드 그룹."
       },
@@ -22849,8 +23300,8 @@
        "doc": "A full sum. It calls the same kernel again until the partial sums come\ndown to one.\n\n**It uses no atomics** — floating-point addition changes value when the\norder changes, and then the same seed run twice gives different\ntraining. The slower way is the one that reproduces.",
        "torch": "sum_all",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "전체 합. 부분합이 하나가 될 때까지 같은 커널을 다시 부른다.\n\n**원자 연산을 안 쓴다** — 부동소수 덧셈은 순서가 바뀌면 값이 달라지고, 그러면\n같은 씨앗으로 두 번 돌린 학습이 갈린다. 느린 쪽이 재현된다."
       },
@@ -22860,8 +23311,8 @@
        "doc": "Overwrites one buffer with another. In-place operations use it.\n\nIt is a copy, not a kernel — the result is made in a new buffer and\nthen moved back to the original slot. Reading and writing the original\nat once leaves the threads unordered and the values mixed.",
        "torch": "copy_into",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "버퍼 하나를 다른 버퍼에 덮어쓴다. 제자리 연산이 쓴다.\n\n커널이 아니라 복사다 — 결과를 새 버퍼에 만든 뒤 원래 자리로 옮긴다. 원래\n버퍼를 읽으면서 같이 쓰면 스레드끼리 순서가 없어 값이 섞인다."
       },
@@ -22871,8 +23322,8 @@
        "doc": "A copy between sub-ranges — `srcOff`/`dstOff` bytes in, `bytes` long. `copyInto` is\nthe whole-buffer case; this is what an arena's gather and scatter ride (a byte offset\nmust be a multiple of 4, which every f32 slice is). Recorded with its offsets so a\ncaptured step replays the same slices.",
        "torch": "copy_range",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        }
       },
       {
@@ -22900,8 +23351,8 @@
        "signature": "profile<T>(body: () => Promise<T>): Promise<T>",
        "doc": "Runs `body` while measuring. **It always turns off afterwards —\nincluding on the way out through an exception.**\n\nTurning it on and off must not be left to the caller. While profiling,\neach dispatch opens a pass and the time inflates, and if it leaks out\nstill on, **every measurement after it comes out quietly inflated.** A\nbenchmark measures several batches, so an exception in one batch makes\nthe next batch's ms/step a profiled number rather than a measurement —\nand it prints on screen looking exactly the same. There should be one\ndoor, and the door should clean up.",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "`body` 를 재면서 돌린다. **끝나면 반드시 끈다 — 예외로 나가도 끈다.**\n\n켜고 끄기를 부르는 쪽에 맡기면 안 된다. 프로파일 중에는 dispatch 마다 패스를\n여느라 시간이 부풀고, 켜진 채로 새어 나가면 **그 뒤의 모든 측정이 조용히\n부풀어서** 나온다. 벤치는 배치를 여러 번 재므로, 한 배치에서 예외가 나면\n다음 배치의 ms/step 이 측정이 아니라 프로파일된 수가 된다 — 그런데 화면에는\n똑같이 생긴 수로 찍힌다. 문은 하나여야 하고 뒷정리는 문이 해야 한다."
       },
@@ -22910,8 +23361,8 @@
        "signature": "flush(): void",
        "doc": "Submits the stacked commands.\n\nIt has to be passed before values are read — reading the result of\nunsubmitted commands returns the old value.",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "쌓아 둔 명령을 보낸다.\n\n값을 읽기 전에 반드시 지나야 한다 — 안 보낸 명령의 결과를 읽으면 옛 값이 나온다."
       },
@@ -22920,8 +23371,8 @@
        "signature": "synchronize(): Promise<void>",
        "doc": "Waits until the submitted work has **actually finished.** Where\n`torch.cuda.synchronize()` goes.\n\n`flush()` returns having only put things on the queue — time it with\nthat and the wall clock has already stopped while the GPU is still\nworking. Until now the way this repository forced completion was to\nread one value (`item()`), and that **mixes the readback round trip\ninto the measurement.** It is the place where \"am I measuring the\nkernel or the bus\" gets blurred, and this function is what separates\nthem.",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        },
        "doc_ko": "보낸 일이 **실제로 끝날 때까지** 기다린다. `torch.cuda.synchronize()` 자리다.\n\n`flush()` 는 큐에 넣기만 하고 돌아온다 — 그것으로 시간을 재면 GPU 가 일하는 동안\n벽시계는 이미 멈춰 있다. 지금까지 이 저장소가 완료를 강제한 방법은 값을 하나\n읽는 것(`item()`)이었는데, 그러면 **readback 왕복이 측정에 섞인다.** 재는 것이\n커널인지 버스인지가 흐려지는 자리이고, 그것을 가르는 것이 이 함수다."
       },
@@ -22930,8 +23381,8 @@
        "signature": "read(buffer: GPUBuffer, count: number): Promise<Float32Array>",
        "doc": "",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
        }
       },
       {
@@ -22955,6 +23406,16 @@
        "doc_ko": "디바이스가 subgroup 행렬(f32, 8 × 8 × 8)로 만들어졌는지 — `create` 참조. `matmul`이 커널을 고르기 전에 묻는다."
       },
       {
+       "name": "subgroupInt8",
+       "signature": "static subgroupInt8: SubgroupInt8Config | null",
+       "doc": "The int8 subgroup-matrix configuration the device was built with (`i8 × i8 → i32`,\n 16 × 16 × 32), or `null` — see `create`. `matmulInt8` runs on it.",
+       "torch": "subgroup_int8",
+       "section": {
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
+       }
+      },
+      {
        "name": "subgroups",
        "signature": "static subgroups: boolean",
        "doc": "Whether the device has subgroup operations (`subgroupAdd`, `subgroupMax`)."
@@ -22970,6 +23431,156 @@
        "doc": "The adapter's workgroup storage in bytes — 16 KB is the guaranteed floor, Apple\n gives 32 KB. A kernel that stages more than the floor asks this first.",
        "torch": "workgroup_storage",
        "doc_ko": "어댑터의 워크그룹 저장소 바이트 수 — 보장되는 최소는 16 KB, Apple은 32 KB. 그 최소보다 많이 스테이징하는 커널은 먼저 이것을 묻는다."
+      },
+      {
+       "name": "gemmConfigs",
+       "signature": "static gemmConfigs: readonly TiledConfig[]",
+       "doc": "The re-tiled scalar GEMM's configurations for this adapter, best first — see\n `gemmConfigsFor`. Empty is the tile as it was. Settable, so a test can force a path.",
+       "torch": "gemm_configs",
+       "section": {
+        "ko": "Write epochs and the pack cache",
+        "en": "Write epochs and the pack cache"
+       }
+      },
+      {
+       "name": "advice",
+       "signature": "static advice: boolean",
+       "doc": "Whether advice is printed. `advised` fills either way, so a test can ask."
+      },
+      {
+       "name": "advised",
+       "signature": "static readonly advised: Set<string>",
+       "doc": "The advice given so far, by key."
+      },
+      {
+       "name": "advise",
+       "signature": "static advise(key: string, message: string): void",
+       "doc": "",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
+      },
+      {
+       "name": "unscoped",
+       "signature": "unscoped: number",
+       "doc": "Buffers `alloc` made outside any scope and outside a capture — an inference loop\n without a `scope` keeps every one until the page unloads."
+      },
+      {
+       "name": "canTime",
+       "signature": "static canTime: boolean",
+       "doc": "Whether the device has `timestamp-query` — the autotune's instrument.",
+       "torch": "can_time"
+      },
+      {
+       "name": "tune",
+       "signature": "static tune: Map<string, string>",
+       "doc": "Decisions by `adapter|key` → the candidate's label."
+      },
+      {
+       "name": "tuneMode",
+       "signature": "tuneMode: \"collect\" | null",
+       "doc": "What a `compiled` step is doing with choices: collecting candidates, or nothing.",
+       "torch": "tune_mode",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
+      },
+      {
+       "name": "tuneWarmMs",
+       "signature": "tuneWarmMs: number",
+       "doc": "The last `runTuning`'s warm wave in ms — the candidates' pipelines compiling, and one\n wait. Reported apart from the timing, since it is the platform's compile cost.",
+       "torch": "tune_warm_ms"
+      },
+      {
+       "name": "tuneCompiles",
+       "signature": "tuneCompiles: { sig: string; ms: number; bytes: number; }[]",
+       "doc": "The pipelines the warm waves compiled so far — the tuner's candidates and, for a pure\n `compiled` step, the step's own on its first call — each with its wall time (they\n compile side by side, so the times overlap; the order says which are dear) and its\n WGSL size.",
+       "torch": "tune_compiles",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
+      },
+      {
+       "name": "isCompileMiss",
+       "signature": "static isCompileMiss(err: unknown): boolean",
+       "doc": "Whether `err` is `pipeline` refusing a miss while compiling ahead — the caller runs\n its step again after `awaitCompiles`.",
+       "torch": "is_compile_miss",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
+      },
+      {
+       "name": "compileAhead",
+       "signature": "compileAhead(on: boolean): void",
+       "doc": "Turns compiling-ahead on or off: on, a pipeline miss is made asynchronously and\n thrown as a miss (`isCompileMiss`); off, misses compile as they come.",
+       "torch": "compile_ahead",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
+      },
+      {
+       "name": "dryRunAhead",
+       "signature": "dryRunAhead(body: () => Promise<void>): Promise<void>",
+       "doc": "**A dry run of `body`, compiling every kernel it meets side by side.** Nothing is\ndispatched — `run` returns at once and a missed pipeline is a placeholder — so the\nbody's host side runs to the end in one pass, every miss starts its compile, and the\ncompiles are awaited together. For a pure step's first call: measured on the RTX\n5050 Laptop (D3D12, 2026-09-21), the ResNet-18 inference forward's first call was\n673 ms with a miss thrown out of the step and the step run again per miss — forty\nwaves of one compile each, serial after all. The body's allocations are scoped away.\nOnly a pure body: its outputs are never made, and a body that reads a value back\nreads nothing.",
+       "torch": "dry_run_ahead",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
+      },
+      {
+       "name": "awaitCompiles",
+       "signature": "awaitCompiles(): Promise<void>",
+       "doc": "Waits for every pipeline a wave started.",
+       "torch": "await_compiles",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
+      },
+      {
+       "name": "takeTuneQueue",
+       "signature": "takeTuneQueue(): Map<string, readonly TuneCandidate[]>",
+       "doc": "The candidate lists queued since the last take — a recording's, for its tuner.",
+       "torch": "take_tune_queue",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
+      },
+      {
+       "name": "loadTune",
+       "signature": "static loadTune(): void",
+       "doc": "Loads the decisions saved by earlier sessions on this adapter.",
+       "torch": "load_tune",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
+      },
+      {
+       "name": "choose",
+       "signature": "choose(key: string, candidates: readonly TuneCandidate[]): TuneCandidate",
+       "doc": "The candidate that runs for `key`: the cached decision, or the rule's pick (first).",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
+      },
+      {
+       "name": "runTuning",
+       "signature": "runTuning(queue?: Map<string, readonly TuneCandidate[]>): Promise<TuneReport[]>",
+       "doc": "Times every queued candidate list and caches the fastest. Returns one line per\ndecision, for the test that holds \"nothing tuned is slower than the rule's pick\" and\nthe report that says what changed.\n\n**The cost is round trips and shader compiles, not GPU time — so both are paid\nonce, not per candidate.** Measured on metal-3 (2026-09-21, the ResNet-18 step's ten\ncandidates): a profiled round was 0.3–0.5 ms of readback when its pipeline was\ncompiled and 4–7 ms when it was not, and a round per candidate per repetition made\n45–50 ms of the first call. So every candidate runs once first, unprofiled, with\none wait — the pipelines compile there, side by side in the GPU process — and then\neach of `TUNE_ROUNDS` rounds is one profiled pass over every candidate of every\ndecision, `TUNE_REPS` repetitions each, one readback for the lot; a candidate's\ntime is the minimum over rounds of its kinds' summed nanoseconds. Two candidates\nwhose kernel kinds overlap cannot share a pass (their times would add), so the\ncandidates are dealt into passes with no kind repeated.",
+       "torch": "run_tuning",
+       "section": {
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
+       }
       },
       {
        "name": "storageBuffersPerStage",
@@ -22989,8 +23600,8 @@
        "doc": "The storage-binding offset alignment (256 on the cards here). A window's slots must\n start on a multiple of it, or `bindGroupFor` refuses the sub-range.",
        "torch": "storage_align",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
        }
       },
       {
@@ -22999,8 +23610,8 @@
        "doc": "A host-writable staging buffer (`MAP_WRITE | COPY_SRC`), for filling a window through\n `copyRange` rather than `writeBuffer`. Not pooled — the window owns and destroys it.",
        "torch": "staging_buffer",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
        }
       },
       {
@@ -23008,8 +23619,8 @@
        "signature": "window(bytes: number): Window",
        "doc": "**A frozen-weight window** — `docs/SCALE.md` Step 3, ADR-003. One large STORAGE buffer\nthat holds many weights end to end, each bound as an offset slice; filled through a\nhost-writable staging buffer and `copyRange` (never `writeBuffer`, which jumps the\nqueue and would overwrite a slot a pending dispatch still reads). The window lives\noutside the pool and is `keep`-ed, so a scope close does not reclaim it; `free()`\nreturns it. `bytes` is capped at the device's binding tier — a window sized to one\nadapter's tier (Apple's 4 GiB) would fail to bind on another (the RTX 5080's 2 GiB),\nso a caller reads the tier per device.",
        "section": {
-        "ko": "Capture and replay",
-        "en": "Capture and replay"
+        "ko": "Advice: the traps a first page falls into, named once",
+        "en": "Advice: the traps a first page falls into, named once"
        }
       }
      ],
@@ -23052,6 +23663,11 @@
        "doc": "Places `data` at the next aligned slot and returns the binding for it. The copy rides\na staging buffer (`MAP_WRITE`), so it is ordered against pending dispatches; the wait\nafterwards is what lets the one staging buffer serve the next `place`."
       },
       {
+       "name": "refill",
+       "signature": "refill(slot: BindSlot, data: Float32Array | Uint16Array | Uint32Array): Promise<void>",
+       "doc": "The bytes of a weight into the slot a recording placed it in — a replay's refill."
+      },
+      {
        "name": "genOf",
        "signature": "genOf(offset: number): number",
        "doc": "The current generation of the slot at `offset`, `-1` if nothing was ever placed there.\n A windowed tensor records this at creation and compares on every use.",
@@ -23070,7 +23686,7 @@
      ]
     }
    ],
-   "count": 94
+   "count": 156
   },
   {
    "name": "random",
@@ -23217,6 +23833,14 @@
     },
     {
      "kind": "function",
+     "name": "isGradEnabled",
+     "signature": "export declare function isGradEnabled(): boolean",
+     "doc": "`torch.is_grad_enabled()` — whether a forward records for backward right now.",
+     "members": [],
+     "torch": "is_grad_enabled"
+    },
+    {
+     "kind": "function",
      "name": "noGrad",
      "signature": "export declare function noGrad<R>(body: () => R): R",
      "doc": "`torch.no_grad()`. Restores even if an exception is thrown.",
@@ -23258,7 +23882,7 @@
      "members": []
     }
    ],
-   "count": 14
+   "count": 15
   },
   {
    "name": "special",
@@ -24028,5 +24652,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3280
+ "total": 3368
 }

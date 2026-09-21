@@ -509,6 +509,9 @@ export interface TuneReport {
   readonly chosen: string; readonly chosenMs: number; readonly candidates: readonly string[];
 }
 
+/** One dispatch recorded under a capture — or one buffer copy. Every in-place operation
+ *  is a copy back into the original buffer (`copyInto`) and an optimizer step is made of
+ *  them, so a recording that holds dispatches and copies replays a whole step. */
 export interface Recorded {
   readonly pipeline?: GPUComputePipeline;
   readonly bindGroup?: GPUBindGroup;
@@ -1521,7 +1524,6 @@ export class Device {
     return this.recording !== null;
   }
 
-  /** Encodes recorded dispatches again, in order. Called by `Capture.replay`. */
   /**
    * Runs `fn` with the open capture set aside: nothing it dispatches is recorded and
    * nothing it allocates is pinned. The window's refill copy takes this — what the
@@ -1543,6 +1545,7 @@ export class Device {
     this.recording?.push({ refill: { win, data }, groups: [0, 0, 0], buffers: [slot] });
   }
 
+  /** Encodes recorded dispatches again, in order. Called by `Capture.replay`. */
   replayRecorded(records: readonly Recorded[]): void {
     for (const r of records) {
       if (r.refill) throw new Error("a window refill cannot be re-encoded — replay through replayAsync()");
@@ -2124,10 +2127,10 @@ export class Device {
     this.noteWrite(buffer);
   }
 
-  /** A bind group for `pipeline` over `buffers`, in binding order. */
   /** Bind groups made so far — one a dispatch on the eager path; `docs/FIRST.md` 2a. */
   bindGroups = 0;
 
+  /** A bind group for `pipeline` over `buffers`, in binding order. */
   bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly BindSlot[]): GPUBindGroup {
     this.bindGroups += 1;
     let layout = this.layouts.get(pipeline);
@@ -2675,18 +2678,26 @@ export class Device {
    * reads nothing.
    */
   async dryRunAhead(body: () => Promise<void>): Promise<void> {
+    // The flags are up for the body's synchronous part only — a forward runs to its
+    // end before `body`'s promise is handed back — and down before anything is awaited,
+    // so no other code on the page runs under them (the reason is on `runTuning`). A
+    // body that awaits inside (a streamed forward) compiles what follows as it runs.
     this.dryRun = true;
     this.prewarming = true;
     this.beginScope();
+    let run: Promise<void>;
     try {
-      await body();
-    } catch (err) {
-      if (!Device.isCompileMiss(err)) throw err;
+      run = body();
     } finally {
-      this.endScope();
       this.dryRun = false;
       this.prewarming = false;
     }
+    try {
+      await run;
+    } catch (err) {
+      if (!Device.isCompileMiss(err)) { this.endScope(); throw err; }
+    }
+    this.endScope();
     await this.awaitCompiles();
   }
   private dryRun = false;
@@ -2763,22 +2774,22 @@ export class Device {
     // in waves: a candidate whose pipeline is missing throws `PrewarmMiss` from `pipeline`
     // and runs again after every pending compile has resolved (a candidate can miss more
     // than once — its convolution, then its split sum).
+    // **The flag is up only around a candidate's own synchronous run.** Up across the
+    // wave's await, any other code on the page that met a new kernel meanwhile — a
+    // lesson's next block, pressed while a step tuned in idle time — had the miss thrown
+    // into it (`Error: pipeline b:mul:|| compiling`, `lessons:ts`, 2026-09-21).
     const tw = performance.now();
-    this.prewarming = true;
-    try {
-      let pending = all.map((e) => e.cand);
-      for (let wave = 0; pending.length > 0 && wave < 8; wave++) {
-        const missed: TuneCandidate[] = [];
-        for (const cand of pending) {
-          try { cand.run(); } catch (err) { if (err instanceof PrewarmMiss) missed.push(cand); else throw err; }
-        }
-        await Promise.all(this.prewarmPending);
-        this.prewarmPending = [];
-        pending = missed;
+    let pending = all.map((e) => e.cand);
+    for (let wave = 0; pending.length > 0 && wave < 8; wave++) {
+      const missed: TuneCandidate[] = [];
+      for (const cand of pending) {
+        this.prewarming = true;
+        try { cand.run(); } catch (err) { if (err instanceof PrewarmMiss) missed.push(cand); else { this.prewarming = false; throw err; } } finally { this.prewarming = false; }
       }
-    } finally {
-      this.prewarming = false;
+      const compiles = this.prewarmPending;
       this.prewarmPending = [];
+      await Promise.all(compiles);
+      pending = missed;
     }
     this.flush();
     await this.synchronize();

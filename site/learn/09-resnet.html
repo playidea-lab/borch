@@ -364,6 +364,109 @@
       what the adaptive pool buys, and what a fixed one cannot do.
     </p>
 
+    <h2>Serving it — the same forward, replayed</h2>
+    <p>
+      Trained, the network answers questions, and a question is a forward with no tape. Run
+      eagerly, every call encodes its forty-odd dispatches again from JavaScript and the GPU
+      idles between them. <code>borch.compiled(model)</code> puts the model in eval mode,
+      folds each batch norm into the convolution before it, records the forward once for an
+      input shape and replays it after that — the same answer, most of the JavaScript gone.
+      <strong>The first call is the slow one</strong>: the kernels compile, once per shape on
+      this machine, and the library says so on the console if it takes long. Measure eager
+      first — <code>compiled</code> folds the network in place.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const net = new nn.Sequential(
+          new nn.Conv2d(1, 8, 3, 1, 1), new nn.BatchNorm2d(8), new nn.ReLU(),
+          new nn.Conv2d(8, 16, 3, 2, 1), new nn.BatchNorm2d(16), new nn.ReLU(),
+          new nn.AdaptiveAvgPool2d([1, 1]), new nn.Flatten(), new nn.Linear(16, 3));
+        net.eval();
+        const x = keepAlive(Tensor.randn([12, 1, 16, 16]));
+
+        async function clock(n, f) {
+          for (let i = 0; i < 2; i++) await f();                  // warm
+          const t0 = performance.now();
+          for (let i = 0; i < n; i++) await f();
+          return (performance.now() - t0) / n;
+        }
+
+        // Eager: a scope a call, no tape.
+        const eagerMs = await clock(5, () => scope(async () => { await noGrad(() => net.call(x)).toArray(); }));
+        const eagerOut = await noGrad(() => net.call(x)).toArray();
+
+        // Recorded once, replayed after — the first call pays the recording and the compiles.
+        const step = borch.compiled(net);
+        const t0 = performance.now();
+        const first = await (await step.call(x)).toArray();
+        const firstMs = performance.now() - t0;
+        const replayMs = await clock(5, async () => { await (await step.call(x)).toArray(); });
+
+        let gap = 0;
+        for (let i = 0; i < first.length; i++) gap = Math.max(gap, Math.abs(first[i] - eagerOut[i]));
+        log("eager, a scope a call :", eagerMs.toFixed(2), "ms");
+        log("first compiled call    :", firstMs.toFixed(1), "ms  (recording, the kernels compiling)");
+        log("replay                 :", replayMs.toFixed(2), "ms");
+        log("max |replay - eager|   :", gap.toExponential(1), " (the batch norms folded; a rounding apart)");
+        log("recorded", step.recordingOf(x).dispatches, "dispatches for this shape");
+        step.dispose();
+      </script>
+      <script type="text/plain" data-lang="py">
+        import time
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        net = nn.Sequential(
+            nn.Conv2d(1, 8, 3, 1, 1), nn.BatchNorm2d(8), nn.ReLU(),
+            nn.Conv2d(8, 16, 3, 2, 1), nn.BatchNorm2d(16), nn.ReLU(),
+            nn.AdaptiveAvgPool2d((1, 1)), nn.Flatten(), nn.Linear(16, 3))
+        net.eval()
+        x = torch.randn(12, 1, 16, 16)
+
+        def clock(n, f):
+            for _ in range(2):
+                f()                                   # warm
+            t0 = time.perf_counter()
+            for _ in range(n):
+                f()
+            return (time.perf_counter() - t0) / n * 1000
+
+        def eager():
+            with torch.scope(), torch.no_grad():
+                return net(x).tolist()
+
+        eager_ms = clock(5, eager)
+        eager_out = eager()
+
+        step = torch.compiled(net)                     # eval, the batch norms folded, recorded on the first call
+        t0 = time.perf_counter()
+        first = step(x).tolist()
+        first_ms = (time.perf_counter() - t0) * 1000
+        replay_ms = clock(5, lambda: step(x).tolist())
+
+        gap = max(abs(a - b) for row_a, row_b in zip(first, eager_out) for a, b in zip(row_a, row_b))
+        print(f"eager, a scope a call : {eager_ms:.2f} ms")
+        print(f"first compiled call    : {first_ms:.1f} ms  (recording, the kernels compiling)")
+        print(f"replay                 : {replay_ms:.2f} ms")
+        print(f"max |replay - eager|   : {gap:.1e}  (the batch norms folded; a rounding apart)")
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>The numbers are this machine's.</strong> On an M4 Max the eager forward of the
+      book's ResNet-18 is 1.8 ms and the replay 1.4; on an RTX 5080 the same replay is 0.6 ms
+      while eager varies run to run with the card's clocks. What does not vary: the first
+      call is tens to hundreds of milliseconds (the browser keeps the compiled kernels for
+      the next visit), and every call after it is the replay. A page that must answer at
+      once calls the step once while it loads.
+    </div>
+
     <h2>Why depth needs a skip</h2>
     <p>A stack of layers that each shrink their input a little starves the gradient: run it deeper and deeper and plot how much reaches the input — it falls toward zero. A skip connection is the fix.</p>
 

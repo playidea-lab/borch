@@ -328,12 +328,69 @@
       </script>
     </div>
 
+    <h2>What the library says first</h2>
+    <p>
+      Five things a first page does that make it silently slow or wrong, and for each the
+      library says one sentence on the console — once, before the number is wrong: an
+      inference loop with no <code>scope</code> (at the two-thousandth buffer kept), an
+      <code>eval()</code> model run with gradients on, a large matmul off the multiples of
+      eight the fast kernel wants, a laptop on battery, and a first call that took long
+      (its kernels compiling). <code>Device.advised</code> holds what was said;
+      <code>Device.advice = false</code> silences a bench that knows what it is doing.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        const lin = new nn.Linear(16, 16).eval();
+        for (const p of lin.parameters()) keepAlive(p);
+        const x = keepAlive(Tensor.randn([8, 16]));
+
+        const toldBefore = Device.advised.has("eval-grad");
+        await scope(async () => { await noGrad(() => lin.call(x)).toArray(); });
+        log("scoped, under noGrad        : told =", Device.advised.has("eval-grad") && !toldBefore ? "yes" : "no — correct code draws nothing");
+
+        await scope(async () => { await lin.call(x).toArray(); });     // an eval model, the tape on
+        log("eval model, gradients on    : told =", Device.advised.has("eval-grad") ? "yes — once, on the console (F12)" : "no");
+
+        await scope(async () => { await lin.call(x).toArray(); });
+        log("the same mistake again      : said nothing more —", [...Device.advised].join(", ") || "(nothing advised yet)");
+        log("");
+        log("the five keys: unscoped · eval-grad · eights · battery · first-call");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import js
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        lin = nn.Linear(16, 16).eval()
+        x = torch.randn(8, 16)
+        advised = js.borch.Device.advised
+
+        told_before = advised.has("eval-grad")
+        with torch.scope(), torch.no_grad():
+            lin(x).tolist()
+        print("scoped, under no_grad       : told =", "yes" if advised.has("eval-grad") and not told_before else "no — correct code draws nothing")
+
+        with torch.scope():
+            lin(x).tolist()                           # an eval model, the tape on
+        print("eval model, gradients on    : told =", "yes — once, on the console (F12)" if advised.has("eval-grad") else "no")
+
+        with torch.scope():
+            lin(x).tolist()
+        print("the same mistake again      : said nothing more —", ", ".join(list(advised)) or "(nothing advised yet)")
+        print("")
+        print("the five keys: unscoped · eval-grad · eights · battery · first-call")
+      </script>
+    </div>
+
     <h2>What to remember</h2>
     <ul>
       <li>When numbers are wrong but nothing threw, ask the device: check shapes, dtypes, and for NaN/Inf.</li>
       <li>Confirm gradients actually flow — a zero or missing <code>.grad</code> is a broken graph.</li>
       <li>Read the intermediate values (print or <code>show</code> them); do not guess.</li>
       <li>A flat or exploding loss is a signal, not a mystery (see <em>Fix the bug</em>).</li>
+      <li>Read the console once: the library says the five common traps first, each once.</li>
     </ul>
 
     <div class="note-box">

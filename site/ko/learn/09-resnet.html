@@ -360,6 +360,107 @@
       못 하는 것이다.
     </p>
 
+    <h2>서빙 — 같은 forward 를 되감아 돌리기</h2>
+    <p>
+      학습이 끝난 신경망은 질문에 답하고, 질문은 테이프 없는 forward 다. eager 로 돌리면 호출마다
+      마흔 개 남짓의 dispatch 를 JavaScript 에서 다시 인코딩하고 그 사이 GPU 는 논다.
+      <code>borch.compiled(model)</code> 은 모델을 eval 로 두고, 배치 정규화를 앞 합성곱에 접어
+      넣고, 입력 모양당 한 번 forward 를 기록한 뒤 그다음부터는 되감아 돌린다 — 답은 같고
+      JavaScript 는 대부분 사라진다. <strong>느린 것은 첫 호출이다</strong>: 커널이 컴파일되고(이
+      기계에서 모양당 한 번), 오래 걸리면 라이브러리가 콘솔에 그렇게 말한다. eager 를 먼저 재라 —
+      <code>compiled</code> 는 신경망을 제자리에서 접는다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const net = new nn.Sequential(
+          new nn.Conv2d(1, 8, 3, 1, 1), new nn.BatchNorm2d(8), new nn.ReLU(),
+          new nn.Conv2d(8, 16, 3, 2, 1), new nn.BatchNorm2d(16), new nn.ReLU(),
+          new nn.AdaptiveAvgPool2d([1, 1]), new nn.Flatten(), new nn.Linear(16, 3));
+        net.eval();
+        const x = keepAlive(Tensor.randn([12, 1, 16, 16]));
+
+        async function clock(n, f) {
+          for (let i = 0; i < 2; i++) await f();                  // 워밍업
+          const t0 = performance.now();
+          for (let i = 0; i < n; i++) await f();
+          return (performance.now() - t0) / n;
+        }
+
+        // eager: 호출마다 scope 하나, 테이프 없음.
+        const eagerMs = await clock(5, () => scope(async () => { await noGrad(() => net.call(x)).toArray(); }));
+        const eagerOut = await noGrad(() => net.call(x)).toArray();
+
+        // 한 번 기록, 그다음은 되감기 — 첫 호출이 기록과 컴파일 값을 낸다.
+        const step = borch.compiled(net);
+        const t0 = performance.now();
+        const first = await (await step.call(x)).toArray();
+        const firstMs = performance.now() - t0;
+        const replayMs = await clock(5, async () => { await (await step.call(x)).toArray(); });
+
+        let gap = 0;
+        for (let i = 0; i < first.length; i++) gap = Math.max(gap, Math.abs(first[i] - eagerOut[i]));
+        log("eager, 호출마다 scope   :", eagerMs.toFixed(2), "ms");
+        log("compiled 첫 호출        :", firstMs.toFixed(1), "ms  (기록, 커널 컴파일)");
+        log("되감기                  :", replayMs.toFixed(2), "ms");
+        log("max |되감기 - eager|    :", gap.toExponential(1), " (배치 정규화가 접혀 반올림만큼 다르다)");
+        log("이 모양에 기록된 dispatch:", step.recordingOf(x).dispatches);
+        step.dispose();
+      </script>
+      <script type="text/plain" data-lang="py">
+        import time
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        net = nn.Sequential(
+            nn.Conv2d(1, 8, 3, 1, 1), nn.BatchNorm2d(8), nn.ReLU(),
+            nn.Conv2d(8, 16, 3, 2, 1), nn.BatchNorm2d(16), nn.ReLU(),
+            nn.AdaptiveAvgPool2d((1, 1)), nn.Flatten(), nn.Linear(16, 3))
+        net.eval()
+        x = torch.randn(12, 1, 16, 16)
+
+        def clock(n, f):
+            for _ in range(2):
+                f()                                   # 워밍업
+            t0 = time.perf_counter()
+            for _ in range(n):
+                f()
+            return (time.perf_counter() - t0) / n * 1000
+
+        def eager():
+            with torch.scope(), torch.no_grad():
+                return net(x).tolist()
+
+        eager_ms = clock(5, eager)
+        eager_out = eager()
+
+        step = torch.compiled(net)                     # eval, 배치 정규화 접힘, 첫 호출에 기록
+        t0 = time.perf_counter()
+        first = step(x).tolist()
+        first_ms = (time.perf_counter() - t0) * 1000
+        replay_ms = clock(5, lambda: step(x).tolist())
+
+        gap = max(abs(a - b) for row_a, row_b in zip(first, eager_out) for a, b in zip(row_a, row_b))
+        print(f"eager, 호출마다 scope   : {eager_ms:.2f} ms")
+        print(f"compiled 첫 호출        : {first_ms:.1f} ms  (기록, 커널 컴파일)")
+        print(f"되감기                  : {replay_ms:.2f} ms")
+        print(f"max |되감기 - eager|    : {gap:.1e}  (배치 정규화가 접혀 반올림만큼 다르다)")
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>숫자는 이 기계의 것이다.</strong> M4 Max 에서 책의 ResNet-18 은 eager forward 1.8 ms,
+      되감기 1.4 ms 이고, RTX 5080 에서 같은 되감기는 0.6 ms 인데 eager 는 카드의 클럭에 따라
+      run 마다 달라진다. 달라지지 않는 것: 첫 호출은 수십에서 수백 밀리초이고(컴파일된 커널은
+      브라우저가 다음 방문을 위해 보관한다), 그 뒤의 모든 호출은 되감기다. 열자마자 답해야 하는
+      페이지는 로딩 중에 스텝을 한 번 부른다.
+    </div>
+
     <h2>깊이엔 왜 skip 이 필요한가</h2>
     <p>입력을 조금씩 줄이는 층을 쌓으면 기울기가 굶는다: 점점 깊게 쌓으며 입력에 도달하는 양을 그려라 — 0 으로 떨어진다. skip 연결이 그 해법이다.</p>
 
