@@ -5159,6 +5159,201 @@ ${store.join("\n")}
 }`;
 }
 
+// ── The scalar staged convolution (`docs/GEMM.md` §4, "a scalar staged conv") ──────────
+//
+// The implicit GEMM's B side is a gather — one bounds-checked scalar per element with the
+// (batch, position, channel, tap) digits carried — and that is what the tiled kernel waits
+// on: the 8 × 4 and 8 × 8 micro-tiles that win the plain product lose it, on all three
+// APIs (the ledger). This kernel stages instead: a block of input channels' band of
+// padded rows in workgroup memory, read from the unpadded input in row segments (the
+// border is zero at the staging, no pad pass), and every tap of that block's weights
+// as `vec4` rows of output channels — then the inner loop is the tiled GEMM's, a thread's
+// `RM × RN` FMAs from one `vec4` of weights and `RN` consecutive floats of the band.
+
+/** The staged kernel's tile: `TM` output channels × `TN` pixels a workgroup, `RM × RN` a
+ *  thread, `KB` input channels a block (the weights of every tap of the block are staged,
+ *  `9 · KB · TM` floats, so a wider tile takes a thinner block). */
+export interface StagedTile { readonly TM: number; readonly TN: number; readonly RM: number; readonly RN: number; readonly KB: number }
+export const STAGED_DEFAULT: StagedTile = { TM: 64, TN: 64, RM: 4, RN: 4, KB: 8 };
+
+/** The band of padded rows one tile of `TN` pixels touches — whole images (a plane
+ *  that divides `TN`) or a run of rows of one image (a row that divides `TN`). */
+export function stagedBand(s: ConvNDShape, TN: number): { imgs: number; rows: number; band: number; localPlane: number } | null {
+  const [OH = 1, OW = 1] = s.outDims;
+  const [KH = 1] = s.kernel;
+  const plane = OH * OW;
+  if (TN % plane === 0) return { imgs: TN / plane, rows: OH, band: OH + KH - 1, localPlane: plane };
+  if (TN % OW === 0 && plane % TN === 0) return { imgs: 1, rows: TN / OW, band: TN / OW + KH - 1, localPlane: TN };
+  return null;
+}
+
+/** Workgroup bytes the staged kernel takes for a shape and tile. */
+export function stagedBytes(s: ConvNDShape, t: StagedTile): number {
+  const [, IW = 1] = s.inDims;
+  const [, PW = 0] = s.pad;
+  const [KH = 1, KW = 1] = s.kernel;
+  const b = stagedBand(s, t.TN);
+  if (!b) return Infinity;
+  return (t.KB * b.imgs * b.band * (IW + 2 * PW) + KH * KW * t.KB * t.TM) * 4;
+}
+
+/** Whether the staged kernel takes a shape with a tile on a device with `storage` bytes
+ *  of workgroup memory: two spatial axes, stride one, no groups or dilation, a kernel of
+ *  three or less, a row a whole `RN`, channels a whole `KB`, and a band that fits. */
+export function stagedFits(s: ConvNDShape, t: StagedTile, storage: number): boolean {
+  const [, OW = 1] = s.outDims;
+  return s.inDims.length === 2 && (s.groups ?? 1) === 1 && (s.dilation ?? [1, 1]).every((d) => d === 1)
+    && s.stride.every((v) => v === 1) && s.kernel.every((v) => v <= 3)
+    && OW % t.RN === 0 && s.C % t.KB === 0 && (t.TM / t.RM) * (t.TN / t.RN) <= 256
+    && stagedBand(s, t.TN) !== null && stagedBytes(s, t) <= storage;
+}
+
+/** The padded width of the tap-major-by-channel weights' output axis: whole `TM`s. */
+export function stagedCoPad(O: number, TM: number): number { return Math.ceil(O / TM) * TM; }
+
+/** The weights `[O, C, kh, kw]` repacked as `[tap][ci][co]`, `co` padded to `coPad`, so the
+ *  staged kernel's weight staging is `vec4` runs along `co`. One thread a `(tap, ci, co)`. */
+export function tapMajorWeightsCo(O: number, C: number, kSpace: number, coPad: number): string {
+  const n = kSpace * C * coPad;
+  return `
+@group(0) @binding(0) var<storage, read> W: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let co = gid % ${coPad}u;
+  let tc = gid / ${coPad}u;
+  let ci = tc % ${C}u;
+  let tap = tc / ${C}u;
+  Out[gid] = select(0.0, W[(min(co, ${O - 1}u) * ${C}u + ci) * ${kSpace}u + tap], co < ${O}u);
+}`;
+}
+
+/** K pieces for the staged kernel: to 128 workgroups, a piece at least one block. */
+export function stagedSplit(s: ConvNDShape, t: StagedTile): number {
+  const [OH = 1, OW = 1] = s.outDims;
+  const tiles = Math.ceil((s.N * OH * OW) / t.TN) * Math.ceil(s.O / t.TM);
+  const blocks = s.C / t.KB;
+  const WANT = 128;
+  if (tiles >= WANT) return 1;
+  return Math.max(1, Math.min(Math.ceil(WANT / tiles), blocks));
+}
+
+/** The grid: pixel tiles, output-channel tiles, K pieces. */
+export function stagedGrid(s: ConvNDShape, t: StagedTile, splits: number): [number, number, number] {
+  const [OH = 1, OW = 1] = s.outDims;
+  return [Math.ceil((s.N * OH * OW) / t.TN), Math.ceil(s.O / t.TM), splits];
+}
+
+export function convForwardStaged(s: ConvNDShape, t: StagedTile, splits: number, hasBias: boolean, epilogue?: ConvEpilogue): string {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [OH = 1, OW = 1] = s.outDims;
+  const [KH = 1, KW = 1] = s.kernel;
+  const [PH = 0, PW = 0] = s.pad;
+  const { TM, TN, RM, RN, KB } = t;
+  const PIW = IW + 2 * PW;
+  const plane = OH * OW;
+  const P = s.N * plane;
+  const total = s.N * s.O * plane;
+  const { imgs, band, localPlane } = stagedBand(s, TN) as { imgs: number; rows: number; band: number; localPlane: number };
+  const bplane = band * PIW;
+  const kSpace = KH * KW;
+  const coPad = stagedCoPad(s.O, TM);
+  const TX = TN / RN, TY = TM / RM, lanes = TX * TY;
+  const blocks = s.C / KB;
+  const perPart = Math.ceil(blocks / splits);
+  const direct = splits === 1;
+  const PL = KB * imgs * bplane;
+  const WS = kSpace * KB * (TM / 4);
+  const acc: string[] = [], fmas: string[] = [], store: string[] = [];
+  for (let i = 0; i < RM; i++) for (let j = 0; j < RN; j++) { acc.push(`  var c${i}_${j} = 0.0;`); fmas.push(`        c${i}_${j} = fma(a${i}, b${j}, c${i}_${j});`); }
+  const aReads: string[] = [];
+  for (let i = 0; i < RM; i += 4) {
+    aReads.push(`      let av${i / 4} = ws[(tap * ${KB}u + ci) * ${TM / 4}u + cg + ${i / 4}u];`);
+    for (const [k, comp] of ["x", "y", "z", "w"].entries()) aReads.push(`      let a${i + k} = av${i / 4}.${comp};`);
+  }
+  const bReads = Array.from({ length: RN }, (_, j) => `      let b${j} = pl[bBase + ${j}u];`);
+  const slot = direct && hasBias ? 3 : 2;
+  for (let i = 0; i < RM; i++) for (let j = 0; j < RN; j++) {
+    store.push(`  { let co = co0 + cg * 4u + ${i}u; let p = p0 + q0 + ${j}u;
+    if (co < ${s.O}u && p < ${P}u) {
+      let idx = ((n * ${s.O}u + co) * ${OH}u + oy) * ${OW}u + ow0 + ${j}u;
+      var v = c${i}_${j};
+${direct ? `${hasBias ? "      v = v + B[co];\n" : ""}${epilogueWgsl(epilogue, "v", "idx").split("\n").map((l) => (l ? "    " + l : l)).join("\n")}      Out[idx] = v;` : `      Out[part * ${total}u + idx] = v;`}
+    } }`);
+  }
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Wc: array<vec4<f32>>;
+${direct && hasBias ? "@group(0) @binding(2) var<storage, read> B: array<f32>;" : ""}
+${direct ? residualBinding(epilogue, slot) : ""}
+@group(0) @binding(${direct && epilogue?.residual ? slot + 1 : slot}) var<storage, read_write> Out: array<f32>;
+var<workgroup> pl: array<f32, ${PL}>;
+var<workgroup> ws: array<vec4<f32>, ${WS}>;
+@compute @workgroup_size(${TX}, ${TY})
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+  let p0 = wid.x * ${TN}u;
+  let n0 = p0 / ${plane}u;
+  let oh0 = (p0 - n0 * ${plane}u) / ${OW}u;
+  let co0 = wid.y * ${TM}u;
+  let cg = lid.y * ${RM / 4}u;
+  let q0 = lid.x * ${RN}u;
+  let img = q0 / ${localPlane}u;
+  let qq = q0 - img * ${localPlane}u;
+  let r = qq / ${OW}u;
+  let ow0 = qq - r * ${OW}u;
+  let n = n0 + img;
+  let oy = oh0 + r;
+  let part = wid.z;
+  let kb0 = part * ${perPart}u;
+  let kb1 = min(kb0 + ${perPart}u, ${blocks}u);
+${acc.join("\n")}
+  for (var kb = kb0; kb < kb1; kb = kb + 1u) {
+    let ci0 = kb * ${KB}u;
+    // The band of padded rows of this block's channels for the tile's images: row segments
+    // of the input, zero in the border and past the batch.
+    for (var e = li; e < ${PL}u; e = e + ${lanes}u) {
+      let c = e / ${imgs * bplane}u;
+      let r1 = e - c * ${imgs * bplane}u;
+      let im = r1 / ${bplane}u;
+      let r2 = r1 - im * ${bplane}u;
+      let py = r2 / ${PIW}u;
+      let px = r2 - py * ${PIW}u;
+      let nn = n0 + im;
+      let iy = i32(oh0 + py) - ${PH};
+      let ix = i32(px) - ${PW};
+      var v = 0.0;
+      if (nn < ${s.N}u && iy >= 0 && iy < ${IH} && ix >= 0 && ix < ${IW}) {
+        v = X[((nn * ${s.C}u + ci0 + c) * ${IH}u + u32(iy)) * ${IW}u + u32(ix)];
+      }
+      pl[e] = v;
+    }
+    // Every tap of the block's weights, a vec4 of output channels a word.
+    for (var e = li; e < ${WS}u; e = e + ${lanes}u) {
+      let tap = e / ${KB * (TM / 4)}u;
+      let r1 = e - tap * ${KB * (TM / 4)}u;
+      let ci = r1 / ${TM / 4}u;
+      let c4 = r1 - ci * ${TM / 4}u;
+      ws[e] = Wc[((tap * ${s.C}u + ci0 + ci) * ${coPad}u + co0) / 4u + c4];
+    }
+    workgroupBarrier();
+    for (var kh = 0u; kh < ${KH}u; kh = kh + 1u) {
+      for (var kw = 0u; kw < ${KW}u; kw = kw + 1u) {
+        let tap = kh * ${KW}u + kw;
+        for (var ci = 0u; ci < ${KB}u; ci = ci + 1u) {
+          let bBase = (ci * ${imgs}u + img) * ${bplane}u + (r + kh) * ${PIW}u + ow0 + kw;
+${aReads.map((l) => "    " + l).join("\n")}
+${bReads.map((l) => "    " + l).join("\n")}
+${fmas.map((l) => "  " + l).join("\n")}
+        }
+      }
+    }
+    workgroupBarrier();
+  }
+${store.join("\n")}
+}`;
+}
+
 /** The grid: tiles of a row, output-channel blocks. */
 export function sgfGrid(s: ConvNDShape, turned = false): [number, number, number] {
   const [OH = 1, OW = 1] = s.outDims;

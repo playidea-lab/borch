@@ -106,6 +106,26 @@ const BENCHES = {
         } };
     };
     runs.push(cnt("policy", undefined, undefined));
+    // **The scalar staged convolution** (`convForwardStaged`): the band and every tap's
+    // weights staged, the tiled GEMM's inner loop, no gather. Its tiles are swept where
+    // they fit (`--sweep=staged` or `all`); the default tile always runs.
+    const stagedTiles = [["64x64 r4x4 kb8", { TM: 64, TN: 64, RM: 4, RN: 4, KB: 8 }]];
+    if (sweep === "staged" || sweep === "all") stagedTiles.push(
+      ["64x64 r4x4 kb4", { TM: 64, TN: 64, RM: 4, RN: 4, KB: 4 }], ["64x64 r4x4 kb16", { TM: 64, TN: 64, RM: 4, RN: 4, KB: 16 }],
+      ["128x64 r8x4 kb4", { TM: 128, TN: 64, RM: 8, RN: 4, KB: 4 }], ["64x128 r4x8 kb8", { TM: 64, TN: 128, RM: 4, RN: 8, KB: 8 }],
+      ["128x128 r8x8 kb4", { TM: 128, TN: 128, RM: 8, RN: 8, KB: 4 }], ["32x64 r4x4 kb8", { TM: 32, TN: 64, RM: 4, RN: 4, KB: 8 }]);
+    for (const [label, t] of stagedTiles) {
+      if (!K.stagedFits(s, t, Device.workgroupStorage)) { runs.push({ name: `staged ${label} (does not fit)`, key: "none", make: () => "", outb: Out, run: () => {}, skip: true }); continue; }
+      const coPad = K.stagedCoPad(sh.O, t.TM); const Wc = dev.alloc(9 * sh.C * coPad); const sp = K.stagedSplit(s, t); const Os = dev.alloc(m); const slab = sp > 1 ? dev.alloc(m * sp) : null;
+      const key = `cnss:${sh.name}:${label}`;
+      runs.push({ name: `staged ${label}${sp > 1 ? ` split ${sp} (+ sum)` : ""} (repack counted)`, key, make: () => K.convForwardStaged(s, t, sp, sp === 1), extraKeys: [`tmwc:${sh.name}:${t.TM}`, ...(sp > 1 ? [`ssc:${sh.name}:${label}`] : [])], outb: Os,
+        run: () => {
+          dev.run1d(dev.pipeline(`tmwc:${sh.name}:${t.TM}`, () => K.tapMajorWeightsCo(sh.O, sh.C, 9, coPad)), [W, Wc], 9 * sh.C * coPad);
+          if (sp === 1) { dev.run(dev.pipeline(key, () => K.convForwardStaged(s, t, 1, true)), [X, Wc, B, Os], K.stagedGrid(s, t, 1)); return; }
+          dev.run(dev.pipeline(key, () => K.convForwardStaged(s, t, sp, false)), [X, Wc, slab], K.stagedGrid(s, t, sp));
+          dev.run1d(dev.pipeline(`ssc:${sh.name}:${label}`, () => K.sumSplitsConv(s, sp, true)), [slab, B, Os], m);
+        } });
+    }
     // **The direct kernel's block, swept**: the strip of output columns and the output
     // channels one thread accumulates (`DIRECT_DEFAULT` is 4 × 8, measured on the M4 Max).
     // `--sweep=direct` (or `all`) adds the other blocks; the shape must fit the kernel.
@@ -123,7 +143,8 @@ const BENCHES = {
     if (sweep === "splits" || sweep === "all") for (const sp of [1, 2, 4, 8, 16, 32]) runs.push(cnt(`s${sp}`, sp, undefined));
     if (sweep === "tiles" || sweep === "all") for (const t of ["64x64", "32x128", "16x256", "128x64r8x4", "128x128r8x8", "64x128r4x8"]) runs.push(cnt(`t${t}`, undefined, t));
     if (sweep === "all") for (const t of ["32x128", "16x256"]) for (const sp of [4, 8, 16]) runs.push(cnt(`t${t}s${sp}`, sp, t));
-    return race(runs, m);
+    const skippedF = runs.filter((r) => r.skip).map((r) => r.name); runs.splice(0, runs.length, ...runs.filter((r) => !r.skip));
+    return (await race(runs, m)) + (skippedF.length ? ` · ${skippedF.join(" · ")}` : "");
   },
   // BatchNorm's apply with x̂ and ReLU — the pass as it runs.
   async bn(sh) {
