@@ -77,4 +77,30 @@ five scenarios prints its sentence once, and none of them prints on correct code
   decisions, and its second visit pays the 51 and nothing else. So the candidate count
   stays: what a first visit on D3D12 pays after its first answer is 0.85 s once per
   origin, of which a third is the timing itself on a card whose replay is 27 ms.
+- **2026-09-21, 2a — the eager / captured gap, measured (2bf5975 … 518b651).** The
+  fused eager forward's wall split into the JavaScript of the forward (encoding, bind
+  groups, bookkeeping), the submit, the readback wait and the scope close:
+
+  | fused eager forward, ms | metal-3 b1 / b16 | RTX 5080 b1 / b16 |
+  |---|---|---|
+  | wall | 1.84 / 4.54 | 3.65 / 2.10 |
+  | JavaScript (48 / 40 bind groups) | 0.16 / 0.13 | 0.29 / 0.31 |
+  | submit · scope close | 0.00 · 0.01 | 0.01 · 0.01 |
+  | readback wait (the GPU finishing) | 1.42 / 4.18 | 3.62 / 1.72 |
+  | captured replay, wall | 1.37 / 4.09 | 0.57–0.68 / 1.60 |
+
+  The prediction ("bind groups and the allocator") was wrong: the JavaScript is 0.13–0.31
+  ms a forward — 3–7 µs a dispatch — and the allocator nothing (a scope a forward, the
+  pool warm). On Metal the gap *is* that JavaScript plus 0.3 ms of readback, and eager is
+  within 1.1–1.35× of captured. **On the 5080 the gap is the GPU itself**: the same 48
+  dispatches, profiled, read 0.6 ms of GPU in one run and 2.8–3.1 in four others — every
+  kernel 5–10× its captured time, uniformly, the pack cache hit or bypassed, ORT's
+  sessions released or not — and the readback wait tracks it. A card that clocks down
+  between short bursts, and the eager loop's gap between submits (bind groups made
+  between one readback and the next submit) is long enough to let it; the replay's is
+  not. Nothing in this library's JavaScript closes that; the 2b gate ("eager within 1.5×
+  captured on the 5080 at batch 1") is not a gate on code. **2b, decided**: a bind-group
+  cache would take ~0.1 ms of 1.8 on Metal and none of the 5080's 3 — not taken; the
+  book's first page runs `compiled(model)` and says why, and the eager path stands as
+  it is for the shapes a lesson has.
 
