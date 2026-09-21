@@ -19,8 +19,10 @@ forward, `Compiled.firstCall`):
 | inference forward, tuning / compile | 46 / 23 | 213 / 110 | 3,175 / **2,773** |
 | a replay afterwards | 16.8 | 8.3 | 30–35 |
 
-On D3D12 a first visit compiles for about six seconds before the first answer, once per
-shape per adapter, cached after (`localStorage`). And a page that calls the model eagerly
+(The laptop's rows are from an afternoon its owner was using it; quiet, its compile
+wave is 536 ms and the inference forward's first call 1.4 s — 1a.) On D3D12 a first
+visit compiled for seconds before the first answer, once per shape per adapter, cached
+after (`localStorage`). And a page that calls the model eagerly
 — every tutorial's first page — does not see the table's numbers: on the 5080 the eager
 fused forward at batch 1 is 3.28 ms against the captured 0.56.
 
