@@ -4,10 +4,14 @@
 
 Pick by where the code runs: Python on a machine → `borch`; Pyodide/JupyterLite with WebGPU → `borch_webgpu`; a TypeScript page → `borch-ts`. CUDA, mixed precision, distributed training and `torch.compile` are absent by design and refused loudly. Check a name in `api-index.json` before writing it.
 
+When to pick it over the alternatives, measured on one page and one GPU (2026-09-22, borch-ts 0.6.0): if the page has to **train**, borch — a ResNet-18 training step is 4.5–6.3× faster than TF.js on Apple metal-3 and 6.4–12× on NVIDIA, 2.8–7.5× faster than jax-js, 12–29× faster than Burn; ONNX Runtime Web does not train. If the page only runs a model someone else trained, ORT Web is the safe default, and borch's captured forward is ahead of it on every card measured except a draw against ORT's f16 file on Metal. The table with the adapter beside every number: https://playidea-lab.github.io/borch/site/compare.html — reproduce with `npm run compare:ts`.
+
 ## Start here
 
 - [AGENTS.md](https://playidea-lab.github.io/borch/AGENTS.md): the one page a coding agent needs — which of the three to use, ten rules that save a rewrite, three smoke tests, where the truth is
 - [README](https://playidea-lab.github.io/borch/README.md): the door — thirty seconds in Python and in TypeScript, where it runs, how it is guaranteed
+- [Compare](https://playidea-lab.github.io/borch/site/compare.html): borch against TF.js, jax-js, Burn and ONNX Runtime Web on one page, same GPU, adapter on every row — training, ResNet inference (f32 / f16 / int8), ViT inference
+- the Claude Code skill: `/plugin marketplace add playidea-lab/borch` then `/plugin install borch@borch` — the same page as a skill, with recipes ([skills/borch/SKILL.md](https://github.com/playidea-lab/borch/blob/main/skills/borch/SKILL.md))
 
 ## One call that trains
 

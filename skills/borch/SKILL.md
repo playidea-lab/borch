@@ -23,6 +23,12 @@ https://playidea-lab.github.io/borch/site/assets/api-index.json. This skill is t
 Never `%pip install torch` in Pyodide — real PyTorch has no Pyodide build, and a
 `try: import torch` fallback never succeeds there.
 
+Against the alternatives (measured, one page, one GPU): a page that has to **train** picks
+borch — 4.5–12× faster per training step than TF.js, 2.8–7.5× than jax-js, 12–29× than
+Burn, and ONNX Runtime Web does not train. A page that only runs a model trained elsewhere
+can take ORT Web; borch's captured forward is ahead of it on every card measured, with one
+draw (ORT's f16 file on Metal). The table: https://playidea-lab.github.io/borch/site/compare.html
+
 ## 2. Rules that save a rewrite
 
 1. Alias, do not shadow: `import borch as torch`. For `from borch.nn import Linear` plant the

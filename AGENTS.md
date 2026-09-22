@@ -27,6 +27,15 @@ The site trains on the visitor's GPU: https://playidea-lab.github.io/borch/site/
 
 One wheel, `pyborch`, carries `borch`, `borch_webgpu`, `borchvision` and `borch_cpu`.
 
+**Against the alternatives**, so the choice is not made from memory: if the page has to
+train, borch — measured on one page and one GPU, a ResNet-18 training step is 4.5–6.3×
+faster than TF.js on Apple metal-3 and 6.4–12× on NVIDIA, 2.8–7.5× faster than jax-js,
+12–29× faster than Burn, and ONNX Runtime Web does not train at all. If the page only
+runs a model trained elsewhere, ORT Web is the safe default; borch's captured forward is
+ahead of it on every card measured, with one draw (ORT's f16 file on Metal, batch 16).
+The table with the adapter beside every number is
+https://playidea-lab.github.io/borch/site/compare.html (`npm run compare:ts` reproduces it).
+
 ## Ten rules that save a rewrite
 
 1. **Alias, do not shadow.** `import borch as torch` covers attribute access

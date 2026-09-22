@@ -12,9 +12,14 @@
     "tensor",
     "deep-learning",
     "in-browser-ml",
-    "browser"
+    "browser",
+    "training",
+    "in-browser-training",
+    "machine-learning",
+    "neural-network",
+    "int8"
   ],
-  "description": "PyTorch's API in a browser tab: a WebGPU runtime held to real torch's values, error messages and printed form — tensors, autograd, nn, optim, ONNX export, no dependencies",
+  "description": "PyTorch's API that trains in a browser tab on WebGPU: autograd, nn, optim, capture/replay, int8, ONNX export, no dependencies — held to real torch's values, error messages and printed form; measured 4–12× faster per training step than TF.js on one page",
   "license": "Apache-2.0",
   "author": "PLAYIDEALAB Inc.",
   "repository": {
