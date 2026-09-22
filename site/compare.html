@@ -99,9 +99,10 @@
         <tr><td></td><td>TF.js 4.22.0 (WebGPU)</td><td class="num">86.5</td><td class="num">172.8</td><td class="num">349.1</td><td class="num">4.5× · 5.5× · 6.3× slower</td></tr>
         <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">68.1</td><td class="num">97.1</td><td class="num">152.2</td><td class="num">3.5× · 3.1× · 2.8×</td></tr>
         <tr><td></td><td>Burn 0.21 (Rust → wasm, wgpu)</td><td class="num">264.7</td><td class="num">520.7</td><td class="num">1025.6</td><td class="num">13.7× · 16.4× · 18.5×</td></tr>
-        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Linux, Vulkan) · 2026-09-21</td><td><strong>borch.ts</strong></td><td class="num"><strong>10.6</strong></td><td class="num"><strong>14.7</strong></td><td class="num"><strong>23.2</strong></td><td class="num">1×</td></tr>
-        <tr><td></td><td>TF.js 4.22.0</td><td class="num">75.4</td><td class="num">122.0</td><td class="num">236.7</td><td class="num">7.1× · 8.3× · 10.2×</td></tr>
-        <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">78.5</td><td class="num">81.1</td><td class="num">116.4</td><td class="num">7.5× · 5.5× · 5.0×</td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Linux, Vulkan, Chrome 151) · 2026-09-22, borch-ts 0.6.0 as published (two runs)</td><td><strong>borch.ts</strong></td><td class="num"><strong>10.7–11.3</strong></td><td class="num"><strong>14.2–14.7</strong></td><td class="num"><strong>22.6–23.1</strong></td><td class="num">1×</td></tr>
+        <tr><td></td><td>TF.js 4.22.0</td><td class="num">75.0</td><td class="num">121.4</td><td class="num">223.3</td><td class="num">6.6× · 8.3× · 9.9×</td></tr>
+        <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">72.2</td><td class="num">86.3</td><td class="num">114.1</td><td class="num">6.7× · 6.1× · 4.9×</td></tr>
+        <tr><td></td><td>Burn 0.21</td><td colspan="4">not built on this machine (no Rust toolchain there); the 4090 row below is Burn's NVIDIA number</td></tr>
         <tr><td><code>nvidia / lovelace</code> (RTX 4090, Linux, Vulkan, Chrome 153) · 2026-09-22, borch-ts 0.6.0 as published (two runs)</td><td><strong>borch.ts</strong></td><td class="num"><strong>10.0–10.5</strong></td><td class="num"><strong>10.9–12.3</strong></td><td class="num"><strong>17.7–17.9</strong></td><td class="num">1×</td></tr>
         <tr><td></td><td>TF.js 4.22.0</td><td class="num">67.5</td><td class="num">113.7</td><td class="num">211.7</td><td class="num">6.4× · 10.4× · 12.0×</td></tr>
         <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">67.3</td><td class="num">74.4</td><td class="num">103.6</td><td class="num">6.7× · 6.0× · 5.8×</td></tr>
@@ -137,11 +138,11 @@
         <tr><td><code>apple / metal-3</code> · 2026-09-22</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>1.09</strong></td><td class="num"><strong>4.12</strong></td><td class="num">0.25× · 0.78×</td></tr>
         <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">4.35</td><td class="num">5.30</td><td></td></tr>
         <tr><td></td><td>ONNX Runtime Web, f16 file (I/O kept f32)</td><td class="num">3.29</td><td class="num">4.26</td><td class="num">0.33× · <strong>0.97× — a draw</strong></td></tr>
-        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan) · 2026-09-21</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>0.56</strong></td><td class="num"><strong>1.66</strong></td><td class="num">0.15× · 0.39–0.47×</td></tr>
-        <tr><td></td><td><strong>borch.ts int8 static + captured</strong></td><td class="num"><strong>0.52</strong></td><td class="num"><strong>0.94–1.03</strong></td><td class="num">0.14× · 0.22–0.28×</td></tr>
-        <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">3.5–3.8</td><td class="num">3.6–4.3</td><td></td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan, Chrome 151) · 2026-09-22, 0.6.0 as published</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>0.56</strong></td><td class="num"><strong>1.63</strong></td><td class="num">0.15× · 0.44×</td></tr>
+        <tr><td></td><td><strong>borch.ts int8 static + captured</strong></td><td class="num"><strong>0.52</strong></td><td class="num"><strong>0.96</strong></td><td class="num">0.14× · 0.26×</td></tr>
+        <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">3.75</td><td class="num">3.72</td><td></td></tr>
         <tr><td></td><td>ONNX Runtime Web, f16 file</td><td colspan="3">the session refuses — this card's Chrome (Linux, Vulkan) gives ORT's device no f16</td></tr>
-        <tr><td></td><td>ONNX Runtime Web, int8 file (QDQ) · WebGPU / wasm provider</td><td class="num">42–45 / 4.1</td><td class="num">98–106 / 56</td><td class="num">11–28× slower than its own f32</td></tr>
+        <tr><td></td><td>ONNX Runtime Web, int8 file (QDQ) · WebGPU / wasm provider</td><td class="num">38.6 / 4.0</td><td class="num">109.3 / 55.2</td><td class="num">10–29× slower than its own f32</td></tr>
         <tr><td><code>nvidia / lovelace</code> (RTX 4090, Vulkan, Chrome 153) · 2026-09-22, 0.6.0 as published</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>0.58</strong></td><td class="num"><strong>1.65</strong></td><td class="num">0.16× · 0.46×</td></tr>
         <tr><td></td><td><strong>borch.ts int8 static + captured</strong></td><td class="num"><strong>0.56</strong></td><td class="num"><strong>0.83</strong></td><td class="num">0.15× · 0.23×</td></tr>
         <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">3.70</td><td class="num">3.61</td><td></td></tr>
@@ -173,7 +174,7 @@
       <thead><tr><th>adapter</th><th>borch captured, b1</th><th>ORT f32, b1</th><th>borch, b16</th><th>ORT, b16</th><th>borch / ORT (under 1× — borch ahead)</th></tr></thead>
       <tbody>
         <tr><td><code>apple / metal-3</code> · 2026-09-22 (the token row padded 197 → 200 for the subgroup matrices)</td><td class="num"><strong>2.22</strong></td><td class="num">5.46</td><td class="num"><strong>10.64</strong></td><td class="num">19.77</td><td class="num">0.41× · 0.54×</td></tr>
-        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan) · 2026-09-21 — no f32 subgroup matrices on this card, the scalar GEMM throughout</td><td class="num"><strong>1.73–2.25</strong></td><td class="num">6.89–8.18</td><td class="num"><strong>4.93</strong></td><td class="num">14.2–14.6</td><td class="num">0.21–0.33× · 0.34–0.35×</td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan, Chrome 151) · 2026-09-22, 0.6.0 as published — no f32 subgroup matrices on this card, the scalar GEMM throughout</td><td class="num"><strong>1.78</strong></td><td class="num">6.55</td><td class="num"><strong>5.00</strong></td><td class="num">14.11</td><td class="num">0.27× · 0.35×</td></tr>
         <tr><td><code>nvidia / lovelace</code> (RTX 4090, Vulkan, Chrome 153) · 2026-09-22, 0.6.0 as published — the 5080's kernel set, 197 tokens unpadded</td><td class="num"><strong>1.67</strong></td><td class="num">8.12</td><td class="num"><strong>4.88</strong></td><td class="num">11.41</td><td class="num">0.21× · 0.43×</td></tr>
         <tr><td><code>nvidia / blackwell</code> through Direct3D 12 (RTX 5050 Laptop) · 2026-09-21</td><td class="num"><strong>3.31–3.37</strong></td><td class="num">10.0–11.8</td><td class="num"><strong>24.0–27.8</strong></td><td class="num">47.5–61.0</td><td class="num">0.29–0.33× · 0.46–0.50×</td></tr>
       </tbody>

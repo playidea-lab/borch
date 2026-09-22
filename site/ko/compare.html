@@ -93,9 +93,10 @@
         <tr><td></td><td>TF.js 4.22.0 (WebGPU)</td><td class="num">86.5</td><td class="num">172.8</td><td class="num">349.1</td><td class="num">4.5× · 5.5× · 6.3× 느림</td></tr>
         <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">68.1</td><td class="num">97.1</td><td class="num">152.2</td><td class="num">3.5× · 3.1× · 2.8×</td></tr>
         <tr><td></td><td>Burn 0.21 (Rust → wasm, wgpu)</td><td class="num">264.7</td><td class="num">520.7</td><td class="num">1025.6</td><td class="num">13.7× · 16.4× · 18.5×</td></tr>
-        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Linux, Vulkan) · 2026-09-21</td><td><strong>borch.ts</strong></td><td class="num"><strong>10.6</strong></td><td class="num"><strong>14.7</strong></td><td class="num"><strong>23.2</strong></td><td class="num">1×</td></tr>
-        <tr><td></td><td>TF.js 4.22.0</td><td class="num">75.4</td><td class="num">122.0</td><td class="num">236.7</td><td class="num">7.1× · 8.3× · 10.2×</td></tr>
-        <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">78.5</td><td class="num">81.1</td><td class="num">116.4</td><td class="num">7.5× · 5.5× · 5.0×</td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Linux, Vulkan, Chrome 151) · 2026-09-22, borch-ts 0.6.0 게시본 (두 run)</td><td><strong>borch.ts</strong></td><td class="num"><strong>10.7–11.3</strong></td><td class="num"><strong>14.2–14.7</strong></td><td class="num"><strong>22.6–23.1</strong></td><td class="num">1×</td></tr>
+        <tr><td></td><td>TF.js 4.22.0</td><td class="num">75.0</td><td class="num">121.4</td><td class="num">223.3</td><td class="num">6.6× · 8.3× · 9.9×</td></tr>
+        <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">72.2</td><td class="num">86.3</td><td class="num">114.1</td><td class="num">6.7× · 6.1× · 4.9×</td></tr>
+        <tr><td></td><td>Burn 0.21</td><td colspan="4">이 기계엔 Rust 툴체인이 없어 빌드하지 않음 — Burn 의 NVIDIA 값은 아래 4090 행</td></tr>
         <tr><td><code>nvidia / lovelace</code> (RTX 4090, Linux, Vulkan, Chrome 153) · 2026-09-22, borch-ts 0.6.0 게시본 (두 run)</td><td><strong>borch.ts</strong></td><td class="num"><strong>10.0–10.5</strong></td><td class="num"><strong>10.9–12.3</strong></td><td class="num"><strong>17.7–17.9</strong></td><td class="num">1×</td></tr>
         <tr><td></td><td>TF.js 4.22.0</td><td class="num">67.5</td><td class="num">113.7</td><td class="num">211.7</td><td class="num">6.4× · 10.4× · 12.0×</td></tr>
         <tr><td></td><td>jax-js 0.1.25 + optax 0.1.2</td><td class="num">67.3</td><td class="num">74.4</td><td class="num">103.6</td><td class="num">6.7× · 6.0× · 5.8×</td></tr>
@@ -129,11 +130,11 @@
         <tr><td><code>apple / metal-3</code> · 2026-09-22</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>1.09</strong></td><td class="num"><strong>4.12</strong></td><td class="num">0.25× · 0.78×</td></tr>
         <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">4.35</td><td class="num">5.30</td><td></td></tr>
         <tr><td></td><td>ONNX Runtime Web, f16 파일 (입출력 f32)</td><td class="num">3.29</td><td class="num">4.26</td><td class="num">0.33× · <strong>0.97× — 무승부</strong></td></tr>
-        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan) · 2026-09-21</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>0.56</strong></td><td class="num"><strong>1.66</strong></td><td class="num">0.15× · 0.39–0.47×</td></tr>
-        <tr><td></td><td><strong>borch.ts int8 static + captured</strong></td><td class="num"><strong>0.52</strong></td><td class="num"><strong>0.94–1.03</strong></td><td class="num">0.14× · 0.22–0.28×</td></tr>
-        <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">3.5–3.8</td><td class="num">3.6–4.3</td><td></td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan, Chrome 151) · 2026-09-22, 0.6.0 게시본</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>0.56</strong></td><td class="num"><strong>1.63</strong></td><td class="num">0.15× · 0.44×</td></tr>
+        <tr><td></td><td><strong>borch.ts int8 static + captured</strong></td><td class="num"><strong>0.52</strong></td><td class="num"><strong>0.96</strong></td><td class="num">0.14× · 0.26×</td></tr>
+        <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">3.75</td><td class="num">3.72</td><td></td></tr>
         <tr><td></td><td>ONNX Runtime Web, f16 파일</td><td colspan="3">세션 거부 — 이 카드의 Chrome(Linux, Vulkan)은 ORT 의 디바이스에 f16 을 주지 않는다</td></tr>
-        <tr><td></td><td>ONNX Runtime Web, int8 파일 (QDQ) · WebGPU / wasm 프로바이더</td><td class="num">42–45 / 4.1</td><td class="num">98–106 / 56</td><td class="num">자기 f32 보다 11–28× 느림</td></tr>
+        <tr><td></td><td>ONNX Runtime Web, int8 파일 (QDQ) · WebGPU / wasm 프로바이더</td><td class="num">38.6 / 4.0</td><td class="num">109.3 / 55.2</td><td class="num">자기 f32 보다 10–29× 느림</td></tr>
         <tr><td><code>nvidia / lovelace</code> (RTX 4090, Vulkan, Chrome 153) · 2026-09-22, 0.6.0 게시본</td><td><strong>borch.ts f32, fused + captured</strong></td><td class="num"><strong>0.58</strong></td><td class="num"><strong>1.65</strong></td><td class="num">0.16× · 0.46×</td></tr>
         <tr><td></td><td><strong>borch.ts int8 static + captured</strong></td><td class="num"><strong>0.56</strong></td><td class="num"><strong>0.83</strong></td><td class="num">0.15× · 0.23×</td></tr>
         <tr><td></td><td>ONNX Runtime Web 1.29.0, f32</td><td class="num">3.70</td><td class="num">3.61</td><td></td></tr>
@@ -163,7 +164,7 @@
       <thead><tr><th>어댑터</th><th>borch captured, b1</th><th>ORT f32, b1</th><th>borch, b16</th><th>ORT, b16</th><th>borch / ORT (1× 미만이면 borch 가 앞섬)</th></tr></thead>
       <tbody>
         <tr><td><code>apple / metal-3</code> · 2026-09-22 (토큰 열 197 → 200 패딩, subgroup 행렬)</td><td class="num"><strong>2.22</strong></td><td class="num">5.46</td><td class="num"><strong>10.64</strong></td><td class="num">19.77</td><td class="num">0.41× · 0.54×</td></tr>
-        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan) · 2026-09-21 — 이 카드엔 f32 subgroup 행렬이 없어 스칼라 GEMM</td><td class="num"><strong>1.73–2.25</strong></td><td class="num">6.89–8.18</td><td class="num"><strong>4.93</strong></td><td class="num">14.2–14.6</td><td class="num">0.21–0.33× · 0.34–0.35×</td></tr>
+        <tr><td><code>nvidia / blackwell</code> (RTX 5080, Vulkan, Chrome 151) · 2026-09-22, 0.6.0 게시본 — 이 카드엔 f32 subgroup 행렬이 없어 스칼라 GEMM</td><td class="num"><strong>1.78</strong></td><td class="num">6.55</td><td class="num"><strong>5.00</strong></td><td class="num">14.11</td><td class="num">0.27× · 0.35×</td></tr>
         <tr><td><code>nvidia / lovelace</code> (RTX 4090, Vulkan, Chrome 153) · 2026-09-22, 0.6.0 게시본 — 5080 과 같은 커널 집합, 토큰 197 패딩 없음</td><td class="num"><strong>1.67</strong></td><td class="num">8.12</td><td class="num"><strong>4.88</strong></td><td class="num">11.41</td><td class="num">0.21× · 0.43×</td></tr>
         <tr><td><code>nvidia / blackwell</code>, Direct3D 12 경유 (RTX 5050 Laptop) · 2026-09-21</td><td class="num"><strong>3.31–3.37</strong></td><td class="num">10.0–11.8</td><td class="num"><strong>24.0–27.8</strong></td><td class="num">47.5–61.0</td><td class="num">0.29–0.33× · 0.46–0.50×</td></tr>
       </tbody>

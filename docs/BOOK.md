@@ -1959,6 +1959,9 @@ prints the adapter:
 | `nvidia / lovelace` (RTX 4090, Chrome 153, Vulkan), **2026-09-22, borch-ts 0.6.0 as published** — borch.ts | **10.5** | **10.9** | **17.7** |
 | `nvidia / lovelace`, same run — TF.js 4.22.0 | 67.5 | 113.7 | 211.7 |
 | ratio | **6.4×** | **10.4×** | **12.0×** |
+| `nvidia / blackwell` (RTX 5080, Chrome 151, Vulkan), **2026-09-22, 0.6.0 as published** — borch.ts | **11.3** | **14.7** | **22.6** |
+| `nvidia / blackwell`, same run — TF.js 4.22.0 | 75.0 | 121.4 | 223.3 |
+| ratio | **6.6×** | **8.3×** | **9.9×** |
 
 The 2026-09-19 rows are the same page and the same TF.js bytes sixteen days later: TF.js
 did not move (86.4 → 86.5) and borch.ts went from 38.6 to 21.2 ms at batch 16 — the
@@ -2004,6 +2007,9 @@ borch's page, after borch:
 | ratio | **6.7×** | **6.0×** | **5.8×** |
 | `nvidia / lovelace`, same run — Burn 0.21 wgpu (wasm, built there; `wasm-opt` refused the module, so unoptimised) | 115.7 | 248.5 | 516.9 |
 | ratio | **11.6×** | **20.2×** | **28.9×** |
+| `nvidia / blackwell` (RTX 5080, Chrome 151, Vulkan), **2026-09-22, 0.6.0 as published** — borch.ts | **10.7** | **14.2** | **23.1** |
+| `nvidia / blackwell`, same run — jax-js 0.1.25 + optax 0.1.2 (no Burn build on that machine) | 72.2 | 86.3 | 114.1 |
+| ratio | **6.7×** | **6.1×** | **4.9×** |
 
 **The Ada card, 2026-09-22.** The 4090 came back on the bus (a PCIe power lead reseated,
 a cold boot) and 0.6.0 was measured on it the same morning, on the 5080's kernel set:
@@ -2115,6 +2121,10 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 | borch.ts **int8 static** + captured, same run | | **0.56 ms** | **0.83 ms** |
 | ONNX Runtime Web 1.29.0, same run | | 3.70 ms | 3.61 ms |
 | ORT is faster than the captured f32 / int8 network by | | 0.16× / 0.15× — borch ahead | 0.46× / 0.23× — borch ahead |
+| borch.ts fused + captured, `nvidia / blackwell` (RTX 5080, Chrome 151, Vulkan), **2026-09-22, 0.6.0 as published** | | **0.56 ms** | **1.63 ms** |
+| borch.ts **int8 static** + captured, same run (top-1 on the 1,000 held-out images f32 92.40 · int8 static 92.50 · ORT f32 92.40 · ORT int8 92.50, unchanged) | | **0.52 ms** | **0.96 ms** |
+| ONNX Runtime Web 1.29.0, same run (int8 on WebGPU 38.6 / 109.3, on wasm 4.0 / 55.2; f16 refused) | | 3.75 ms | 3.72 ms |
+| ORT is faster than the captured f32 / int8 network by | | 0.15× / 0.14× — borch ahead | 0.44× / 0.26× — borch ahead |
 
 **ORT at its own reduced precisions, 2026-09-21.** The int8 rows above stood beside ORT
 running the f32 file, which is not the same question as "ORT at its best". So
@@ -2190,6 +2200,9 @@ mean of twenty after three warm-ups, a scope a forward, readback included:
 | borch.ts captured, 298 / 274 dispatches a replay | `nvidia / lovelace` | **1.67 ms** | **4.88 ms** |
 | ONNX Runtime Web 1.29.0, same run | `nvidia / lovelace` | 8.12 ms | 11.41 ms |
 | ORT is faster than the captured network by | | 0.21× — borch ahead | **0.43×** — borch ahead |
+| borch.ts eager / **captured**, `nvidia / blackwell` (RTX 5080, Chrome 151, Vulkan), **2026-09-22, 0.6.0 as published** | | 3.45 / **1.78 ms** | 6.41 / **5.00 ms** |
+| ONNX Runtime Web 1.29.0, same run | `nvidia / blackwell` | 6.55 ms | 14.11 ms |
+| ORT is faster than the captured network by | | 0.27× — borch ahead | **0.35×** — borch ahead |
 
 Where the batch-16 forward spends itself is the GPU (9.8 of 10.5 ms on metal-3, 4.8 of
 4.94 on the 5080, 23.6 of 27.8 on the laptop's D3D12), and where the GPU spends itself is the three wide matmuls of every
