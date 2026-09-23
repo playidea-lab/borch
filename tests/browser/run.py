@@ -46,9 +46,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 # The one list of top-level `site/` directories that are not this site's own pages, so
 # every guard and probe that walks `site/*.html` skips the same set: `lab`/`lab-src`
 # (JupyterLite, built), `marimo`/`marimo-src` (the workbench notebook, built) and
-# `embed` (the chrome-less widget route). It lived in four hand-synced copies until one
-# fell behind and reddened CI; this is the source they all read now.
-SITE_SKIP = ("lab", "lab-src", "marimo", "marimo-src", "embed")
+# `embed` (the chrome-less widget route), and `recipes` — whole files an agent copies
+# as they stand, so a nav or share tags in them would be copied into somebody's page.
+# It lived in four hand-synced copies until one fell behind and reddened CI; this is the
+# source they all read now.
+SITE_SKIP = ("lab", "lab-src", "marimo", "marimo-src", "embed", "recipes")
 
 _vspec = importlib.util.spec_from_file_location(
     "bt_vendor", pathlib.Path(__file__).resolve().parent / "vendor.py")
