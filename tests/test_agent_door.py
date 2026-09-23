@@ -276,3 +276,20 @@ def test_the_names_agents_md_says_are_outside_the_index_are_outside_it_and_real(
     absent = [n for n in names if n not in binding and n not in cpu]
     assert not absent, ("AGENTS.md names these as real and neither browser surface "
                         f"mentions them: {absent}")
+
+
+def test_the_cnn_page_in_agents_md_is_the_file_the_nightly_opens():
+    """The whole-page recipe exists because a clean agent told to use borch-ts spent six of
+    fifteen tool calls grepping `.d.ts` files for `init`, `scope`, `Adam` and `noGrad` — the
+    documents had a two-line smoke test and no page that trains (measured 2026-09-24, three
+    runs of `claude -p` in an empty folder). The block an agent copies and the file
+    `cdn_probe.py` opens on a real adapter have to be one text, or the tested one drifts from
+    the read one and the check says nothing about what agents are handed."""
+    recipe = (ROOT / "site" / "recipes" / "train-cnn.html").read_text(encoding="utf-8")
+    blocks = [body for lang, body in FENCE.findall((ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+              if lang == "html" and "train" in body and "Conv2d" in body]
+    assert len(blocks) == 1, f"AGENTS.md has {len(blocks)} CNN page blocks; one is the recipe"
+    assert blocks[0].rstrip("\n") == recipe.rstrip("\n"), (
+        "AGENTS.md's CNN page is not site/recipes/train-cnn.html — copy the file into the block")
+    version = json.loads((ROOT / "package.json").read_text())["version"]
+    assert f"borch-ts@{'.'.join(version.split('.')[:2])}/+esm" in recipe

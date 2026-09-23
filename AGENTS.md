@@ -219,6 +219,80 @@ console.log(await x.mul(x).sum().toArray());   // Float32Array [14]
 </script>
 ```
 
+**A page that trains a CNN, no build step** — the whole file, the one to start a generated
+page from. It is `site/recipes/train-cnn.html`, served at
+https://playidea-lab.github.io/borch/site/recipes/train-cnn.html, and `tests/browser/cdn_probe.py`
+opens it on a real adapter every night; the block below is held to that file by
+`tests/test_agent_door.py`. The names a first page needs are all here — `probe` before
+`init`, `keepAlive` for data that outlives a step, `using s = scope()` per step, class
+indices as `int64`, `noGrad` for the evaluation, `await` only where a value is read.
+
+```html
+<!doctype html>
+<meta charset="utf-8">
+<title>A CNN trained in this tab</title>
+<pre id="log">loading…</pre>
+<script type="module">
+import { probe, init, Tensor, nn, optim, scope, keepAlive, noGrad, manualSeed, VERSION }
+  from "https://cdn.jsdelivr.net/npm/borch-ts@0.6/+esm";
+const log = (s) => { document.getElementById("log").textContent += "\n" + s; };
+try {
+  const gpu = await probe();                    // {ok, adapter} or {ok: false, why: "no-api" | "no-adapter"}
+  if (!gpu.ok) throw new Error(`no WebGPU here (${gpu.why}): ${gpu.message}`);
+  await init();                                // refuses a software adapter
+  manualSeed(0);
+
+  let seed = 1; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  // Data made in the page: 16×16 images of four shapes — label 0 bar, 1 column, 2 box, 3 cross.
+  const N = 1024, S = 16, px = new Float32Array(N * S * S), lab = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const c = i % 4, o = 2 + Math.floor(rnd() * 12), img = px.subarray(i * S * S, (i + 1) * S * S);
+    for (let k = 2; k < 14; k++) {
+      if (c === 0) img[o * S + k] = 1;
+      if (c === 1) img[k * S + o] = 1;
+      if (c === 2) { img[2 * S + k] = img[13 * S + k] = img[k * S + 2] = img[k * S + 13] = 1; }
+      if (c === 3) { img[k * S + k] = img[k * S + (S - 1 - k)] = 1; }
+    }
+    for (let j = 0; j < S * S; j++) img[j] += 0.8 * (rnd() - 0.5);   // noise
+    lab[i] = c;
+  }
+  const X = keepAlive(Tensor.from(px, [N, 1, S, S]));            // kept: lives across scopes
+  const Y = keepAlive(Tensor.from(lab, [N]).to("int64"));         // class indices are int64
+
+  const model = new nn.Sequential(
+    new nn.Conv2d(1, 8, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+    new nn.Conv2d(8, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+    new nn.Flatten(), new nn.Linear(16 * 4 * 4, 4));
+  const crit = new nn.CrossEntropyLoss();
+  const opt = new optim.Adam(model.parameters(), 1e-2);
+
+  const B = 64;
+  let last = NaN;
+  for (let epoch = 0; epoch < 5; epoch++) {
+    for (let b = 0; b < N; b += B) {
+      using s = scope();                          // frees this step's GPU buffers on exit
+      opt.zeroGrad();
+      const loss = crit.call(model.call(X.narrow(0, b, B)), Y.narrow(0, b, B));
+      loss.backward();
+      opt.step();
+      if (b + B >= N) last = await loss.item();   // reading a value is the only await
+    }
+    log(`epoch ${epoch}  loss ${last.toFixed(4)}`);
+  }
+
+  model.eval();
+  const acc = await scope(async () => noGrad(() =>
+    model.call(X).argmax(1).eq(Y).to("float32").mean()).item());
+  log(`accuracy ${(acc * 100).toFixed(1)} %`);
+  window.__result = { library: `borch-ts@${VERSION}`, finalLoss: last, accuracy: acc,
+                      backend: `webgpu (${gpu.adapter})` };
+} catch (e) {
+  log(String(e));
+  window.__result = { error: String(e && e.message || e) };
+}
+</script>
+```
+
 **Pyodide notebook cell:**
 
 ```python

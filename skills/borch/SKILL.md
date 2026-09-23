@@ -112,6 +112,10 @@ for (let step = 0; step < 200; step++) {
 }
 ```
 
+A whole page that trains a CNN with no build step — `probe`, data made in the page, `Conv2d`,
+`MaxPool2d`, `Adam`, an accuracy under `noGrad` — is one file to copy:
+https://playidea-lab.github.io/borch/site/recipes/train-cnn.html (the same file is in `AGENTS.md`).
+
 ### Export what you trained as ONNX — `borch_webgpu` and borch-ts; the numpy core does not export
 
 ```python

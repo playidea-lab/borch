@@ -10,6 +10,7 @@ When to pick it over the alternatives, measured on one page and one GPU (2026-09
 
 - [AGENTS.md](https://playidea-lab.github.io/borch/AGENTS.md): the one page a coding agent needs — which of the three to use, ten rules that save a rewrite, three smoke tests, where the truth is
 - [README](https://playidea-lab.github.io/borch/README.md): the door — thirty seconds in Python and in TypeScript, where it runs, how it is guaranteed
+- [A page that trains a CNN](https://playidea-lab.github.io/borch/site/recipes/train-cnn.html): one HTML file, no build step, borch-ts from jsDelivr — the file to start a generated page from, opened on a real GPU every night
 - [Compare](https://playidea-lab.github.io/borch/site/compare.html): borch against TF.js, jax-js, Burn and ONNX Runtime Web on one page, same GPU, adapter on every row — training, ResNet inference (f32 / f16 / int8), ViT inference
 - the Claude Code skill: `/plugin marketplace add playidea-lab/borch` then `/plugin install borch@borch` — the same page as a skill, with recipes ([skills/borch/SKILL.md](https://github.com/playidea-lab/borch/blob/main/skills/borch/SKILL.md))
 

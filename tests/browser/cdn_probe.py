@@ -30,6 +30,8 @@ import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PAGE = pathlib.Path(__file__).resolve().parent / "cdn_probe.html"
+# The whole page `AGENTS.md` hands an agent to start from — opened as a stranger saves it.
+RECIPE = ROOT / "site" / "recipes" / "train-cnn.html"
 # Unpinned on purpose: what breaks silently is the *next* release, and a pinned probe
 # would keep passing while the package a new reader installs no longer imports. The
 # documents show the pinned form, which is what a page of somebody's own should use.
@@ -77,6 +79,15 @@ def main(argv):
             page.goto(page_url)
             page.wait_for_function("window.__done !== null", timeout=120_000)
             got = page.evaluate("window.__done")
+            # **The recipe, second.** A two-line smoke test is not what an agent copies; on
+            # 2026-09-24 a clean agent told to use borch-ts read the `.d.ts` files for six
+            # calls to assemble a page that trains. The page it should have found is this
+            # one, and it is only worth handing out while it trains on the published line.
+            recipe = browser.new_page()
+            recipe.on("pageerror", lambda e: print(f"  [recipe exception] {str(e)[:200]}"))
+            recipe.goto(RECIPE.as_uri())
+            recipe.wait_for_function("window.__result !== undefined", timeout=180_000)
+            cnn = recipe.evaluate("window.__result")
         finally:
             browser.close()
 
@@ -92,7 +103,14 @@ def main(argv):
         return 1
     print(f"  {got['names']} names · imported in {got['imported_ms']} ms · adapter {got['adapter']}")
     print(f"  x*x sum {got['sum']} · trained 60 steps to loss {got['loss']:.4f}")
-    print("**the published package trains from a CDN, in a file opened from disk**")
+    if "error" in cnn or not cnn.get("accuracy", 0) >= 0.9:
+        print(f"  the recipe page did not train: {json.dumps(cnn)}")
+        print("**site/recipes/train-cnn.html is the page AGENTS.md hands out, and it failed** — "
+              "fix the page or the package before an agent copies it.")
+        return 1
+    print(f"  recipe {RECIPE.relative_to(ROOT)}: {cnn['library']} · loss {cnn['finalLoss']:.4f} · "
+          f"accuracy {cnn['accuracy']:.3f} · {cnn['backend']}")
+    print("**the published package trains from a CDN, in a file opened from disk — the smoke test and the CNN recipe**")
     return 0
 
 
