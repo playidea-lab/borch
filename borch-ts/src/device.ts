@@ -17,6 +17,7 @@
  * looked at, so here the limits are **measured in advance and exceeding one throws.**
  */
 
+import { VERSION } from "./version.js";
 import { type Elementwise, grid1d, type Reduce, reduceParts, reduceSum, setConvTilesPreferred, setDirectWeightBytes, type TiledConfig, WORKGROUP } from "./kernels.js";
 import { fuseRecords } from "./fuse.js";
 import { planRecords, touchesOf } from "./plan.js";
@@ -2371,6 +2372,31 @@ export class Device {
     }
   }
 
+  /**
+   * **Measures what `run` dispatches, and nothing after it.** `profile` keeps timestamps on
+   * for the whole of an asynchronous body — right for a benchmark, whose waits are its own.
+   * The tuner's candidates dispatch synchronously and then wait for the GPU; with the flag
+   * up across that wait, whatever the page dispatched meanwhile (a tuning pass runs in idle
+   * time) was timed into the candidates' numbers (2026-09-24 review). Here the flag is up
+   * for `run` alone, and the results are read after it is down.
+   */
+  async profileSync(run: () => void): Promise<void> {
+    this.profiling = true;
+    this.nsByKind.clear();
+    this.countByKind.clear();
+    this.queryUsed = 0;
+    this.queryKinds = [];
+    this.profileDropped = 0;
+    try {
+      run();
+    } finally {
+      this.profiling = false;
+    }
+    this.flush();
+    await this.synchronize();
+    await this.collectProfile();
+  }
+
   /** Opens a compute pass. Normally one is shared; while profiling one is opened per
    *  dispatch. */
   private openPass(): GPUComputePassEncoder {
@@ -2777,6 +2803,19 @@ export class Device {
   }
   private readonly tuneQueue = new Map<string, readonly TuneCandidate[]>();
 
+  /**
+   * **Whose a decision is: this adapter, in this browser, for this build.** Keyed on the
+   * adapter alone, a decision outlived a browser update that changed the WGSL compiler (the
+   * kernels' order can change with it — Chrome 143 → 153 on one card changed which kernels
+   * compile at all) and a library update that changed the candidates, in `localStorage`, for
+   * good (2026-09-24 review). A new browser major or a new release tunes once again.
+   */
+  static tuneContext(): string {
+    const ua = (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent ?? "";
+    const browser = /(?:Chrome|Firefox|Version)\/\d+/.exec(ua)?.[0] ?? "";
+    return `${Device.adapterInfo}|${browser}|${VERSION}`;
+  }
+
   /** Loads the decisions saved by earlier sessions on this adapter. */
   static loadTune(): void {
     try {
@@ -2797,7 +2836,7 @@ export class Device {
     const first = candidates[0];
     if (first === undefined) throw new Error(`choose(${key}): no candidates`);
     if (candidates.length === 1) return first;
-    const k = `${Device.adapterInfo}|${key}`;
+    const k = `${Device.tuneContext()}|${key}`;
     const cached = Device.tune.get(k);
     if (cached !== undefined) {
       const hit = candidates.find((c) => c.label === cached);
@@ -2887,15 +2926,13 @@ export class Device {
     const best = new Map<string, number>();   // `${k}#${i}` → ms
     for (let round = 0; round < Device.TUNE_ROUNDS; round++) {
       for (const pass of passes) {
-        await this.profile(async () => {
+        await this.profileSync(() => {
           this.beginScope();
           try {
             for (const { cand } of pass) for (let r = 0; r < Device.TUNE_REPS; r++) cand.run();
           } finally {
             this.endScope();
           }
-          this.flush();
-          await this.synchronize();
         });
         for (const { k, i, cand } of pass) {
           const ns = cand.keys.reduce((a, key) => a + (this.nsByKind.get(key) ?? 0), 0);

@@ -14,6 +14,7 @@ import * as nn from "../src/nn.js";
 import { SGD } from "../src/optim.js";
 import { type CheckReport, compiled } from "../src/compile.js";
 import { Device } from "../src/device.js";
+import { VERSION } from "../src/version.js";
 import { streamTrainStep, type TrainBlock } from "../src/stream_train.js";
 import { device, keepAlive, noGrad, scope, Tensor } from "../src/tensor.js";
 import { ResNet18 } from "./bench.js";
@@ -344,7 +345,7 @@ const maxAbs = (a: Float32Array, b: Float32Array): number => {
  * rule's kernels: the step still answers.
  */
 async function background(): Promise<void> {
-  const dv = device() as unknown as { scopes: Set<GPUBuffer>[] };
+  const dv = device() as unknown as { scopes: Set<GPUBuffer>[]; profiling: boolean };
   // Shapes nothing else on this page has tuned, so the pass has candidates to time.
   nn.manualSeed(4);
   const net = new nn.Sequential(new nn.Conv2d(3, 24, 3, 1, 1), new nn.ReLU(), new nn.Conv2d(24, 40, 3, 1, 1));
@@ -353,10 +354,13 @@ async function background(): Promise<void> {
   await (await step.call(xi)).toArray();
   const depth0 = dv.scopes.length;
   const tuning = step.settle();
-  let heldAcross = false;
+  // And the timestamps: a tuning pass that kept profiling on across its waits timed the
+  // page's own dispatches in that window into the candidates' numbers.
+  let heldAcross = false, profiledAcross = false;
   for (let t = 0; t < 400 && !heldAcross; t++) {
     await new Promise((r) => setTimeout(r, 2));
     if (dv.scopes.length > depth0) heldAcross = true;
+    if (dv.profiling) profiledAcross = true;
   }
   let stillMine = false, intact = false, refused = "";
   const data = array(1024, 66, 1);
@@ -370,9 +374,54 @@ async function background(): Promise<void> {
       refused = String(err).split("\n")[0] ?? "";
     }
   });
+  // **A decision is this adapter's, in this browser, for this build** (2026-09-24 review):
+  // keyed on the adapter alone it outlived a browser update that changed the compiler and
+  // a library update that changed the candidates, in `localStorage`, for good.
+  const browser = /(?:Chrome|Firefox|Version)\/\d+/.exec(globalThis.navigator?.userAgent ?? "")?.[0] ?? "";
+  const keys = [...Device.tune.keys()];
+  want("tuning decisions are keyed by adapter, browser version and library version",
+    keys.length > 0 && keys.every((k) => k.includes(`|${browser}|`) && k.includes(`|${VERSION}|`)),
+    `${keys.length} decisions · ${keys[0]?.split("|").slice(0, 4).join(" | ") ?? "none"}`);
+  want("compiled: tuning in idle time times nothing but its own candidates — profiling is never left on across an await",
+    !profiledAcross, profiledAcross ? "profiling was on while the tuning waited" : "off at every await");
   want("compiled: tuning in idle time leaves a scope the page opened meanwhile its own",
     stillMine && intact && dv.scopes.length === depth0,
     `${heldAcross ? "the tuning held a scope across its awaits" : "no scope held across an await"} · the page's frame ${stillMine ? "kept" : "TAKEN"}${refused ? ` (${refused.slice(0, 90)})` : ""} · depth ${depth0} → ${dv.scopes.length}`);
+  step.dispose();
+}
+
+/**
+ * **`check: true` with `fuse: false` on a training step the tuner changes** (the 2026-09-24
+ * review). A state-writing step's check runs after its tuning, against an eager rerun; the
+ * recording holds the rule's kernels and the rerun took the tuner's, and with no fusion the
+ * tolerance is none — the check refused a correct step. A batch of 8 is shapes nothing on
+ * this page has tuned, so the step is tuned here.
+ */
+async function checkedTraining(): Promise<void> {
+  const BATCH = 8;
+  nn.manualSeed(12);
+  const model = new ResNet18();
+  const opt = new SGD(model.parameters(), 0.05, 0.9);
+  const crit = new nn.CrossEntropyLoss();
+  const b = batch(seeded(900), BATCH, 3 * 32 * 32, 10);
+  const x = keepAlive(Tensor.from(b.x, [BATCH, 3, 32, 32]));
+  const y = keepAlive(Tensor.from(b.y, [BATCH], { dtype: "int64" }));
+  const step = compiled((xb: Tensor, yb: Tensor) => {
+    opt.zeroGrad();
+    const loss = crit.call(model.call(xb), yb);
+    loss.backward(); opt.step();
+    return loss;
+  }, { check: true, fuse: false });
+  let refused = "";
+  try {
+    for (let i = 0; i < 3; i++) await scope(async () => { await (await step.call(x, y)).item(); });
+  } catch (err) {
+    refused = String(err).split("\n")[0] ?? "";
+  }
+  const changed = step.tuned.flat().filter((t) => t.chosen !== t.prior).length;
+  want("compiled(check, fuse: false): a training step the tuner changed passes its own check",
+    refused === "" && step.checked.every((c) => c.differ === 0),
+    `${changed} decision(s) changed · ${refused ? refused.slice(0, 100) : `${step.checked.length} checks`}`);
   step.dispose();
 }
 
@@ -479,6 +528,7 @@ export async function report(): Promise<Report> {
   await streamed(lines);
   await inference(lines);
   await background();
+  await checkedTraining();
   const faults = device().faults.count;
   want("no WebGPU faults", faults === 0, `${faults}`);
   const failed = checks.filter((c) => !c.ok);

@@ -821,6 +821,15 @@ function absentDType(name: string, shown: string): never {
  * a training step's weight moves every step, and a kept pack per weight would be memory
  * for nothing.
  */
+/** What a packed weight depends on: the weight's own shape — channels, kernel, groups —
+ *  and not the input's. The pack cache is keyed by this; keyed by the whole convolution,
+ *  every batch size or image size a page ran kept one more weight-sized buffer for as long
+ *  as the weight lived (2026-09-24 review). The pipelines keep the whole key: the tuner
+ *  reads its timings by them. */
+function packShape(s: ConvNDShape): string {
+  return [s.O, s.C, s.kernel, s.groups ?? 1].join("|");
+}
+
 function packedWeight(srcs: readonly BindSlot[], key: string, count: number, make: (dst: GPUBuffer) => void): GPUBuffer {
   const whole = srcs.every((b): b is GPUBuffer => b instanceof GPUBuffer);
   if (whole && !gradMode.enabled) return dev().packed(srcs, key, count, make);
@@ -871,7 +880,7 @@ function convForwardRun(
   if (smallSubgroup) {
     const pieces = sgfsSplit(s);
     const kSpace = s.kernel.reduce((a, b) => a * b, 1);
-    const turnedW = packedWeight([w], `tmw:${key}:n`, kSpace * s.O * s.C, (dst) => dev().run1d(
+    const turnedW = packedWeight([w], `tmw:${packShape(s)}:n`, kSpace * s.O * s.C, (dst) => dev().run1d(
       dev().pipeline(`tmw:${key}:n`, () => tapMajorWeights(s.O, s.C, kSpace, false, false)),
       [w, dst], s.O * s.C));
     if (pieces === 1) {
@@ -905,7 +914,7 @@ function convForwardRun(
     const kSpace = s.kernel.reduce((a, b) => a * b, 1);
     const Mp = Math.ceil(s.O / 8) * 8, Kp = Math.ceil(s.C / 8) * 8;
     const wsize = kSpace * Mp * Kp + (bias ? Mp * 8 : 0);
-    const turnedW = packedWeight(bias ? [w, bias] : [w], `tmw:${key}:${bias ? "b" : "n"}`, wsize, (dst) => dev().run1d(
+    const turnedW = packedWeight(bias ? [w, bias] : [w], `tmw:${packShape(s)}:${bias ? "b" : "n"}`, wsize, (dst) => dev().run1d(
       dev().pipeline(`tmw:${key}:${bias ? "b" : "n"}`, () => tapMajorWeights(s.O, s.C, kSpace, false, bias !== null)),
       bias ? [w, bias, dst] : [w, dst], Mp * Kp + (bias ? Mp * 8 : 0)));
     const bufs = [padded, turnedW, ...(bias ? [onesBlockBuffer()] : []), ...(epilogue?.residual ? [epilogue.residual] : []), out];
@@ -947,7 +956,7 @@ function convForwardRun(
     return {
       label: `staged:${tl}${piecesOverride !== undefined ? `:s${pieces}` : ""}`, keys: [`tmwc:${key}:${t.TM}`, kk, ...(pieces > 1 ? [`ssc:${key}:${pieces}:${bias ? "b" : "n"}${tag}`] : [])],
       run: () => {
-        const wc = packedWeight([w], `tmwc:${key}:${t.TM}`, kSpace * s.C * coPad, (dst) =>
+        const wc = packedWeight([w], `tmwc:${packShape(s)}:${t.TM}`, kSpace * s.C * coPad, (dst) =>
           dev().run1d(dev().pipeline(`tmwc:${key}:${t.TM}`, () => tapMajorWeightsCo(s.O, s.C, kSpace, coPad)), [w, dst], kSpace * s.C * coPad));
         if (pieces === 1) {
           dev().run(dev().pipeline(kk, () => convForwardStaged(s, t, 1, bias !== null, ep)), [x, wc, ...tail], stagedGrid(s, t, 1));
@@ -11983,7 +11992,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       const Mp = Math.ceil(s.O / 8) * 8, Kp = Math.ceil(s.C / 8) * 8;
       const wsize = kSpace * Mp * Kp + (bias ? Mp * 8 : 0);
       const wb = weight.weightBinding();
-      const turned = packedWeight(bias ? [wb, bias.buffer] : [wb], `tmw:${key}:${bias ? "b" : "n"}`, wsize, (dst) => dev().run1d(
+      const turned = packedWeight(bias ? [wb, bias.buffer] : [wb], `tmw:${packShape(s)}:${bias ? "b" : "n"}`, wsize, (dst) => dev().run1d(
         dev().pipeline(`tmw:${key}:${bias ? "b" : "n"}`, () => tapMajorWeights(s.O, s.C, kSpace, false, bias !== null)),
         bias ? [wb, bias.buffer, dst] : [wb, dst], Mp * Kp + (bias ? Mp * 8 : 0)));
       dev().run(

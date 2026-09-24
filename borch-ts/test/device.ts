@@ -397,6 +397,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
       const c = Math.floor(i / 64) % 256;
       worst = Math.max(worst, Math.abs(((o2[i] ?? 0) - (o1[i] ?? 0)) - ((b2v[c] ?? 0) - 0.5)));
     }
+    // The same weight at another batch size reuses its pack: the pack is the weight's, not
+    // the input's, and it was keyed on the whole convolution — every batch size a page ran
+    // kept another weight-sized buffer, for as long as the weight lived (2026-09-24 review).
+    const xin2 = Tensor.from(Float32Array.from({ length: 4 * 256 * 64 }, (_, i) => Math.cos(i * 0.21)), [4, 256, 8, 8]);
+    const misses0 = dv.packMisses;
+    const reused = await scope(async () => noGrad(() => xin2.conv2d(w, b2, 1, 1)).toArray());
+    const made = dv.packMisses - misses0;
+    // The pack cache serves `noGrad` alone; with the tape on the weight is packed afresh.
+    const fresh = await scope(async () => xin2.conv2d(w, b2, 1, 1).toArray());
+    let dPack = 0;
+    for (let i = 0; i < fresh.length; i++) dPack = Math.max(dPack, Math.abs((reused[i] ?? 0) - (fresh[i] ?? 0)));
+    want("eager pack cache: the same weight at another batch size makes no second pack, and answers as a fresh pack does",
+      made === 0 && dPack < 1e-5, `${made} packs made · max |Δ| against a fresh pack ${dPack.toExponential(1)}`);
     want("eager pack cache: the same weight with a second bias answers with that bias",
       worst < 1e-3, `max |Δ| ${worst.toExponential(1)} · ${dv.packHits + dv.packMisses - lookups0} pack lookups`);
 

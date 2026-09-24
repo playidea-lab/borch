@@ -91,6 +91,17 @@ function idle(f: () => void): void {
   else setTimeout(f, 0);
 }
 
+/** Runs `body` with the decisions `report` made taken out of the cache, and puts them back. */
+async function withoutDecisions<T>(report: readonly TuneReport[], body: () => Promise<T>): Promise<T> {
+  const saved = report.map((t) => [t.key, Device.tune.get(t.key)] as const);
+  for (const [k] of saved) Device.tune.delete(k);
+  try {
+    return await body();
+  } finally {
+    for (const [k, v] of saved) if (v !== undefined) Device.tune.set(k, v);
+  }
+}
+
 /** The tensors in a returned value: one, or an array or object of them. */
 function tensorsOf(value: unknown): Tensor[] {
   if (value instanceof Tensor) return [value];
@@ -405,7 +416,12 @@ export class Compiled<A extends CompiledArg[], R> {
       outs.forEach((o, i) => d.writeWords(o.buffer, words(outBefore[i] as Float32Array)));
       // The passes the raw recording was waiting for.
       this.finish(key, rec);
-      if (this.check) this.checked.push(await this.verify(rec.cap, rec.inputs, rec.out));
+      // **The check compares against an eager rerun that must take the recording's kernels.**
+      // The recording holds the rule's picks; the decisions made a moment ago are in the
+      // cache, and the rerun took them — with `fuse: false` the tolerance is none, and a
+      // correct step was refused over a rounding (2026-09-24 review). They are set aside for
+      // the check and put back; the next recording takes them.
+      if (this.check) this.checked.push(await withoutDecisions(report, () => this.verify(rec.cap, rec.inputs, rec.out)));
       if (this.disposed) return;
     } else {
       // **A capture the page has open is not ours to interrupt** — a streamed step or a
