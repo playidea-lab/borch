@@ -29,7 +29,7 @@
 
 import { enableGrad, flow } from "./autograd.js";
 import { Module } from "./nn.js";
-import { type SavedSeed, saveSeed, withSeed } from "./checkpoint.js";
+import { type SavedSeed, saveSeed, strayGradLeaves, withSeed } from "./checkpoint.js";
 import { device, noGrad, scope, Tensor } from "./tensor.js";
 import type { Window } from "./device.js";
 
@@ -92,11 +92,14 @@ export async function streamTrainStep(
     let out: Tensor | undefined;
     seeds.push(saveSeed());
     // Keep only the block's output; its intermediates go back to the pool at the scope's close.
-    {
+    // The slots go back whatever the block did — a block that threw left them taken, and
+    // the next step found the window full.
+    try {
       using s = scope();
       out = s.keep(noGrad(() => blk.run(h, placed.weights)));
+    } finally {
+      placed.evict();
     }
-    placed.evict();
     boundaries.push(out);
     h = out;
   }
@@ -110,6 +113,17 @@ export async function streamTrainStep(
   {
     using s = scope();
     const l = enableGrad(() => loss(hLeaf));
+    // **A trainable tensor the loss uses has to be named in `lossParams`.** Its gradient is
+    // computed here and kept only for the ones named; an unnamed head was trained by nothing
+    // and nothing said so (2026-09-24 review). `checkpoint` refuses the same thing.
+    const lossStray = strayGradLeaves(l, new Set<Tensor>([hLeaf, ...(opts.lossParams ?? [])]));
+    if (lossStray > 0) {
+      throw new Error(
+        `streamTrainStep: the loss uses ${lossStray} tensor(s) that require grad and are not in ` +
+          "lossParams — they would get no gradient. Pass every trainable tensor the loss reads " +
+          "(a new head's weight and bias) as { lossParams: [...] }.",
+      );
+    }
     const seed = Tensor.full(l.shape, 1);
     const grads = flow([l], [seed], (a, b) => a.add(b));
     g = s.keep(grads.get(hLeaf) ?? Tensor.zeros(hLeaf.shape));
@@ -131,9 +145,17 @@ export async function streamTrainStep(
     // eslint-disable-next-line no-await-in-loop
     const placed = await placeBlock(win, blk);
     let gradX: Tensor;
-    {
+    try {
       using s = scope();
       const y = withSeed(seeds[k] as SavedSeed, () => enableGrad(() => blk.run(xk, placed.weights)));
+      // The same for a block: what trains in it is what `params` names.
+      const blockStray = strayGradLeaves(y, new Set<Tensor>([xk, ...blk.params]));
+      if (blockStray > 0) {
+        throw new Error(
+          `streamTrainStep: block ${k} uses ${blockStray} tensor(s) that require grad and are not in ` +
+            "its params — they would get no gradient. List every trainable tensor of the block.",
+        );
+      }
       const grads = flow([y], [g], (a, b) => a.add(b));
       // Each adapter is used only in its own block, so its whole gradient is here. Accumulate
       // into `.grad` the way `backward` does, keeping the result past the scope.
@@ -143,8 +165,9 @@ export async function streamTrainStep(
         p.grad = p.grad === null ? s.keep(gp) : s.keep(p.grad.add(gp));
       }
       gradX = s.keep(grads.get(xk) ?? Tensor.zeros(xk.shape));
+    } finally {
+      placed.evict();
     }
-    placed.evict();
     g = gradX;
   }
 
@@ -179,12 +202,28 @@ const isWeightOperandBuffer: BufferSelect = (shape) => shape.length >= 2;
  * and does not restore (there is nothing resident to restore to), so the module is usable **only**
  * through streaming afterwards (`streamSequential` for a no-grad forward, this for training).
  */
+/** The blocks made with `offload`, by module. Once offloaded a module's base exists only in
+ *  the block's host bytes: its fields point at window slots that are evicted after every
+ *  step. Built again from the module, the second step read those slots' bytes as the base
+ *  and then destroyed the window's own buffer through them (2026-09-24 review) — so the
+ *  block is made once and handed back. */
+const offloaded = new WeakMap<Module, TrainBlock>();
+
 export async function trainBlock(
   module: Module,
   opts: { select?: BufferSelect; offload?: boolean } = {},
 ): Promise<TrainBlock> {
   const select = opts.select ?? isWeightOperandBuffer;
   const offload = opts.offload ?? false;
+  const made = offloaded.get(module);
+  if (made) {
+    if (offload) return made;
+    throw new Error(
+      "trainBlock: this module's base was offloaded by an earlier trainBlock({ offload: true }) — " +
+        "it exists only in that block's host bytes now. Stream it with offload again (the block " +
+        "is reused), or build the model again to train it resident.",
+    );
+  }
   const buffers = module.namedBuffers();
   const names = Object.keys(buffers).filter((n) => {
     const b = buffers[n];
@@ -205,18 +244,22 @@ export async function trainBlock(
     const dev = device();
     for (const name of names) dev.unkeep(module.getBuffer(name).raw);
   }
-  return {
+  const block: TrainBlock = {
     weights,
     shapes,
     params,
     run(h: Tensor, windowed: readonly Tensor[]): Tensor {
       const saved = offload ? null : names.map((n) => module.getBuffer(n));
       names.forEach((n, i) => setField(module, n, windowed[i] as Tensor));
-      const y = module.forward(h);
-      if (saved) names.forEach((n, i) => setField(module, n, saved[i] as Tensor));
-      return y;
+      try {
+        return module.forward(h);
+      } finally {
+        if (saved) names.forEach((n, i) => setField(module, n, saved[i] as Tensor));
+      }
     },
   };
+  if (offload) offloaded.set(module, block);
+  return block;
 }
 
 /**

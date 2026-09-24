@@ -2084,7 +2084,7 @@ ${flatId(words)}
 export const CI8_CO = 128;
 const CI8_SUBGROUPS = 4;
 const CI8_CO_SG = 32;
-/** Words the staged band may take — 8 KiB of the guaranteed 16. */
+/** Words the staged band may take — 8 KiB; the kernel's whole footprint is `convInt8Bytes`. */
 const CI8_STAGE_MAX = 2048;
 
 /** The padded width of the int8 weights' output-channel axis: whole sixteens. */
@@ -2093,12 +2093,22 @@ export function convInt8CoPad(O: number): number { return Math.ceil(O / 16) * 16
 /** Whether a convolution takes the int8 subgroup forward: the small-plane kernel's shape
  *  rules (`sgfsBand`, a tile of thirty-two pixels), stride one, a 3 × 3 or smaller kernel,
  *  input channels in thirty-twos (one K step), output channels in sixteens. */
-export function convInt8Fits(s: ConvNDShape): boolean {
+export function convInt8Fits(s: ConvNDShape, storage: number): boolean {
   const band = sgfsBand(s);
   return s.inDims.length === 2 && (s.groups ?? 1) === 1 && (s.dilation ?? [1, 1]).every((d) => d === 1)
     && s.stride.every((v) => v === 1) && s.kernel.every((v) => v <= 3)
     && s.C % 32 === 0 && s.O % 16 === 0
-    && band !== null && band.stage <= CI8_STAGE_MAX;   // stage counts 8 channels of floats; here 8 words of 4 channels — the same count
+    && band !== null && band.stage <= CI8_STAGE_MAX   // stage counts 8 channels of floats; here 8 words of 4 channels — the same count
+    && convInt8Bytes(s, band.stage) <= storage;
+}
+
+/** The workgroup storage `convForwardInt8` declares: the staged band (`pl`), a kernel
+ *  row's taps (`xs`) and the store's staging (`ot`, 16 KiB on its own). Up to about 27 KiB
+ *  — past the 16 KiB every device guarantees, which the band's own cap had been read as
+ *  covering (2026-09-24 review); a device offering less stays on the f32 kernels. */
+function convInt8Bytes(s: ConvNDShape, stage: number): number {
+  const KW = s.kernel[1] ?? 1;
+  return 4 * (stage + KW * SGFS_TN * 8 + CI8_SUBGROUPS * SGFS_TN * CI8_CO_SG);
 }
 
 /** How many K pieces the int8 convolution splits into — the small-plane kernel's policy:
@@ -5623,18 +5633,36 @@ ${pv.join("\n")}
 }`;
 }
 
-/** The key block `fusedAttention` stages: 32 keys and their values of `D` floats each
- *  (the merge at the end needs 16 × 4 × D floats of the same space — 32 keys hold it),
- *  halved while that would not fit the device's workgroup storage. */
-export function fusedAttentionBlock(D: number, storage: number): number {
-  let BK = 32;
-  while (BK > 16 && 2 * BK * D * 4 + 512 > storage) BK /= 2;
-  return BK;
+/** The workgroup storage `fusedAttention` declares for a head of `D`: the key and value
+ *  blocks of 32 keys (`Ks`, `Vs`) and the merge's row maxima and sums (`Cm`, `Cl`, 256
+ *  threads × 4 rows each). */
+export function fusedAttentionBytes(D: number): number {
+  return 2 * 32 * D * 4 + 2 * 256 * 4 * 4;
 }
 
-/** The grid of `fusedAttention`: query blocks of 16, heads, samples. */
+/** The key block `fusedAttention` stages: 32 keys and their values of `D` floats each.
+ *
+ *  **Always 32, and refused where it does not fit.** The merge at the end stages 16 × 4 × D
+ *  floats in the same space, which 32 keys hold and 16 do not; this used to halve the
+ *  block to 16 on a device with less storage (a head of 128 on any 32 KiB device, Apple's
+ *  included) and the merge then read and wrote past the end of it — every round's rows 8
+ *  to 15 wrong, nothing raised (2026-09-24 review). The budget also left out `Cm`/`Cl`. */
+export function fusedAttentionBlock(D: number, storage: number): number {
+  const need = fusedAttentionBytes(D);
+  if (need > storage) {
+    throw new Error(
+      `fusedAttention: a head of ${D} needs ${need} bytes of workgroup storage and this device ` +
+        `offers ${storage} — use the composed attention (the bmm / softmax / bmm chain), which has no such limit`,
+    );
+  }
+  return 32;
+}
+
+/** The grid of `fusedAttention`: query blocks of 64 (`BQ` — sixteen threads of four rows),
+ *  heads, samples. It was `N / 16`, left from a version with blocks of 16: correct, since
+ *  the store is guarded, and four times the workgroups. */
 export function fusedAttentionGrid(B: number, N: number, H: number): [number, number, number] {
-  return [Math.ceil(N / 16), H, B];
+  return [Math.ceil(N / 64), H, B];
 }
 
 /** A block of ones for the bias product — eight by eight. */

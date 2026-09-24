@@ -240,8 +240,19 @@ export class Compiled<A extends CompiledArg[], R> {
       const fresh = this.replacement.get(key);
       if (fresh) {
         this.replacement.delete(key);
-        this.records.get(key)?.cap.dispose();
-        this.records.set(key, fresh);
+        const old = this.records.get(key);
+        let next = fresh;
+        if (old) {
+          // The objects handed out before stay the ones handed out: they move onto the new
+          // recording's buffers before the old recording's are released.
+          const held = tensorsOf(old.out), made = tensorsOf(fresh.out);
+          if (held.length === made.length && held.length > 0) {
+            Tensor.adoptBuffers(held, made);
+            next = { ...fresh, out: old.out };
+          }
+          old.cap.dispose();
+        }
+        this.records.set(key, next);
       }
       rec = this.records.get(key) as Recording<Awaited<R>>;
       rec.inputs.forEach((held, i) => {

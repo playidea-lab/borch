@@ -179,7 +179,16 @@ export class LoRAConv2d extends Module {
    *  them as tuples, so borch does not expose the single number as a public attribute), so
    *  this reads the runtime fields through a narrow typed view rather than a public getter. */
   static fromConv2d(conv: Conv2d, options: LoRAOptions = {}): LoRAConv2d {
-    const g = conv as unknown as { stride: number; padding: number; dilation: number; groups: number };
+    const g = conv as unknown as { stride: number; padding: number; dilation: number; groups: number; paddingMode: string };
+    // **The adapter pads with zeros.** A reflect / replicate / circular base became a
+    // zero-padded one, its output different at every border and nothing said (2026-09-24
+    // review). Refused, as an absent feature is here.
+    if (g.paddingMode !== undefined && g.paddingMode !== "zeros" && g.padding !== 0) {
+      throw new ValueError(
+        `LoRAConv2d pads with zeros; this Conv2d pads with '${g.paddingMode}'. Leave it out of ` +
+          "applyLora's targets, or keep it unadapted.",
+      );
+    }
     const out = conv.weight.shape[0] ?? 0;
     const kernelSize = conv.weight.shape[2] ?? 0;
     const inChannels = (conv.weight.shape[1] ?? 0) * g.groups;
@@ -283,10 +292,14 @@ function replaceSubmodule(root: Module, dotted: string, replacement: Module): vo
 /**
  * **Adapt a whole model in place** — the apply-to-model helper (`docs/SCALE.md` Step 7). Walks
  * `namedModules()` and swaps every matched `Linear` for a {@link LoRALinear} and every matched
- * `Conv2d` for a {@link LoRAConv2d} wrapping it: the base weight/bias become frozen buffers, and
- * a trainable low-rank adapter is added, so after this `model.parameters()` returns only the
- * adapters and an optimiser touches only them. Returns the dotted names swapped (empty is
- * suspicious — usually the `targets` matched nothing).
+ * `Conv2d` for a {@link LoRAConv2d} wrapping it: the base weight/bias of **each swapped layer**
+ * become frozen buffers, and a trainable low-rank adapter is added. **Nothing else is frozen**:
+ * a norm's scale and shift, an embedding, a position table or a layer `targets` did not match
+ * stays a parameter, and an optimiser over `model.parameters()` trains it too — freeze those
+ * by hand (`p.requiresGrad = false`, and leave them out of the optimiser) for adapter-only
+ * training, which is what PEFT does for you and this does not (it said it did until the
+ * 2026-09-24 review). Returns the dotted names swapped (empty is suspicious — usually the
+ * `targets` matched nothing).
  *
  * The base stays numerically identical: the second adapter factor starts at zero, so the adapted
  * model's forward equals the original's until the adapter trains. Idempotent — a `LoRALinear` is

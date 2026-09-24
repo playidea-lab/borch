@@ -20,6 +20,8 @@ import {
   scope,
   Tensor,
   optim,
+  onnx,
+  peft,
 } from "../src/index.js";
 import { bindingAccess, Device } from "../src/device.js";
 import { tiledConfigFits as K_fits } from "../src/kernels.js";
@@ -243,8 +245,17 @@ export async function report(): Promise<Report> {
   // with padded keys the mask zeroes, a head of 64 and one of 32, with the projection's
   // bias added in the kernel; and it must refuse a tensor that wants a gradient.
   {
-    const cases: [number, number, number, number, number][] = [[2, 37, 3, 64, 33], [1, 200, 6, 32, 197]];
+    // A head of 128 as well (2026-09-24 review): the kernel needs 256·D + 8 KiB of workgroup
+    // storage — the merge stages 64·D floats in the key block — and on a 32 KiB device it
+    // halved its key block to 16 and merged past the end of it. Where it does not fit it
+    // must refuse, naming the storage; where it fits it must match.
+    const cases: [number, number, number, number, number][] = [[2, 37, 3, 64, 33], [1, 200, 6, 32, 197], [1, 50, 2, 128, 50]];
     for (const [B, N, H, D, keyLen] of cases) {
+      if (256 * D + 8192 > Device.workgroupStorage) {
+        wantThrow(`fused attention with a head of ${D} refuses a device with ${Device.workgroupStorage} bytes of workgroup storage`,
+          "workgroup storage", () => noGrad(() => Tensor.fusedAttention(keepAlive(Tensor.randn([B, N, 3 * H * D])), H)));
+        continue;
+      }
       const width = 3 * H * D;
       const qkv = keepAlive(Tensor.randn([B, N, width]));
       const bias = keepAlive(Tensor.randn([width]));
@@ -411,6 +422,70 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
     for (let i = 0; i < (bias0?.length ?? 0); i++) biasMoved = Math.max(biasMoved, Math.abs((bias1?.[i] ?? 0) - (bias0?.[i] ?? 0)));
     want("AdamW arena: a frozen weight is not stepped or decayed, and its neighbours still train",
       moved === 0 && biasMoved > 0, `frozen weight moved ${moved.toExponential(1)} · its bias moved ${biasMoved.toExponential(1)}`);
+  }
+
+  // **The arena and the per-parameter path hold one state** (2026-09-24 review). The Adam
+  // arena kept m and v, and its own copy of the weights, to itself: a switch to the
+  // per-parameter path (a second param group) restarted the moments from zero with the
+  // bias correction already at step N, and a weight written from outside between steps
+  // (loading a checkpoint into the model) was overwritten by the arena's copy. Each case
+  // is run twice — arena on, and arena suppressed throughout — and must end equal.
+  {
+    const dv = device();
+    const run = async (arena: boolean, outside: boolean): Promise<Float32Array> => {
+      dv.suppressArena = !arena;
+      try {
+        nn.manualSeed(21);
+        const a = new nn.Linear(6, 6), b = new nn.Linear(6, 3);
+        const extra = new nn.Linear(3, 3);
+        const opt = new optim.Adam([...a.parameters(), ...b.parameters()], 1e-2);
+        const xs = Tensor.from(Float32Array.from({ length: 48 }, (_, i) => Math.cos(i)), [8, 6]);
+        const stepOnce = async (withExtra: boolean): Promise<void> => {
+          await scope(async () => {
+            opt.zeroGrad();
+            const h = b.call(a.call(xs));
+            (withExtra ? extra.call(h) : h).sum().backward();
+            opt.step();
+            await dv.synchronize();
+          });
+        };
+        for (let i = 0; i < 3; i++) await stepOnce(false);
+        if (outside) noGrad(() => { a.weight.copy_(Tensor.from(new Float32Array(36).fill(0.25), [6, 6])); });
+        else opt.addParamGroup({ params: [...extra.parameters()] });
+        for (let i = 0; i < 2; i++) await stepOnce(!outside);
+        const out = await a.weight.toArray();
+        const tail = await b.weight.toArray();
+        return Float32Array.from([...out, ...tail]);
+      } finally {
+        dv.suppressArena = false;
+      }
+    };
+    for (const [outside, name] of [[false, "a second param group mid-training"], [true, "a weight written from outside between steps"]] as const) {
+      const withArena = await run(true, outside), without = await run(false, outside);
+      let d = 0;
+      for (let i = 0; i < withArena.length; i++) d = Math.max(d, Math.abs((withArena[i] ?? 0) - (without[i] ?? 0)));
+      want(`Adam arena and per-parameter path agree across ${name}`, d < 1e-6, `max |Δ| ${d.toExponential(1)}`);
+    }
+  }
+
+  // Two more from the 2026-09-24 review. A reflect-padded Conv2d wrapped by LoRA became
+  // zero-padded at every border, nothing said — refused now. And tracing an eval model for
+  // ONNX runs it with gradients on on purpose: the library's own export said the
+  // "eval model under gradient mode" advice to the page that called it.
+  {
+    wantThrow("LoRAConv2d refuses a Conv2d that pads with reflect — the adapter pads with zeros", "pads with zeros",
+      () => peft.LoRAConv2d.fromConv2d(new nn.Conv2d(3, 4, 3, 1, 1, 1, 1, true, "reflect")));
+    const wasAdvice = Device.advice;
+    Device.advice = false;
+    const had = Device.advised.has("eval-grad");
+    Device.advised.delete("eval-grad");
+    const model = new nn.Sequential(new nn.Linear(4, 3), new nn.ReLU(), new nn.Linear(3, 2));
+    model.eval();
+    await scope(async () => { onnx.exportOnnx(model, Tensor.randn([1, 4])); });
+    want("ONNX export of an eval model does not tell the page it ran an eval model under gradient mode",
+      !Device.advised.has("eval-grad"));
+    if (had) Device.advised.add("eval-grad");
+    Device.advice = wasAdvice;
   }
 
   const failed = checks.filter((c) => !c.ok);

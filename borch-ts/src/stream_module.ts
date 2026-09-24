@@ -74,9 +74,12 @@ export async function streamBlock(module: Module, opts: StreamBlockOptions = {})
     run(h: Tensor, windowed: readonly Tensor[]): Tensor {
       const saved = names.map((n) => module.getParameter(n));
       names.forEach((n, i) => setParameter(module, n, windowed[i] as Tensor));
-      const y = noGrad(() => module.forward(h));
-      names.forEach((n, i) => setParameter(module, n, saved[i] as Tensor));
-      return y;
+      try {
+        return noGrad(() => module.forward(h));
+      } finally {
+        // The module's own weights back, whatever the forward did.
+        names.forEach((n, i) => setParameter(module, n, saved[i] as Tensor));
+      }
     },
   };
 }

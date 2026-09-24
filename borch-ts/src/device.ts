@@ -465,11 +465,36 @@ export interface SubgroupInt8Config { readonly M: number; readonly N: number; re
 function subgroupMatrixInt8(adapter: GPUAdapter): SubgroupInt8Config | null {
   if (!adapter.features.has("chromium-experimental-subgroup-matrix" as GPUFeatureName)
     || !adapter.features.has("subgroups" as GPUFeatureName)) return null;
-  const info = adapter.info as unknown as { subgroupMatrixConfigs?: Iterable<SubgroupMatrixConfig> };
+  const info = adapter.info as unknown as {
+    subgroupMatrixConfigs?: Iterable<SubgroupMatrixConfig>; subgroupMinSize?: number; subgroupMaxSize?: number;
+  };
+  // **The int8 kernels are written for subgroups of 32** — `co` steps by 32 a subgroup,
+  // the store offsets by `subgroup_id · 32`, the loops by 32 lanes. At 64 half the output
+  // channels would never be written; at 16 the staging would overflow. Where the adapter
+  // says its size and it can be anything else, the int8 path stays off.
+  if (info.subgroupMinSize !== undefined && info.subgroupMaxSize !== undefined
+    && (info.subgroupMinSize !== 32 || info.subgroupMaxSize !== 32)) return null;
   for (const c of info.subgroupMatrixConfigs ?? []) {
     if (c.componentType === "i8" && c.resultComponentType === "i32" && c.M === 16 && c.N === 16 && c.K === 32) return { M: c.M, N: c.N, K: c.K };
   }
   return null;
+}
+
+/** Compiles the int8 kernels' store pattern once and says whether the compiler took it.
+ *  In an error scope, so a refusal is an answer here and not a fault on the device. */
+async function int8StoreCompiles(device: GPUDevice): Promise<boolean> {
+  const code = `enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+var<workgroup> ot: array<i32, 1024>;
+@compute @workgroup_size(32)
+fn main(@builtin(subgroup_id) sid: u32) {
+  var c: subgroup_matrix_result<i32, 16, 16>;
+  subgroupMatrixStore(&ot, sid * 256u, c, false, 16u);
+}`;
+  device.pushErrorScope("validation");
+  const module = device.createShaderModule({ code });
+  const [info, err] = await Promise.all([module.getCompilationInfo(), device.popErrorScope()]);
+  return err === null && !info.messages.some((m) => m.type === "error");
 }
 
 /** Whether the adapter offers subgroup matrices with the f32 8 × 8 × 8 configuration. */
@@ -1064,6 +1089,14 @@ export class Device {
     // and that number was not a measurement but the wall clock of a state where nothing
     // was learning. Whoever measures has to be able to see this count and refuse the
     // result.
+    // **Whether this browser's WGSL front end takes the int8 kernels' store at all.**
+    // `subgroupMatrixStore` into workgroup memory at an offset built from `subgroup_id` is
+    // what they do, and Chrome 143 refuses it on a uniformity rule 151 no longer applies —
+    // the adapter offers the configuration, every int8 pipeline is invalid, and the faults
+    // void the measurement (the RTX 4090, 2026-09-22). Asked once, here, of the compiler
+    // itself rather than of a version string: where it refuses, the int8 path stays off
+    // and the f32 kernels answer.
+    if (sgi8 && !(await int8StoreCompiles(device))) Device.subgroupInt8 = null;
     const made = new Device(device);
     const seen = made.faults;
     device.addEventListener("uncapturederror", (event) => {
@@ -1491,8 +1524,23 @@ export class Device {
    *  the same per-parameter path the recording did. */
   suppressArena = false;
 
+  /** Called before a capture opens, while commands still go straight to the queue — see
+   *  `onBeforeCapture`. */
+  private readonly beforeCapture = new Set<() => void>();
+
+  /** Asks to be told before the next capture opens; returns the way to stop asking.
+   *  **What an optimizer's arena needs:** a captured step takes the per-parameter path,
+   *  so the arena's moments have to be back in the per-parameter state first — and
+   *  copied inside the recording, the copy would replay every call, from a buffer the
+   *  arena no longer updates. */
+  onBeforeCapture(f: () => void): () => void {
+    this.beforeCapture.add(f);
+    return () => { this.beforeCapture.delete(f); };
+  }
+
   beginCapture(): void {
     if (this.recording) throw new Error("a capture is already open");
+    for (const f of [...this.beforeCapture]) f();
     this.recording = [];
     this.pinned = new Set();
     this.uploaded = new Set();

@@ -1553,6 +1553,27 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
+   * **Each of `held` takes the buffer of the tensor beside it in `from`** — for `compiled`,
+   * which promises that the objects its first call returned are the ones every later call
+   * returns: when a step is recorded again (the tuner changed a kernel) the new recording's
+   * outputs are other buffers, and the objects a caller kept move onto them. Shapes must
+   * agree; the kept objects are otherwise untouched.
+   * @internal
+   */
+  static adoptBuffers(held: readonly Tensor[], from: readonly Tensor[]): void {
+    if (held.length !== from.length) throw new Error(`adoptBuffers: ${held.length} tensors and ${from.length}`);
+    held.forEach((h, i) => {
+      const f = from[i] as Tensor;
+      if (h.shape.length !== f.shape.length || h.shape.some((d, k) => d !== f.shape[k])) {
+        throw new Error(`adoptBuffers: [${h.shape}] cannot take the buffer of [${f.shape}]`);
+      }
+      h.gpu = f.gpu;
+      h.age = f.age;
+      h.shared = false;
+    });
+  }
+
+  /**
    * Gives a tensor that sits on the scalar cache a buffer of its own, in the scope
    * frame it was born in. **Called by everything that writes into a buffer** —
    * `mutate`, `keepAlive`, an optimiser taking a parameter. Anything else is a no-op.
@@ -11842,7 +11863,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     relu: boolean, residual: Tensor | null,
   ): Tensor {
     const s = this.convShape(weight, stride, padding, dilation, groups);
-    if (!convInt8Fits(s)) return this.convNDFused(weight, bias, stride, padding, dilation, groups, relu, residual);
+    if (!convInt8Fits(s, Device.workgroupStorage)) return this.convNDFused(weight, bias, stride, padding, dilation, groups, relu, residual);
     const spatial = this.shape.length - 2;
     const each = (v: number | readonly number[]): number[] =>
       typeof v === "number" ? new Array<number>(spatial).fill(v) : [...v];
@@ -11876,7 +11897,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       // maximum, the quantise).
       let xq: GPUBuffer;
       let max: GPUBuffer;
-      if (this.int8Twin) {
+      if (this.int8Twin && this.int8Twin.version === this.version) {
         ({ words: xq, max } = this.int8Twin);
       } else {
         if (int8.inMax) {
@@ -11922,7 +11943,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       if (fewer !== rule) cands.push(int8Cand(fewer, `int8:s${fewer}`));
       d.choose(one, cands).run();
       const y = new Tensor(out, outShape);
-      if (qo && outQ && int8.outMax) y.int8Twin = { words: outQ, max: int8.outMax };
+      if (qo && outQ && int8.outMax) y.int8Twin = { words: outQ, max: int8.outMax, version: y.version };
       return y;
     });
   }
@@ -14044,7 +14065,10 @@ export interface Int8ConvWeight {
 /** An int8 twin of a tensor's values — packed four channels a word with the scale word
  *  they were quantised by — left on the output of an int8 layer whose output scale is
  *  static, for the int8 layer that reads it next. */
-export interface Int8Twin { readonly words: GPUBuffer; readonly max: GPUBuffer }
+/** A tensor's values as an int8 layer packed them at its store, and the version of the
+ *  tensor they were packed at — an in-place write since (a `relu_`, a residual `add_`)
+ *  makes them another tensor's values, and the next int8 layer quantises afresh. */
+export interface Int8Twin { readonly words: GPUBuffer; readonly max: GPUBuffer; readonly version: number }
 
 /** Whether the int8 layers are calibrating: running f32 and accumulating their input and
  *  output maxima (`calibrateInt8`), rather than running int8. */

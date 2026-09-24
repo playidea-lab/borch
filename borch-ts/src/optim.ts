@@ -75,8 +75,33 @@ export type ParamsArg = readonly Tensor[] | readonly ParamGroupInit[];
 
 /** The slices of an arena that say which parameter got a gradient this step. */
 interface ArenaLive {
-  gA: GPUBuffer; zero: GPUBuffer; live: GPUBuffer; ones: GPUBuffer;
+  pA: GPUBuffer; gA: GPUBuffer; zero: GPUBuffer; live: GPUBuffer; ones: GPUBuffer;
   offs: number[]; sizes: number[];
+  /** Each parameter buffer's write epoch as the arena last left it. */
+  epochs: number[];
+}
+
+/** **A weight written from outside since the last step comes into the arena first.** The
+ *  arena steps its own copy and scatters it back; a `copy_`, a `loadStateDict` on the
+ *  model, an EMA between steps changed the parameter and not the copy, and the next
+ *  scatter put the old weight back (2026-09-24 review). The device's write epochs say
+ *  which parameters were touched; only those are copied in. */
+function refreshArena(a: ArenaLive, params: readonly Tensor[]): void {
+  const d = device();
+  for (const [i, p] of params.entries()) {
+    if (d.epochOf(p.buffer) !== a.epochs[i]) {
+      d.copyRange(a.pA, (a.offs[i] ?? 0) * 4, p.buffer, 0, (a.sizes[i] ?? 0) * 4);
+    }
+  }
+}
+
+/** Scatters what moved back to the parameters and notes the epochs they are left at. */
+function scatterArena(a: ArenaLive, params: readonly Tensor[], present: readonly boolean[]): void {
+  const d = device();
+  for (const [i, p] of params.entries()) {
+    if (present[i]) d.copyRange(p.buffer, 0, a.pA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
+    a.epochs[i] = d.epochOf(p.buffer);
+  }
 }
 
 /** Gathers this step's gradients into the arena and keeps `live` — a word per element,
@@ -597,7 +622,9 @@ export class SGD extends Optimizer {
    */
   private arena: { pA: GPUBuffer; gA: GPUBuffer; mA: GPUBuffer | null; zero: GPUBuffer;
                    live: GPUBuffer; ones: GPUBuffer;
-                   offs: number[]; sizes: number[]; total: number } | null = null;
+                   offs: number[]; sizes: number[]; epochs: number[]; total: number } | null = null;
+  /** Stops the before-capture call the arena asked for. */
+  private unhook: (() => void) | null = null;
 
   /** Which slices carried a gradient last step — a slice that stops getting one is
    *  cleared, so a stale gradient does not keep moving a frozen parameter. */
@@ -710,6 +737,9 @@ export class SGD extends Optimizer {
     if (this.paramGroups.length === 1 && !device().capturing && !device().suppressArena) {
       this.arenaStep();
     } else {
+      // The per-parameter path reads `this.buffers`: an arena that stepped before has the
+      // momentum, and it goes back there first.
+      this.retireArena();
       super.step();
     }
     this.stepCount += 1;
@@ -725,6 +755,7 @@ export class SGD extends Optimizer {
       const a = this.arena;
       if (!a) return;
       const hasMom = this.momentum !== 0;
+      refreshArena(a, this.params);
       const masked = !gatherArena(a, this.params, this.present);
       const hasDecay = this.grouped(this.weightDecay) !== 0;
       const first = this.stepCount === 0;
@@ -738,9 +769,7 @@ export class SGD extends Optimizer {
           () => sgdStep(a.total, hasMom, hasDecay, this.dampening, this.nesterov, this.maximize, first, masked)),
         bufs, a.total);
       // Only what moved goes back: a parameter with no gradient keeps its own buffer.
-      for (const [i, p] of this.params.entries()) {
-        if (this.present[i]) d.copyRange(p.buffer, 0, a.pA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
-      }
+      scatterArena(a, this.params, this.present);
     });
   }
 
@@ -770,8 +799,27 @@ export class SGD extends Optimizer {
       d.copyRange(pA, (offs[i] ?? 0) * 4, p.buffer, 0, (sizes[i] ?? 0) * 4);
       if (mA) d.copyRange(mA, (offs[i] ?? 0) * 4, (this.buffers[i] as Tensor).buffer, 0, (sizes[i] ?? 0) * 4);
     }
-    this.arena = { pA, gA, mA, zero, ...liveSlabs(total, max), offs, sizes, total };
+    this.arena = { pA, gA, mA, zero, ...liveSlabs(total, max), offs, sizes, total,
+                   epochs: this.params.map((p) => d.epochOf(p.buffer)) };
     this.present = new Array(this.params.length).fill(false);
+    this.unhook = d.onBeforeCapture(() => { this.retireArena(); });
+  }
+
+  /** The arena's momentum back into `this.buffers`, and the arena let go — for a step
+   *  that takes the per-parameter path now (a second group, a capture), which reads them. */
+  private retireArena(): void {
+    const a = this.arena;
+    if (!a) return;
+    if (a.mA) {
+      noGrad(() => {
+        // Only the parameters the arena holds — a group added since has its own state.
+        for (const [i, b] of this.buffers.entries()) {
+          if (i >= a.sizes.length) break;
+          device().copyRange(b.buffer, 0, a.mA as GPUBuffer, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
+        }
+      });
+    }
+    this.dropArena();
   }
 
   /** The momentum is in the arena during training; bring it back into `this.buffers` so
@@ -798,6 +846,8 @@ export class SGD extends Optimizer {
     d.unkeep(a.pA); d.unkeep(a.gA); if (a.mA) d.unkeep(a.mA); d.unkeep(a.zero);
     d.unkeep(a.live); d.unkeep(a.ones);
     this.arena = null;
+    this.unhook?.();
+    this.unhook = null;
   }
 
   /** After a resume the arena is stale — drop it, and the next step rebuilds it from the
@@ -832,7 +882,9 @@ export class Adam extends Optimizer {
    */
   private arena: { pA: GPUBuffer; gA: GPUBuffer; mA: GPUBuffer; vA: GPUBuffer; zero: GPUBuffer;
                    live: GPUBuffer; ones: GPUBuffer;
-                   offs: number[]; sizes: number[]; total: number } | null = null;
+                   offs: number[]; sizes: number[]; epochs: number[]; total: number } | null = null;
+  /** Stops the before-capture call the arena asked for. */
+  private unhook: (() => void) | null = null;
   private present: boolean[] = [];
 
   private arenaEligible(): boolean {
@@ -901,7 +953,12 @@ export class Adam extends Optimizer {
       d.pipeline(`adamtick:${this.beta1}:${this.beta2}`, () => adamTick(this.beta1, this.beta2)),
       [this.tick.step.buffer, this.tick.corr.buffer], 1);
     if (this.arenaEligible()) this.arenaStepAdam();
-    else super.step();
+    else {
+      // The per-parameter path reads `first`/`second`: an arena that stepped before has
+      // the moments, and they go back there first.
+      this.retireArenaAdam();
+      super.step();
+    }
   }
 
   /** The step as one dispatch over the arena — gather gradients in, run `adamStep` over the whole
@@ -913,6 +970,7 @@ export class Adam extends Optimizer {
       if (!this.arena) this.buildArenaAdam();
       const a = this.arena;
       if (!a) return;
+      refreshArena(a, this.params);
       const masked = !gatherArena(a, this.params, this.present);
       const corr = this.tick as { step: Tensor; corr: Tensor };
       const decay: AdamDecay = this.grouped(this.weightDecay) === 0 ? "none" : this.decoupled ? "decoupled" : "coupled";
@@ -923,9 +981,7 @@ export class Adam extends Optimizer {
           () => adamStep(a.total, this.beta1, this.beta2, this.eps, false, decay, masked)),
         bufs, a.total);
       // Only what moved goes back: a parameter with no gradient keeps its own buffer.
-      for (const [i, p] of this.params.entries()) {
-        if (this.present[i]) d.copyRange(p.buffer, 0, a.pA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
-      }
+      scatterArena(a, this.params, this.present);
     });
   }
 
@@ -944,8 +1000,10 @@ export class Adam extends Optimizer {
       d.copyRange(mA, off, (this.first[i] as Tensor).buffer, 0, bytes);
       d.copyRange(vA, off, (this.second[i] as Tensor).buffer, 0, bytes);
     }
-    this.arena = { pA, gA, mA, vA, zero, ...liveSlabs(total, max), offs, sizes, total };
+    this.arena = { pA, gA, mA, vA, zero, ...liveSlabs(total, max), offs, sizes, total,
+                   epochs: this.params.map((p) => d.epochOf(p.buffer)) };
     this.present = new Array(this.params.length).fill(false);
+    this.unhook = d.onBeforeCapture(() => { this.retireArenaAdam(); });
   }
 
   private dropArenaAdam(): void {
@@ -955,6 +1013,23 @@ export class Adam extends Optimizer {
     d.unkeep(a.pA); d.unkeep(a.gA); d.unkeep(a.mA); d.unkeep(a.vA); d.unkeep(a.zero);
     d.unkeep(a.live); d.unkeep(a.ones);
     this.arena = null;
+    this.unhook?.();
+    this.unhook = null;
+  }
+
+  /** The arena's moments back into `first`/`second`, and the arena let go — for a step that
+   *  takes the per-parameter path now (a second group, a capture), which reads them. */
+  private retireArenaAdam(): void {
+    const a = this.arena;
+    if (!a) return;
+    noGrad(() => {
+      // Only the parameters the arena holds — a group added since has its own state.
+      for (let i = 0; i < a.sizes.length; i++) {
+        device().copyRange((this.first[i] as Tensor).buffer, 0, a.mA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
+        device().copyRange((this.second[i] as Tensor).buffer, 0, a.vA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
+      }
+    });
+    this.dropArenaAdam();
   }
 
   /** `m`/`v` live in the arena during training; bring them back into the state banks so the base

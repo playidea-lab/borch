@@ -33,6 +33,7 @@
     };
 
     // One set of LoRA-adapted blocks, kept alive so both runs see the same weights and adapters.
+    const makeBlocks = () => {
     const blocks = [];
     for (let i = 0; i < BLOCKS; i++) {
       const lin = peft.LoRALinear.fromLinear(
@@ -46,6 +47,9 @@
       w.loraB = keepAlive(seedFill([D, R], 3000 + i, 0.3)); w.loraB.requiresGrad = true;
       blocks.push(lin);
     }
+    return blocks;
+    };
+    const blocks = makeBlocks();
     const x0 = keepAlive(seedFill([BATCH, D], 42));
 
     const zeroGrads = () => { for (const b of blocks) { b.loraA.grad = null; b.loraB.grad = null; } };
@@ -155,7 +159,53 @@
       dropWithin = dropWithin && within(streamDrop[i][0], refDrop[i][0]) && within(streamDrop[i][1], refDrop[i][1]);
     }
 
+    // ── A trainable tensor the loss uses but `lossParams` does not name is refused (2026-09-24
+    //    review): its gradient was computed and dropped, the head never trained, nothing said. ──
+    let refusedStray = false;
+    zeroGrads();
+    const win5 = device().window(2 * slot);
+    try { await streamTrainStep(win5, x0, trainBlocks, headLoss); } catch (e) { refusedStray = /lossParams|not passed|no gradient/.test(String(e)); }
+    win5.free();
+
+    // ── A block that throws gives its window slots back (2026-09-24 review): nothing freed them,
+    //    and the next step found the window full. ──
+    // One base's worth: a step places one block at a time, so a single leaked slot fills it.
+    const win6 = device().window(slot);
+    const failing = trainBlocks.map((t, i) => i === 1 ? { ...t, run: () => { throw new Error("a block that fails"); } } : t);
+    try { await streamTrainStep(win6, x0, failing, (o) => o.sum()); } catch { /* expected */ }
+    // `used` is the window's high-water mark, not what is held — the test is the next step:
+    // with the failed block's slots still taken, the window of two bases is full.
+    let releasedOnThrow = true;
+    zeroGrads();
+    try { await streamTrainStep(win6, x0, trainBlocks, (o) => o.sum()); } catch (e) { releasedOnThrow = false; say(`  after the throw: ${String(e).split("\n")[0]}`); }
+    win6.free();
+
+    // ── Offloaded, twice (2026-09-24 review): the second call rebuilt its blocks from modules
+    //    whose fields now pointed at evicted window slots — read wrong bytes, then destroyed the
+    //    window buffer itself. Fresh modules, since offloading frees their bases for good. ──
+    const offBlocks = makeBlocks();
+    const offGrads = [];
+    let offloadNote = "";
+    for (let pass = 0; pass < 2; pass++) {
+      for (const b of offBlocks) { b.loraA.grad = null; b.loraB.grad = null; }
+      const w = device().window(2 * slot);
+      try {
+        await streamTrainSequence(w, x0, offBlocks, (o) => o.sum(), { offload: true });
+        const g = [];
+        for (const b of offBlocks) g.push([Array.from(await b.loraA.grad.toArray()), Array.from(await b.loraB.grad.toArray())]);
+        offGrads.push(g);
+      } catch (e) { offloadNote = String(e).split("\n")[0]; }
+      w.free();
+    }
+    let offloadWithin = offGrads.length === 2;
+    for (const g of offGrads) for (let i = 0; i < BLOCKS; i++) {
+      offloadWithin = offloadWithin && within(g[i][0], refGrads[i][0]) && within(g[i][1], refGrads[i][1]);
+    }
+
     say(`loss: resident ${refLoss.toFixed(6)} · streamed ${streamLoss.toFixed(6)} — ${lossAgree ? "agree" : "DIFFER"}`);
+    say(`offloaded, two steps: both match the resident gradients: ${offloadWithin ? "yes" : "NO"}${offloadNote ? ` (${offloadNote.slice(0, 100)})` : ""}`);
+    say(`a trainable tensor the loss uses and lossParams leaves out is refused: ${refusedStray ? "yes" : "NO"}`);
+    say(`after a block that throws, the next step runs in the same window: ${releasedOnThrow ? "yes" : "NO"}`);
     say(`with dropout(0.5) after every block: adapter grad max |Δ| ${worstDrop.toExponential(2)} — ${dropWithin ? "the recompute drew the forward's masks" : "OUT OF BAND — the recompute drew other masks"}`);
     say(`adapter grad max |Δ| vs resident: A ${worstA.toExponential(2)} · B ${worstB.toExponential(2)} — ${allWithin ? "within golden tolerance" : "OUT OF BAND"}`);
     say(`via streamTrainSequence adapter: max |Δ| ${worstAdapter.toExponential(2)} — ${adapterWithin ? "within golden tolerance" : "OUT OF BAND"}`);
@@ -163,7 +213,7 @@
     say(`window ${(2 * slot / 1024) | 0} KB (~2 bases) · used ${(winUsed / 1024) | 0} KB · backbone base bytes ${(BLOCKS * baseBytes / 1024) | 0} KB`);
     say(`faults: ${device().faults.count}`);
 
-    const ok = allWithin && adapterWithin && headWithin && dropWithin && lossAgree && windowBounded && device().faults.count === 0;
+    const ok = allWithin && adapterWithin && headWithin && dropWithin && refusedStray && releasedOnThrow && offloadWithin && lossAgree && windowBounded && device().faults.count === 0;
     say(ok ? "\nstreamed training: the adapter gradients match the resident run (hand-built and via the adapter), weights bounded by the window"
           : "\n**streamed training: a check did not hold**");
     window.__streamTrain = {

@@ -57,10 +57,13 @@ export async function streamSequential(
     // go back to the pool at once, so residency stays at one block's activations.
     let out: Tensor | undefined;
     const weights = placed.map((p) => p.weight);
-    // eslint-disable-next-line no-await-in-loop
-    await scope(async () => { out = blk.run(h, weights); }, () => (out ? [out] : []));
-    // The block is done — free its window slots for the next block.
-    for (const p of placed) p.evict();
+    // The block is done — or threw — and its window slots go back for the next block.
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await scope(async () => { out = blk.run(h, weights); }, () => (out ? [out] : []));
+    } finally {
+      for (const p of placed) p.evict();
+    }
     h = out as Tensor;
   }
   return h;

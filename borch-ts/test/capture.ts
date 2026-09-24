@@ -385,11 +385,23 @@ async function inference(lines: string[]): Promise<void> {
   byHand.eval();
   byHand.fuse();
   const step = compiled(byCall);
-  const got = await (await step.call(x)).toArray();
+  const first = await step.call(x);
+  const got = await first.toArray();
   // A pure step tunes in idle time on a throwaway recording; settled here so the second
   // call replays the chosen kernels and the numbers below are its.
   await step.settle();
-  const again = await (await step.call(x)).toArray();
+  const second = await step.call(x);
+  const again = await second.toArray();
+  // **The object the first call returned is the one every later call returns** — the
+  // contract on `compiled`. Where the tuner changed a decision the step is recorded again
+  // and swapped in; that swap used to hand back new objects and pool the old ones, so a
+  // caller who kept the first read a released buffer (2026-09-24 review).
+  let heldReads = "";
+  try { heldReads = maxAbs(await first.toArray(), again) === 0 ? "reads the latest step" : "reads other values"; } catch (err) { heldReads = String(err).split("\n")[0] ?? ""; }
+  const swapped = step.tuned.flat().some((t) => t.chosen !== t.prior);
+  want("compiled(model): the object the first call returned is the one later calls return, and it reads the latest step",
+    first === second && heldReads === "reads the latest step",
+    `${swapped ? "re-recorded after a changed decision" : "no decision changed here — no swap to test"} · same object ${first === second} · the first ${heldReads.slice(0, 90)}`);
   const rec = step.recordingOf(x);
   // The eager reference after the first call: the tuner may have decided a kernel on
   // that call (`docs/COMPILER.md` Step 5), and eager then takes the same decision — the

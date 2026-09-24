@@ -25,6 +25,7 @@
  * opens the file. `test/onnx.ts` asks exactly that.
  */
 import { enableGrad } from "./autograd.js";
+import { Device } from "./device.js";
 import type { Module } from "./nn.js";
 import type { Tensor } from "./tensor.js";
 
@@ -478,11 +479,16 @@ export function traceOnnx(model: Module, sample: Tensor, options: ExportOptions 
   beginTrace();
   let output: Tensor;
   let nodes: TraceNode[];
+  // Tracing runs an eval model with gradients on on purpose (the graph is what it reads);
+  // the advice for a page that does that by mistake is not for this call.
+  const told = Device.advised.has("eval-grad");
+  Device.advised.add("eval-grad");
   try {
     output = enableGrad(() => model.forward(sample));
   } finally {
     nodes = endTrace();
     if (wasTraining) model.train();
+    if (!told) Device.advised.delete("eval-grad");
   }
   const names = new Map<Tensor, string>();
   for (const [name, t] of Object.entries(model.namedParameters())) names.set(t, name);

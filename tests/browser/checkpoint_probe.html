@@ -88,6 +88,19 @@
     });
     say(`a captured grad-requiring tensor is refused: ${refusedCapture ? "yes" : "NO"}`);
 
+    // **An input changed in place after the checkpoint is refused** (2026-09-24 review): the
+    // recompute reads the input as it is at backward time, so a residual written in place
+    // in between gave a wrong gradient with nothing said. torch's version check raises.
+    let refusedInplace = false;
+    await scope(async () => {
+      x0.grad = null; blocks[0].W.grad = null; blocks[0].b.grad = null;
+      const h = x0.add(Tensor.zeros(x0.shape));
+      const c = checkpoint(step, h, blocks[0].W, blocks[0].b);
+      h.add_(Tensor.full(h.shape, 1));
+      try { c.sum().backward(); } catch (e) { refusedInplace = /in-place|inplace/.test(String(e)); }
+    });
+    say(`an input changed in place after the checkpoint is refused: ${refusedInplace ? "yes" : "NO"}`);
+
     const worst = (a, b) => {
       let m = 0;
       for (let i = 0; i < a.length; i++) {
@@ -122,7 +135,7 @@
     say(`with dropout(0.5) in every block: loss plain ${plainDrop.loss.toFixed(6)} · checkpoint ${ckptDrop.loss.toFixed(6)} · grad max |Δ| ${dropGrad.toExponential(2)} — ${dropAgree ? "the recompute drew the same masks" : "DIFFER — the recompute drew other masks"}`);
     say(`faults: ${device().faults.count}`);
 
-    const ok = gradsAgree && lossAgree && heldFell && refusedCapture && dropAgree && device().faults.count === 0;
+    const ok = gradsAgree && lossAgree && heldFell && refusedCapture && refusedInplace && dropAgree && device().faults.count === 0;
     say(ok ? "\ncheckpoint: recomputed backward matches, holds less, refuses a captured grad" : "\n**checkpoint: a check did not hold**");
     window.__checkpoint = {
       text: lines.join("\n"), ok, gradsAgree, lossAgree, heldFell, refusedCapture, dropAgree,

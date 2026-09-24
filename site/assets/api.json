@@ -4,7 +4,7 @@
  "korean": {
   "done": 791,
   "stale": 0,
-  "missing": 644
+  "missing": 646
  },
  "modules": [
   {
@@ -503,6 +503,16 @@
         "en": "Creation"
        },
        "doc_ko": "값으로 채우되 **캐시를 안 탄다 — 자기 버퍼를 갖는다.**\n\n**제자리로 고쳐질 것은 반드시 이쪽이어야 한다.** `full` 은 원소 하나짜리를 값으로\n캐시하므로 `zeros([1])` 을 두 번 부르면 **같은 버퍼**가 온다. 그 자체는 맞다 —\n상수는 읽기만 하니까. 문제는 상수가 아닌 것이 그 문을 지날 때다:\n\n- `Adam` 의 m·v 가 크기 1 파라미터에서 같은 버퍼가 되어, WebGPU 가 \"writable\n  storage buffer aliasing\" 으로 **명령 버퍼째** 무효로 만든다\n- `SGD` 의 모멘텀 버퍼가 프로그램 전체가 쓰는 0 상수를 덮어쓴다\n- `nn.PReLU()` 는 기본이 파라미터 하나라 가중치가 곧 전역 0.25 상수이고,\n  옵티마이저가 학습 중에 그것을 고친다\n- `BatchNorm(1)` 의 이동 통계가 전역 0·1 상수를 덮어쓴다\n\n앞의 하나만 예외로 터지고 나머지는 **조용히 틀린다.** 그래서 파라미터·옵티마이저\n상태·이동 통계는 값이 무엇이든 여기로 온다."
+      },
+      {
+       "name": "adoptBuffers",
+       "signature": "static adoptBuffers(held: readonly Tensor[], from: readonly Tensor[]): void",
+       "doc": "**Each of `held` takes the buffer of the tensor beside it in `from`** — for `compiled`,\nwhich promises that the objects its first call returned are the ones every later call\nreturns: when a step is recorded again (the tuner changed a kernel) the new recording's\noutputs are other buffers, and the objects a caller kept move onto them. Shapes must\nagree; the kept objects are otherwise untouched.\n@internal",
+       "torch": "adopt_buffers",
+       "section": {
+        "ko": "Creation",
+        "en": "Creation"
+       }
       },
       {
        "name": "ensureOwned",
@@ -7670,7 +7680,7 @@
      "kind": "interface",
      "name": "Int8Twin",
      "signature": "export interface Int8Twin",
-     "doc": "An int8 twin of a tensor's values — packed four channels a word with the scale word\n they were quantised by — left on the output of an int8 layer whose output scale is\n static, for the int8 layer that reads it next.",
+     "doc": "A tensor's values as an int8 layer packed them at its store, and the version of the\n tensor they were packed at — an in-place write since (a `relu_`, a residual `add_`)\n makes them another tensor's values, and the next int8 layer quantises afresh.",
      "members": [
       {
        "name": "words",
@@ -7680,6 +7690,11 @@
       {
        "name": "max",
        "signature": "readonly max: GPUBuffer",
+       "doc": ""
+      },
+      {
+       "name": "version",
+       "signature": "readonly version: number",
        "doc": ""
       }
      ]
@@ -7753,7 +7768,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 797,
+   "count": 799,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -15252,7 +15267,7 @@
      "kind": "function",
      "name": "applyLora",
      "signature": "export declare function applyLora(model: Module, options?: ApplyLoraOptions): string[]",
-     "doc": "**Adapt a whole model in place** — the apply-to-model helper (`docs/SCALE.md` Step 7). Walks\n`namedModules()` and swaps every matched `Linear` for a {@link LoRALinear} and every matched\n`Conv2d` for a {@link LoRAConv2d} wrapping it: the base weight/bias become frozen buffers, and\na trainable low-rank adapter is added, so after this `model.parameters()` returns only the\nadapters and an optimiser touches only them. Returns the dotted names swapped (empty is\nsuspicious — usually the `targets` matched nothing).\n\nThe base stays numerically identical: the second adapter factor starts at zero, so the adapted\nmodel's forward equals the original's until the adapter trains. Idempotent — a `LoRALinear` is\nnot a `Linear` (nor `LoRAConv2d` a `Conv2d`), so a second call adapts nothing.",
+     "doc": "**Adapt a whole model in place** — the apply-to-model helper (`docs/SCALE.md` Step 7). Walks\n`namedModules()` and swaps every matched `Linear` for a {@link LoRALinear} and every matched\n`Conv2d` for a {@link LoRAConv2d} wrapping it: the base weight/bias of **each swapped layer**\nbecome frozen buffers, and a trainable low-rank adapter is added. **Nothing else is frozen**:\na norm's scale and shift, an embedding, a position table or a layer `targets` did not match\nstays a parameter, and an optimiser over `model.parameters()` trains it too — freeze those\nby hand (`p.requiresGrad = false`, and leave them out of the optimiser) for adapter-only\ntraining, which is what PEFT does for you and this does not (it said it did until the\n2026-09-24 review). Returns the dotted names swapped (empty is suspicious — usually the\n`targets` matched nothing).\n\nThe base stays numerically identical: the second adapter factor starts at zero, so the adapted\nmodel's forward equals the original's until the adapter trains. Idempotent — a `LoRALinear` is\nnot a `Linear` (nor `LoRAConv2d` a `Conv2d`), so a second call adapts nothing.",
      "members": [],
      "torch": "apply_lora"
     }
@@ -16296,13 +16311,21 @@
     },
     {
      "kind": "function",
+     "name": "strayGradLeaves",
+     "signature": "export declare function strayGradLeaves(root: Tensor, known: ReadonlySet<Tensor>): number",
+     "doc": "How many grad-requiring **leaves** the recompute graph rooted at `root` has that are not\nin `known` (the detached inputs). A leaf is a tensor with no backward — a parameter or an\ninput. One that is not `known` was closed over by `fn` rather than passed, so its\ngradient would go nowhere; the caller turns a non-zero count into a throw. Iterative, so a\ndeep block does not overflow the stack.",
+     "members": [],
+     "torch": "stray_grad_leaves"
+    },
+    {
+     "kind": "function",
      "name": "checkpoint",
      "signature": "export declare function checkpoint(fn: (...xs: Tensor[]) => Tensor, ...inputs: Tensor[]): Tensor",
      "doc": "Runs `fn(...inputs)` so that its intermediates are recomputed in the backward rather\nthan held. The returned tensor behaves as if `fn` had been called normally — the same\nvalue, and a backward that reaches every input that required grad — but the forward\nkeeps only the output.\n\n`fn` must be a pure function of its tensor arguments: it is called a second time in the\nbackward, so anything it reads that is not an argument (a captured tensor, a module\nparameter) must not have changed in between. A frozen backbone block is exactly this.",
      "members": []
     }
    ],
-   "count": 6
+   "count": 7
   },
   {
    "name": "stream",
@@ -16452,7 +16475,7 @@
      "kind": "function",
      "name": "trainBlock",
      "signature": "export declare function trainBlock(module: Module, opts?: { select?: BufferSelect; offload?: boolean; }): Promise<TrainBlock>",
-     "doc": "Turns a real (LoRA-adapted, frozen-base) `Module` into a {@link TrainBlock}: its frozen weight\nbuffers stream, its trainable parameters (the adapters) are harvested for gradients, and the\nforward swaps the windowed buffers into the module's fields, runs `module.forward`, and\nrestores. The bridge from `applyLora`'d modules to {@link streamTrainStep}.\n\n`offload` frees the base buffers from the GPU after reading their bytes to host — so a model\nlarger than the device budget does not sit resident while it streams. The block then exists\nonly in host bytes plus the window: its `run` sets the module's fields to the windowed tensors\nand does not restore (there is nothing resident to restore to), so the module is usable **only**\nthrough streaming afterwards (`streamSequential` for a no-grad forward, this for training).",
+     "doc": "",
      "members": [],
      "torch": "train_block"
     },
@@ -23514,6 +23537,16 @@
        "torch": "suppress_arena"
       },
       {
+       "name": "onBeforeCapture",
+       "signature": "onBeforeCapture(f: () => void): () => void",
+       "doc": "Asks to be told before the next capture opens; returns the way to stop asking.\n **What an optimizer's arena needs:** a captured step takes the per-parameter path,\n so the arena's moments have to be back in the per-parameter state first — and\n copied inside the recording, the copy would replay every call, from a buffer the\n arena no longer updates.",
+       "torch": "on_before_capture",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
+      },
+      {
        "name": "beginCapture",
        "signature": "beginCapture(): void",
        "doc": "",
@@ -24259,7 +24292,7 @@
      ]
     }
    ],
-   "count": 156
+   "count": 157
   },
   {
    "name": "random",
@@ -25225,5 +25258,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3445
+ "total": 3449
 }

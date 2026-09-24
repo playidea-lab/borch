@@ -43,6 +43,7 @@
  */
 
 import { enableGrad, flow } from "./autograd.js";
+import { RuntimeError } from "./errors.js";
 import { device, makeNode, noGrad, scope, Tensor } from "./tensor.js";
 
 /** The dropout stream as it stood, for a recompute to draw its forward's masks again —
@@ -84,7 +85,7 @@ export function withSeed<T>(saved: SavedSeed, body: () => T): T {
  * gradient would go nowhere; the caller turns a non-zero count into a throw. Iterative, so a
  * deep block does not overflow the stack.
  */
-function strayGradLeaves(root: Tensor, known: ReadonlySet<Tensor>): number {
+export function strayGradLeaves(root: Tensor, known: ReadonlySet<Tensor>): number {
   const seen = new Set<Tensor>();
   const stack: Tensor[] = [root];
   let stray = 0;
@@ -118,6 +119,9 @@ export function checkpoint(
   // The dropout stream before the forward draws, so the recompute draws the same masks.
   // Taken outside the scope below: it has to live until the backward, as `out` does.
   const seed = saveSeed();
+  // The inputs' versions as the forward read them: the recompute reads them again at
+  // backward time, and one written in place in between is a different input.
+  const versions = inputs.map((x) => x.version);
   // The forward, tape off, nothing but the output surviving the scope.
   let out: Tensor;
   {
@@ -126,6 +130,19 @@ export function checkpoint(
   }
 
   const backwardFn = (grad: Tensor): readonly (Tensor | null)[] => {
+    // **An input changed in place since the forward is refused**, as torch's version check
+    // refuses it: the recompute would run on the new values and hand back the gradient of
+    // a function nobody evaluated (2026-09-24 review). The same sentence as the tape's.
+    inputs.forEach((x, i) => {
+      if (x.version !== versions[i]) {
+        throw new RuntimeError(
+          `one of the variables needed for gradient computation has been modified by an ` +
+            `in-place operation: input ${i} of CheckpointBackward0 was at version ${versions[i]}, ` +
+            `and is now at version ${x.version}. The recompute would read the new values, so the ` +
+            `gradient would be wrong.`,
+        );
+      }
+    });
     using s = scope();
     // Detached leaves that require grad exactly where the originals did, so the recomputed
     // graph is rooted at them and `flow` records each one's gradient.
