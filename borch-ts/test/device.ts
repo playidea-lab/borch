@@ -365,6 +365,54 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   want("a binding taken by address is read-and-write", access[3] === "rw", access.join(","));
   want("a binding compared is a read", access[4] === "rw", access.join(","));
 
+  // **Two defects that answered wrongly with no error** (the 2026-09-24 review), held
+  // by value rather than by counters — the pack-cache checks in capture.ts counted
+  // repacks after a write that changed nothing, and passed with both defects in.
+  {
+    const dv = device();
+    // A second bias on the same weight: the pack bakes the bias in, and was keyed on the
+    // weight alone — `conv2d(x, w, b2)` answered with b1. The shape is one the bias-baking
+    // pack takes (`sgfFits`: a row in whole eights, more than 128 channels, so not direct).
+    const xin = Tensor.from(Float32Array.from({ length: 16 * 256 * 64 }, (_, i) => Math.sin(i * 0.37)), [16, 256, 8, 8]);
+    const w = Tensor.from(Float32Array.from({ length: 256 * 256 * 9 }, (_, i) => Math.cos(i * 0.11) * 0.02), [256, 256, 3, 3]);
+    const b2v = Float32Array.from({ length: 256 }, (_, i) => -1 + i * 0.01);
+    const b1 = Tensor.from(new Float32Array(256).fill(0.5), [256]);
+    const b2 = Tensor.from(b2v, [256]);
+    const lookups0 = dv.packHits + dv.packMisses;
+    const o1 = await scope(async () => noGrad(() => xin.conv2d(w, b1, 1, 1)).toArray());
+    const o2 = await scope(async () => noGrad(() => xin.conv2d(w, b2, 1, 1)).toArray());
+    let worst = 0;
+    for (let i = 0; i < o1.length; i++) {
+      const c = Math.floor(i / 64) % 256;
+      worst = Math.max(worst, Math.abs(((o2[i] ?? 0) - (o1[i] ?? 0)) - ((b2v[c] ?? 0) - 0.5)));
+    }
+    want("eager pack cache: the same weight with a second bias answers with that bias",
+      worst < 1e-3, `max |Δ| ${worst.toExponential(1)} · ${dv.packHits + dv.packMisses - lookups0} pack lookups`);
+
+    // A frozen parameter under AdamW's arena: torch leaves a parameter with no gradient
+    // alone — weight, moments and decay. The arena stepped it anyway.
+    nn.manualSeed(7);
+    const first = new nn.Linear(4, 4), head = new nn.Linear(4, 2);
+    first.weight.requiresGrad_(false);
+    const opt = new optim.AdamW([...first.parameters(), ...head.parameters()], 1e-2, [0.9, 0.999], 1e-8, 0.1);
+    const frozen0 = await first.weight.toArray(), bias0 = await first.bias?.toArray();
+    const xs = Tensor.from(Float32Array.from({ length: 32 }, (_, i) => Math.sin(i)), [8, 4]);
+    for (let step = 0; step < 3; step++) {
+      await scope(async () => {
+        opt.zeroGrad();
+        head.call(first.call(xs)).sum().backward();
+        opt.step();
+        await dv.synchronize();
+      });
+    }
+    const frozen1 = await first.weight.toArray(), bias1 = await first.bias?.toArray();
+    let moved = 0, biasMoved = 0;
+    for (let i = 0; i < frozen0.length; i++) moved = Math.max(moved, Math.abs((frozen1[i] ?? 0) - (frozen0[i] ?? 0)));
+    for (let i = 0; i < (bias0?.length ?? 0); i++) biasMoved = Math.max(biasMoved, Math.abs((bias1?.[i] ?? 0) - (bias0?.[i] ?? 0)));
+    want("AdamW arena: a frozen weight is not stepped or decayed, and its neighbours still train",
+      moved === 0 && biasMoved > 0, `frozen weight moved ${moved.toExponential(1)} · its bias moved ${biasMoved.toExponential(1)}`);
+  }
+
   const failed = checks.filter((c) => !c.ok);
   const lines = checks.map((c) =>
     `  ${c.ok ? "✓" : "✗"} ${c.name}${c.note ? ` — ${c.note}` : ""}`);

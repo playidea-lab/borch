@@ -16440,13 +16440,13 @@
     "ko": "호스트 f32 ↔ f16 비트 변환 — 동결 가중치를 창에 절반 바이트로 두기 위한 것. dtype 이 아니다.",
     "en": "Host f32 ↔ f16 bit conversion — frozen weights kept in the window at half the bytes. Not a dtype."
    },
-   "doc": "**Host f32 ↔ f16 bit conversion** — for storing frozen weights in a window at half the\nbytes (`docs/SCALE.md` Step 4, folded into Step 3). This is not a `float16` dtype: the\nbytes are packed IEEE half-precision, held as raw window bytes, and unpacked to f32 on\nthe GPU (`unpackHalf`) when a weight funnel reads them. The core axiom \"storage is\nfloat32\" is untouched — a window buffer is outside the Tensor storage model (ADR-003\ndecision 5). WGSL's `pack2x16float` would do the same on the GPU; packing on the host\nkeeps the place path (staging → copyRange) as it is, with no temporary GPU buffers.\n\nThe conversion is the standard round-to-nearest-even one (Fabian Giesen's), handling\nsubnormals, overflow to inf, and NaN — the same rounding `pack2x16float` does, so a\nhost-packed weight and a GPU-unpacked read agree (checked in `window_probe`).",
+   "doc": "**Host f32 ↔ f16 bit conversion** — for storing frozen weights in a window at half the\nbytes (`docs/SCALE.md` Step 4, folded into Step 3). This is not a `float16` dtype: the\nbytes are packed IEEE half-precision, held as raw window bytes, and unpacked to f32 on\nthe GPU (`unpackHalf`) when a weight funnel reads them. The core axiom \"storage is\nfloat32\" is untouched — a window buffer is outside the Tensor storage model (ADR-003\ndecision 5). WGSL's `pack2x16float` would do the same on the GPU; packing on the host\nkeeps the place path (staging → copyRange) as it is, with no temporary GPU buffers.\n\nThe conversion rounds to nearest, ties to even, with subnormals, overflow to inf and\nNaN kept — the same rounding `pack2x16float` does, so a host-packed weight and a\nGPU-unpacked read agree (checked in `window_probe`, and against `Float16Array` in\n`tests/test_half.py`).",
    "symbols": [
     {
      "kind": "function",
      "name": "f32ToF16Bit",
      "signature": "export declare function f32ToF16Bit(val: number): number",
-     "doc": "One f32 value to its IEEE half-precision bit pattern (a `u16`).",
+     "doc": "One f32 value to its IEEE half-precision bit pattern (a `u16`), rounded to nearest,\n ties to even — what `pack2x16float` and `Float16Array` do.\n\n The version before this (2026-09-24 review) had NaN and overflow the wrong way round —\n a NaN packed as inf, and a finite value past 65504 with mantissa bits as NaN — and\n rounded halves up, so `1 + 2⁻¹¹` came out one step high. It is now held bit for bit\n against `Float16Array` (`tests/test_half.py`).",
      "members": [],
      "torch": "f32_to_f16_bit"
     },

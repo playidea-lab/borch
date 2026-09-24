@@ -73,6 +73,49 @@ export interface ParamGroupInit {
  */
 export type ParamsArg = readonly Tensor[] | readonly ParamGroupInit[];
 
+/** The slices of an arena that say which parameter got a gradient this step. */
+interface ArenaLive {
+  gA: GPUBuffer; zero: GPUBuffer; live: GPUBuffer; ones: GPUBuffer;
+  offs: number[]; sizes: number[];
+}
+
+/** Gathers this step's gradients into the arena and keeps `live` — a word per element,
+ *  1 where the element's parameter got a gradient — in step with `present`. Returns
+ *  whether every parameter got one, which is when the unmasked kernel runs. A slice that
+ *  lost its gradient is also cleared, so a stale gradient is never read by anything. */
+function gatherArena(a: ArenaLive, params: readonly Tensor[], present: boolean[]): boolean {
+  const d = device();
+  let all = true;
+  for (const [i, p] of params.entries()) {
+    const off = (a.offs[i] ?? 0) * 4, bytes = (a.sizes[i] ?? 0) * 4;
+    const g = p.grad;
+    if (g) {
+      d.copyRange(a.gA, off, g.buffer, 0, bytes);
+      if (!present[i]) d.copyRange(a.live, off, a.ones, 0, bytes);
+      present[i] = true;
+    } else {
+      all = false;
+      if (present[i]) {
+        d.copyRange(a.gA, off, a.zero, 0, bytes);
+        d.copyRange(a.live, off, a.zero, 0, bytes);
+        present[i] = false;
+      }
+    }
+  }
+  return all;
+}
+
+/** The `live` and `ones` slabs an arena needs beside its others, zeroed and filled —
+ *  a pooled `alloc` is not initialised. Kept, like the rest of the arena. */
+function liveSlabs(total: number, max: number): { live: GPUBuffer; ones: GPUBuffer } {
+  const d = device();
+  const live = d.alloc(total), ones = d.alloc(max);
+  d.keep(live); d.keep(ones);
+  d.writeWords(live, new Uint32Array(total));
+  d.writeWords(ones, new Uint32Array(max).fill(1));
+  return { live, ones };
+}
+
 function isGroups(arg: ParamsArg): arg is readonly ParamGroupInit[] {
   return arg.length > 0 && !(arg[0] instanceof Tensor);
 }
@@ -553,6 +596,7 @@ export class SGD extends Optimizer {
    * rebuilds it from the loaded state.
    */
   private arena: { pA: GPUBuffer; gA: GPUBuffer; mA: GPUBuffer | null; zero: GPUBuffer;
+                   live: GPUBuffer; ones: GPUBuffer;
                    offs: number[]; sizes: number[]; total: number } | null = null;
 
   /** Which slices carried a gradient last step — a slice that stops getting one is
@@ -681,30 +725,21 @@ export class SGD extends Optimizer {
       const a = this.arena;
       if (!a) return;
       const hasMom = this.momentum !== 0;
-      for (const [i, p] of this.params.entries()) {
-        const off = (a.offs[i] ?? 0) * 4, bytes = (a.sizes[i] ?? 0) * 4;
-        const g = p.grad;
-        if (g) {
-          d.copyRange(a.gA, off, g.buffer, 0, bytes);
-          this.present[i] = true;
-        } else if (this.present[i]) {
-          // A gradient that stopped arriving — clear its slice so `sgdStep` reads 0.
-          d.copyRange(a.gA, off, a.zero, 0, bytes);
-          this.present[i] = false;
-        }
-      }
+      const masked = !gatherArena(a, this.params, this.present);
       const hasDecay = this.grouped(this.weightDecay) !== 0;
       const first = this.stepCount === 0;
       const bufs = hasMom
         ? [a.pA, a.gA, a.mA as GPUBuffer, this.hyper().buffer]
         : [a.pA, a.gA, this.hyper().buffer];
+      if (masked) bufs.push(a.live);
       d.run1d(
         d.pipeline(
-          `sgdArena:${a.total}:${hasMom}:${hasDecay}:${this.dampening}:${this.nesterov}:${this.maximize}:${first}`,
-          () => sgdStep(a.total, hasMom, hasDecay, this.dampening, this.nesterov, this.maximize, first)),
+          `sgdArena:${a.total}:${hasMom}:${hasDecay}:${this.dampening}:${this.nesterov}:${this.maximize}:${first}:${masked}`,
+          () => sgdStep(a.total, hasMom, hasDecay, this.dampening, this.nesterov, this.maximize, first, masked)),
         bufs, a.total);
+      // Only what moved goes back: a parameter with no gradient keeps its own buffer.
       for (const [i, p] of this.params.entries()) {
-        d.copyRange(p.buffer, 0, a.pA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
+        if (this.present[i]) d.copyRange(p.buffer, 0, a.pA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
       }
     });
   }
@@ -735,7 +770,7 @@ export class SGD extends Optimizer {
       d.copyRange(pA, (offs[i] ?? 0) * 4, p.buffer, 0, (sizes[i] ?? 0) * 4);
       if (mA) d.copyRange(mA, (offs[i] ?? 0) * 4, (this.buffers[i] as Tensor).buffer, 0, (sizes[i] ?? 0) * 4);
     }
-    this.arena = { pA, gA, mA, zero, offs, sizes, total };
+    this.arena = { pA, gA, mA, zero, ...liveSlabs(total, max), offs, sizes, total };
     this.present = new Array(this.params.length).fill(false);
   }
 
@@ -761,6 +796,7 @@ export class SGD extends Optimizer {
     if (!a) return;
     const d = device();
     d.unkeep(a.pA); d.unkeep(a.gA); if (a.mA) d.unkeep(a.mA); d.unkeep(a.zero);
+    d.unkeep(a.live); d.unkeep(a.ones);
     this.arena = null;
   }
 
@@ -795,6 +831,7 @@ export class Adam extends Optimizer {
    * the arena too — `adam_arena_probe` holds all three against the per-parameter step.
    */
   private arena: { pA: GPUBuffer; gA: GPUBuffer; mA: GPUBuffer; vA: GPUBuffer; zero: GPUBuffer;
+                   live: GPUBuffer; ones: GPUBuffer;
                    offs: number[]; sizes: number[]; total: number } | null = null;
   private present: boolean[] = [];
 
@@ -876,20 +913,18 @@ export class Adam extends Optimizer {
       if (!this.arena) this.buildArenaAdam();
       const a = this.arena;
       if (!a) return;
-      for (const [i, p] of this.params.entries()) {
-        const off = (a.offs[i] ?? 0) * 4, bytes = (a.sizes[i] ?? 0) * 4;
-        const g = p.grad;
-        if (g) { d.copyRange(a.gA, off, g.buffer, 0, bytes); this.present[i] = true; }
-        else if (this.present[i]) { d.copyRange(a.gA, off, a.zero, 0, bytes); this.present[i] = false; }
-      }
+      const masked = !gatherArena(a, this.params, this.present);
       const corr = this.tick as { step: Tensor; corr: Tensor };
       const decay: AdamDecay = this.grouped(this.weightDecay) === 0 ? "none" : this.decoupled ? "decoupled" : "coupled";
+      const bufs = [a.pA, a.gA, a.mA, a.vA, corr.corr.buffer, this.hyper().buffer];
+      if (masked) bufs.push(a.live);
       d.run1d(
-        d.pipeline(`adam:${a.total}:${this.beta1}:${this.beta2}:${this.eps}:false:${decay}`,
-          () => adamStep(a.total, this.beta1, this.beta2, this.eps, false, decay)),
-        [a.pA, a.gA, a.mA, a.vA, corr.corr.buffer, this.hyper().buffer], a.total);
+        d.pipeline(`adam:${a.total}:${this.beta1}:${this.beta2}:${this.eps}:false:${decay}:${masked}`,
+          () => adamStep(a.total, this.beta1, this.beta2, this.eps, false, decay, masked)),
+        bufs, a.total);
+      // Only what moved goes back: a parameter with no gradient keeps its own buffer.
       for (const [i, p] of this.params.entries()) {
-        d.copyRange(p.buffer, 0, a.pA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
+        if (this.present[i]) d.copyRange(p.buffer, 0, a.pA, (a.offs[i] ?? 0) * 4, (a.sizes[i] ?? 0) * 4);
       }
     });
   }
@@ -909,7 +944,7 @@ export class Adam extends Optimizer {
       d.copyRange(mA, off, (this.first[i] as Tensor).buffer, 0, bytes);
       d.copyRange(vA, off, (this.second[i] as Tensor).buffer, 0, bytes);
     }
-    this.arena = { pA, gA, mA, vA, zero, offs, sizes, total };
+    this.arena = { pA, gA, mA, vA, zero, ...liveSlabs(total, max), offs, sizes, total };
     this.present = new Array(this.params.length).fill(false);
   }
 
@@ -918,6 +953,7 @@ export class Adam extends Optimizer {
     if (!a) return;
     const d = device();
     d.unkeep(a.pA); d.unkeep(a.gA); d.unkeep(a.mA); d.unkeep(a.vA); d.unkeep(a.zero);
+    d.unkeep(a.live); d.unkeep(a.ones);
     this.arena = null;
   }
 

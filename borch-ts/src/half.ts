@@ -7,36 +7,46 @@
  * decision 5). WGSL's `pack2x16float` would do the same on the GPU; packing on the host
  * keeps the place path (staging → copyRange) as it is, with no temporary GPU buffers.
  *
- * The conversion is the standard round-to-nearest-even one (Fabian Giesen's), handling
- * subnormals, overflow to inf, and NaN — the same rounding `pack2x16float` does, so a
- * host-packed weight and a GPU-unpacked read agree (checked in `window_probe`).
+ * The conversion rounds to nearest, ties to even, with subnormals, overflow to inf and
+ * NaN kept — the same rounding `pack2x16float` does, so a host-packed weight and a
+ * GPU-unpacked read agree (checked in `window_probe`, and against `Float16Array` in
+ * `tests/test_half.py`).
  */
 
 const _f32 = new Float32Array(1);
 const _i32 = new Int32Array(_f32.buffer);
 
-/** One f32 value to its IEEE half-precision bit pattern (a `u16`). */
+/** One f32 value to its IEEE half-precision bit pattern (a `u16`), rounded to nearest,
+ *  ties to even — what `pack2x16float` and `Float16Array` do.
+ *
+ *  The version before this (2026-09-24 review) had NaN and overflow the wrong way round —
+ *  a NaN packed as inf, and a finite value past 65504 with mantissa bits as NaN — and
+ *  rounded halves up, so `1 + 2⁻¹¹` came out one step high. It is now held bit for bit
+ *  against `Float16Array` (`tests/test_half.py`). */
 export function f32ToF16Bit(val: number): number {
   _f32[0] = val;
   const x = _i32[0] ?? 0;
-  let bits = (x >> 16) & 0x8000;          // sign
-  let m = (x >> 12) & 0x07ff;             // mantissa with the round bit
-  const e = (x >> 23) & 0xff;             // exponent
-  if (e < 103) return bits;               // too small — flushes to signed zero
-  if (e > 142) {                          // overflow to inf, or NaN
-    bits |= 0x7c00;
-    // A NaN must stay a NaN (non-zero mantissa), not become inf.
-    bits |= (e === 255 ? 0 : 1) && (x & 0x007fffff) ? 0x0200 : 0;
-    return bits;
+  const sign = (x >>> 16) & 0x8000;
+  const exp = (x >>> 23) & 0xff;
+  const mant = x & 0x7fffff;
+  // NaN stays NaN (the quiet bit set, so no payload can clear it); inf stays inf.
+  if (exp === 0xff) return sign | 0x7c00 | (mant !== 0 ? 0x0200 | (mant >>> 13) : 0);
+  const e = exp - 112;                    // the half's biased exponent
+  if (e >= 0x1f) return sign | 0x7c00;    // past the largest half — inf
+  if (e <= 0) {
+    // A subnormal half, or zero: below 2⁻²⁵ every value rounds to zero.
+    if (e < -10) return sign;
+    const m = mant | 0x800000;             // the implicit bit made explicit
+    const shift = 14 - e;
+    let h = m >>> shift;
+    const rest = m & ((1 << shift) - 1), half = 1 << (shift - 1);
+    if (rest > half || (rest === half && (h & 1) === 1)) h += 1;
+    return sign | h;                       // a carry into 0x400 is the smallest normal — right
   }
-  if (e < 113) {                          // subnormal half
-    m |= 0x0800;
-    bits |= (m >> (114 - e)) + ((m >> (113 - e)) & 1);
-    return bits;
-  }
-  bits |= ((e - 112) << 10) | (m >> 1);
-  bits += m & 1;                          // round to nearest even
-  return bits & 0xffff;
+  let h = (e << 10) | (mant >>> 13);
+  const rest = mant & 0x1fff;
+  if (rest > 0x1000 || (rest === 0x1000 && (h & 1) === 1)) h += 1;   // a carry past 0x7bff is inf — right
+  return sign | h;
 }
 
 /** An IEEE half-precision bit pattern (a `u16`) to its f32 value. */

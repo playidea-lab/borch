@@ -1826,7 +1826,7 @@ export class Device {
   // same buffer when the epoch has moved; it dies with its source.
 
   private readonly writeEpoch = new WeakMap<GPUBuffer, number>();
-  private readonly packs = new WeakMap<GPUBuffer, Map<string, { epochs: number[]; buf: GPUBuffer }>>();
+  private readonly packs = new WeakMap<GPUBuffer, Map<string, { srcs: GPUBuffer[]; epochs: number[]; buf: GPUBuffer }>>();
   /** `packed` calls that returned a pack as it was, and that made or remade one. */
   packHits = 0;
   packMisses = 0;
@@ -1859,12 +1859,21 @@ export class Device {
   packed(srcs: readonly GPUBuffer[], key: string, count: number, make: (dst: GPUBuffer) => void): GPUBuffer {
     const src = srcs[0];
     if (src === undefined) throw new Error("packed: no source");
-    if (this.capturing) { const dst = this.alloc(count); make(dst); return dst; }
+    // **A dry run dispatches nothing, so a pack made there is never written.** Cached, it
+    // was the next eager forward's weights: `compiled(model)` dry-runs its first call,
+    // and `model.call(x)` afterwards read zeros or a recycled buffer's bytes (2026-09-24
+    // review). Neither a capture nor a dry run goes through the cache.
+    if (this.capturing || this.dryRun) { const dst = this.alloc(count); make(dst); return dst; }
     let m = this.packs.get(src);
     if (!m) { m = new Map(); this.packs.set(src, m); }
     const epochs = srcs.map((b) => this.epochOf(b));
     const hit = m.get(key);
-    if (hit && hit.epochs.length === epochs.length && hit.epochs.every((e, i) => e === epochs[i])) {
+    // **The other sources are compared by identity as well as by epoch.** The map is keyed
+    // on the weight alone, and a buffer nothing has written since its upload is epoch 0
+    // like every other: a second bias (a fresh `Tensor.from`, or `conv.bias` replaced)
+    // matched the first one's epochs and got its pack.
+    if (hit && hit.srcs.length === srcs.length && hit.srcs.every((b, i) => b === srcs[i])
+        && hit.epochs.every((e, i) => e === epochs[i])) {
       this.packHits += 1;
       return hit.buf;
     }
@@ -1876,7 +1885,7 @@ export class Device {
       this.keep(dst);
     }
     make(dst);
-    m.set(key, { epochs, buf: dst });
+    m.set(key, { srcs: [...srcs], epochs, buf: dst });
     return dst;
   }
 
@@ -2010,6 +2019,9 @@ export class Device {
   upload(data: Float32Array): GPUBuffer {
     const buf = this.alloc(data.length, false);
     this.device.queue.writeBuffer(buf, 0, data as unknown as BufferSource);
+    // A pooled buffer can come back as a new tensor's; its epoch moves so a pack made
+    // from what it held before is not taken for one made from what it holds now.
+    this.noteWrite(buf);
     // Under a capture, remembered as an upload — see `Capture.liveIns`.
     this.uploaded?.add(buf);
     return buf;

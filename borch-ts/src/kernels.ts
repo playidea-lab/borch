@@ -7583,9 +7583,19 @@ fn main() {
  */
 export const HYPER_LR = 0, HYPER_DECAY = 1, HYPER_MOMENTUM = 2, HYPER_DECAY_FACTOR = 3;
 
+/** **A parameter with no gradient is not stepped at all** — not its weight, not its
+ *  momentum, not its weight decay. torch skips any parameter whose `.grad` is None, and
+ *  the per-parameter path here does the same (`if (!raw) continue`). An arena steps one
+ *  buffer holding every parameter, so it carries a word per element saying whether that
+ *  element's parameter got a gradient this step; the guard returns before anything is
+ *  read or written. Without it (2026-09-24 review) a frozen weight under AdamW shrank by
+ *  (1 − lr·λ) every step and kept drifting on its momentum. Only bound when some
+ *  parameter lacks a gradient, so the common step compiles and runs as before. */
+const LIVE_GUARD = "  if (Live[gid] == 0u) { return; }";
+
 export function sgdStep(
   n: number, hasMomentum: boolean, hasDecay: boolean,
-  dampening = 0, nesterov = false, maximize = false, first = false,
+  dampening = 0, nesterov = false, maximize = false, first = false, masked = false,
 ): string {
   // **Weight decay is added into the gradient.** That is a different number from
   // shrinking the parameter separately — what differs is whether the momentum buffer
@@ -7605,9 +7615,11 @@ export function sgdStep(
 @group(0) @binding(1) var<storage, read> G: array<f32>;
 ${hasMomentum ? "@group(0) @binding(2) var<storage, read_write> Buf: array<f32>;" : ""}
 @group(0) @binding(${hasMomentum ? 3 : 2}) var<storage, read> H: array<f32>;
+${masked ? `@group(0) @binding(${hasMomentum ? 4 : 3}) var<storage, read> Live: array<u32>;` : ""}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
+${masked ? LIVE_GUARD : ""}
   let gv = ${grad};
 ${hasMomentum
     ? `  let b = Buf[gid] * H[${HYPER_MOMENTUM}] + ${damped};
@@ -7631,7 +7643,7 @@ export type AdamDecay = "none" | "coupled" | "decoupled";
  */
 export function adamStep(
   n: number, beta1: number, beta2: number, eps: number,
-  amsgrad = false, decay: AdamDecay = "none",
+  amsgrad = false, decay: AdamDecay = "none", masked = false,
 ): string {
   return `
 @group(0) @binding(0) var<storage, read_write> P: array<f32>;
@@ -7641,9 +7653,11 @@ export function adamStep(
 @group(0) @binding(4) var<storage, read> Corr: array<f32>;
 ${amsgrad ? "@group(0) @binding(5) var<storage, read_write> Vmax: array<f32>;" : ""}
 @group(0) @binding(${amsgrad ? 6 : 5}) var<storage, read> H: array<f32>;
+${masked ? `@group(0) @binding(${amsgrad ? 7 : 6}) var<storage, read> Live: array<u32>;` : ""}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
+${masked ? LIVE_GUARD : ""}
   // The two decays, in the same arithmetic the per-parameter path writes as tensor ops
   // (Adam.update): coupled adds λ·p into the gradient before the moments see it;
   // decoupled shrinks the weight by the group's factor (1 − lr·λ) and then steps. Both

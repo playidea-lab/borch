@@ -380,6 +380,12 @@ async function inference(lines: string[]): Promise<void> {
   const m1 = dv.packMisses;
   await scope(async () => noGrad(() => byHand.forward(x)).toArray());
   want("eager pack cache: the weights written in place are repacked on the next forward, and only those", dv.packMisses - m1 === hitsAgain, `${dv.packMisses - m1} repacks after the write, ${hitsAgain} packs in use`);
+  // **The compiled model itself, eagerly** — the case the byHand reference never ran.
+  // The first call's dry run made packs that nothing wrote, and they were cached: this
+  // forward read zeros or a recycled buffer's bytes (2026-09-24 review).
+  const onItself = await scope(async () => noGrad(() => byCall.forward(x)).toArray());
+  want("compiled(model): an eager forward of the same model afterwards is the eval forward, bit for bit",
+    maxAbs(ref, onItself) === 0, `max |Δ| ${maxAbs(ref, onItself).toExponential(1)}`);
   const fc = step.firstCall[0];
   if (fc) lines.push(`compiled(model) first call: recording ${fc.record.toFixed(0)} ms (its kernels compiled side by side; the answer is out) · then in idle time: tuning ${fc.tuning.toFixed(0)} (compile wave ${fc.compileWave.toFixed(0)}; ${fc.candidates} candidates) + re-record ${fc.rerecord.toFixed(0)} ms${step.tuned.flat().some((t) => t.chosen !== t.prior) ? " (a decision changed; the pure forward was recorded again)" : ""}`);
   step.dispose();
