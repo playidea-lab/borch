@@ -186,7 +186,7 @@ async function resnet(lines: string[]): Promise<void> {
   const changed = tuned.filter((t) => t.chosen !== t.prior);
   const saved = changed.reduce((a, t) => a + (t.priorMs - t.chosenMs), 0);
   lines.push(`autotune: ${tuned.length} decisions on the first recording, ${changed.length} changed from the rule's pick, ${saved.toFixed(3)} ms of GPU a step saved`
-    + (changed.length ? ":\n" + changed.slice(0, 8).map((t) => `    ${t.key.split("|")[1] ?? t.key}: ${t.prior} ${t.priorMs.toFixed(3)} → ${t.chosen} ${t.chosenMs.toFixed(3)} ms`).join("\n") : ""));
+    + (changed.length ? ":\n" + changed.slice(0, 8).map((t) => `    ${t.key.startsWith(`${Device.tuneContext()}|`) ? t.key.slice(Device.tuneContext().length + 1).split("|").slice(0, 4).join("|") : t.key}: ${t.prior} ${t.priorMs.toFixed(3)} → ${t.chosen} ${t.chosenMs.toFixed(3)} ms`).join("\n") : ""));
   // **The compile wave, by pipeline** (`docs/FIRST.md` 1a): which candidates' shaders
   // cost the first load, with their WGSL size — the number a first visit on D3D12 pays.
   const comp = [...device().tuneCompiles].sort((p, q) => q.ms - p.ms);
