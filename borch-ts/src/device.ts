@@ -2777,6 +2777,24 @@ export class Device {
    * candidates are dealt into passes with no kind repeated.
    */
   async runTuning(queue: Map<string, readonly TuneCandidate[]> = this.takeTuneQueue()): Promise<TuneReport[]> {
+    try {
+      return await this.runTuningOnce(queue);
+    } catch (err) {
+      // A wave that failed leaves its pipeline promises here; the next wait would meet
+      // their rejections as its own.
+      this.prewarmPending = [];
+      this.tuneWarmMs = 0;
+      throw err;
+    }
+  }
+
+  /**
+   * **No scope is held across an await in here.** A candidate's temporaries are made in a
+   * scope opened and closed around its own synchronous run: `scope()` is a stack, and one
+   * held across the waits below — as `compiled`'s idle pass once did — was closed on top
+   * of a scope the page opened meanwhile, pooling the page's tensors (2026-09-24 review).
+   */
+  private async runTuningOnce(queue: Map<string, readonly TuneCandidate[]>): Promise<TuneReport[]> {
     const out: TuneReport[] = [];
     this.tuneWarmMs = 0;
     if (queue.size === 0) return out;
@@ -2796,7 +2814,8 @@ export class Device {
       const missed: TuneCandidate[] = [];
       for (const cand of pending) {
         this.prewarming = true;
-        try { cand.run(); } catch (err) { if (err instanceof PrewarmMiss) missed.push(cand); else { this.prewarming = false; throw err; } } finally { this.prewarming = false; }
+        this.beginScope();
+        try { cand.run(); } catch (err) { if (err instanceof PrewarmMiss) missed.push(cand); else { this.prewarming = false; throw err; } } finally { this.prewarming = false; this.endScope(); }
       }
       const compiles = this.prewarmPending;
       this.prewarmPending = [];
@@ -2821,7 +2840,12 @@ export class Device {
     for (let round = 0; round < Device.TUNE_ROUNDS; round++) {
       for (const pass of passes) {
         await this.profile(async () => {
-          for (const { cand } of pass) for (let r = 0; r < Device.TUNE_REPS; r++) cand.run();
+          this.beginScope();
+          try {
+            for (const { cand } of pass) for (let r = 0; r < Device.TUNE_REPS; r++) cand.run();
+          } finally {
+            this.endScope();
+          }
           this.flush();
           await this.synchronize();
         });

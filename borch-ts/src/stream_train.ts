@@ -29,6 +29,7 @@
 
 import { enableGrad, flow } from "./autograd.js";
 import { Module } from "./nn.js";
+import { type SavedSeed, saveSeed, withSeed } from "./checkpoint.js";
 import { device, noGrad, scope, Tensor } from "./tensor.js";
 import type { Window } from "./device.js";
 
@@ -83,10 +84,13 @@ export async function streamTrainStep(
   // boundaries[k] is the input to block k; boundaries[n] is the final output.
   const boundaries: Tensor[] = [input];
   let h = input;
+  // Each block's dropout stream before its forward, so its recompute draws the same masks.
+  const seeds: SavedSeed[] = [];
   for (const blk of blocks) {
     // eslint-disable-next-line no-await-in-loop
     const placed = await placeBlock(win, blk);
     let out: Tensor | undefined;
+    seeds.push(saveSeed());
     // Keep only the block's output; its intermediates go back to the pool at the scope's close.
     {
       using s = scope();
@@ -129,7 +133,7 @@ export async function streamTrainStep(
     let gradX: Tensor;
     {
       using s = scope();
-      const y = enableGrad(() => blk.run(xk, placed.weights));
+      const y = withSeed(seeds[k] as SavedSeed, () => enableGrad(() => blk.run(xk, placed.weights)));
       const grads = flow([y], [g], (a, b) => a.add(b));
       // Each adapter is used only in its own block, so its whole gradient is here. Accumulate
       // into `.grad` the way `backward` does, keeping the result past the scope.

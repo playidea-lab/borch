@@ -43,7 +43,39 @@
  */
 
 import { enableGrad, flow } from "./autograd.js";
-import { makeNode, noGrad, scope, Tensor } from "./tensor.js";
+import { device, makeNode, noGrad, scope, Tensor } from "./tensor.js";
+
+/** The dropout stream as it stood, for a recompute to draw its forward's masks again —
+ *  torch's `preserve_rng_state`. The device holds the stream (`Tensor.seedBuffer`); its
+ *  word is copied on the device, so a captured step replays the save and the restore in
+ *  order, and the host mirror travels beside it. The copy lives in the caller's scope.
+ *  Not part of the public surface: `checkpoint` and the streamed trainer use it. */
+export interface SavedSeed { readonly word: GPUBuffer; readonly mirror: number }
+
+export function saveSeed(): SavedSeed {
+  const d = device();
+  const word = d.alloc(1);
+  d.copyRange(word, 0, Tensor.seedBuffer(), 0, 4);
+  return { word, mirror: Tensor.dropoutSeed };
+}
+
+function restoreSeed(saved: SavedSeed): void {
+  device().copyRange(Tensor.seedBuffer(), 0, saved.word, 0, 4);
+  Tensor.dropoutSeed = saved.mirror;
+}
+
+/** Runs `body` on the stream `saved` holds, then puts the stream back where it was — the
+ *  recompute draws its forward's masks and moves nothing for what comes after it. */
+export function withSeed<T>(saved: SavedSeed, body: () => T): T {
+  const now = saveSeed();
+  restoreSeed(saved);
+  try {
+    return body();
+  } finally {
+    restoreSeed(now);
+  }
+}
+
 
 /**
  * How many grad-requiring **leaves** the recompute graph rooted at `root` has that are not
@@ -83,6 +115,9 @@ export function checkpoint(
   fn: (...xs: Tensor[]) => Tensor,
   ...inputs: Tensor[]
 ): Tensor {
+  // The dropout stream before the forward draws, so the recompute draws the same masks.
+  // Taken outside the scope below: it has to live until the backward, as `out` does.
+  const seed = saveSeed();
   // The forward, tape off, nothing but the output surviving the scope.
   let out: Tensor;
   {
@@ -99,7 +134,7 @@ export function checkpoint(
       leaf.requiresGrad = x.requiresGrad;
       return leaf;
     });
-    const y = enableGrad(() => fn(...leaves));
+    const y = withSeed(seed, () => enableGrad(() => fn(...leaves)));
     // A grad-requiring tensor used inside `fn` but not passed in would get no gradient.
     // Refuse loudly rather than return a silent zero for it.
     const stray = strayGradLeaves(y, new Set(leaves));

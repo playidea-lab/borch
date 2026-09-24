@@ -4,7 +4,7 @@
  "korean": {
   "done": 791,
   "stale": 0,
-  "missing": 642
+  "missing": 644
  },
  "modules": [
   {
@@ -16261,6 +16261,40 @@
    "doc": "**Gradient checkpointing** — `torch.utils.checkpoint.checkpoint`.\n\nA segment run under `checkpoint` keeps **only its output** through the forward, not the\nintermediates a backward would need; at the backward it runs the segment again, with the\ntape on, and flows the incoming gradient through that fresh graph. The trade is the\nplan's Step 6 (`docs/SCALE.md`): O(√n) activation memory for one extra forward, so a\ndeeper model — or a streamed backbone whose block must be resident only while it runs —\nfits where the full tape would not.\n\n## Why it lives here and not in a caller\n\nThe pieces it needs are not exported: `flow` (the backward walk), `enableGrad`, and the\nnode funnel. So the primitive is written once, beside them, and callers get a function.\n\n## What makes it correct rather than a silently-wrong gradient\n\n- **The forward holds nothing.** It runs under `noGrad` inside a `scope()` that keeps\n  only the output; every intermediate is returned to the pool at the scope's close, so\n  the tape carries none of them. That is the whole memory win.\n- **The recompute is a fresh graph on detached leaves.** The inputs are `detach()`ed\n  (sharing their buffers, no copy) and marked `requiresGrad` exactly where the originals\n  were, so `flow` stops at them and records their gradient. Fresh tensors each time means\n  the version guard (`savedVersions`) has nothing stale to fire on.\n- **Gradient goes only to the arguments, and a captured one is refused, not dropped.**\n  `checkpoint` routes gradient to the tensors passed as `inputs` — those are the node's\n  parents. A tensor that requires grad and is used inside `fn` but was *closed over*\n  rather than passed would get no gradient at all, silently; so the recompute's graph is\n  walked and any grad-requiring leaf that is not one of the inputs makes the backward\n  throw, naming the count. Pass every trainable tensor the segment differentiates (a\n  LoRA adapter, say) as an argument; a frozen backbone does not require grad and is not\n  flagged. This is the difference between the plan's Step 6 and a silently wrong gradient.\n- **The recompute frees itself.** It runs inside its own `scope()` that keeps only the\n  gradients it returns; the recomputed intermediates and the accumulation graph go back\n  to the pool at once. So only one segment's worth is resident at a time in the backward,\n  which is the other half of the win.\n- **The node carries no saved tensors.** `checkpoint` saves nothing itself (that is the\n  point), so it never refuses a later in-place edit for a value it is not holding.\n\n`checkpoint` is verified against the plain (fully-taped) backward in\n`tests/browser/checkpoint_probe.py` — the gradients must agree within the golden\ntolerance, and `cost.ts` holds that the buffers at the backward peak actually fall.",
    "symbols": [
     {
+     "kind": "interface",
+     "name": "SavedSeed",
+     "signature": "export interface SavedSeed",
+     "doc": "The dropout stream as it stood, for a recompute to draw its forward's masks again —\n torch's `preserve_rng_state`. The device holds the stream (`Tensor.seedBuffer`); its\n word is copied on the device, so a captured step replays the save and the restore in\n order, and the host mirror travels beside it. The copy lives in the caller's scope.\n Not part of the public surface: `checkpoint` and the streamed trainer use it.",
+     "members": [
+      {
+       "name": "word",
+       "signature": "readonly word: GPUBuffer",
+       "doc": ""
+      },
+      {
+       "name": "mirror",
+       "signature": "readonly mirror: number",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "saveSeed",
+     "signature": "export declare function saveSeed(): SavedSeed",
+     "doc": "",
+     "members": [],
+     "torch": "save_seed"
+    },
+    {
+     "kind": "function",
+     "name": "withSeed",
+     "signature": "export declare function withSeed<T>(saved: SavedSeed, body: () => T): T",
+     "doc": "Runs `body` on the stream `saved` holds, then puts the stream back where it was — the\n recompute draws its forward's masks and moves nothing for what comes after it.",
+     "members": [],
+     "torch": "with_seed"
+    },
+    {
      "kind": "function",
      "name": "checkpoint",
      "signature": "export declare function checkpoint(fn: (...xs: Tensor[]) => Tensor, ...inputs: Tensor[]): Tensor",
@@ -16268,7 +16302,7 @@
      "members": []
     }
    ],
-   "count": 1
+   "count": 6
   },
   {
    "name": "stream",
@@ -25191,5 +25225,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3440
+ "total": 3445
 }

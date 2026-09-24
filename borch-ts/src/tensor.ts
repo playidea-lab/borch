@@ -5580,6 +5580,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   static seedBuffer(): GPUBuffer {
     if (!Tensor.seedBuf) {
       Tensor.seedBuf = dev().alloc(1, false);
+      // **Kept: the stream outlives whatever scope first asked for it.** Every `alloc` joins
+      // the open scope's frame, so a first dropout inside a `scope` handed the page-wide seed
+      // back to the pool at that scope's close, while this field still pointed at it — the
+      // next tensor of one word was the seed, and `manualSeed` stopped reproducing a mask
+      // (found 2026-09-24, when a seed snapshot was handed the seed buffer itself).
+      dev().keep(Tensor.seedBuf);
       dev().writeWords(Tensor.seedBuf, new Uint32Array([Tensor.dropoutSeed >>> 0]));
     }
     return Tensor.seedBuf;

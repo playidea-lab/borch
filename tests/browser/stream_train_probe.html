@@ -19,7 +19,7 @@
   const ATOL = 1e-4, RTOL = 1e-4;   // the golden tolerance; a recompute uses the same kernels
   try {
     const bt = await import("borch-ts");
-    const { init, device, scope, peft, Tensor, keepAlive, streamTrainStep, streamTrainSequence, Device } = bt;
+    const { init, device, scope, peft, Tensor, keepAlive, streamTrainStep, streamTrainSequence, Device, manualSeed } = bt;
     await init();
     say(`adapter: ${device().constructor.name} · ${Device.adapterInfo}`);
 
@@ -132,14 +132,38 @@
       headWithin = headWithin && within(streamHeadAdapters[i][0], refHeadAdapters[i][0]) && within(streamHeadAdapters[i][1], refHeadAdapters[i][1]);
     }
 
+    // ── Dropout in every block (2026-09-24 review): the backward recomputes each block, and
+    //    without its forward's seed put back it drew other masks — gradients from mask B for
+    //    a loss from mask A, nothing raised. ──
+    zeroGrads(); manualSeed(11);
+    const refDrop = await scope(async () => {
+      let h = x0;
+      for (const b of blocks) h = b.forward(h).dropout(0.5, true);
+      h.sum().backward();
+      return snap();
+    });
+    zeroGrads(); manualSeed(11);
+    const win4 = device().window(2 * slot);
+    const dropBlocks = trainBlocks.map((t, i) => ({ ...t,
+      run: (h, wnd) => { const b = blocks[i]; const saved = b.weight; b.weight = wnd[0]; const y = b.forward(h).dropout(0.5, true); b.weight = saved; return y; } }));
+    await streamTrainStep(win4, x0, dropBlocks, (o) => o.sum());
+    win4.free();
+    const streamDrop = await snap();
+    let dropWithin = true, worstDrop = 0;
+    for (let i = 0; i < BLOCKS; i++) {
+      worstDrop = Math.max(worstDrop, worstAbs(streamDrop[i][0], refDrop[i][0]), worstAbs(streamDrop[i][1], refDrop[i][1]));
+      dropWithin = dropWithin && within(streamDrop[i][0], refDrop[i][0]) && within(streamDrop[i][1], refDrop[i][1]);
+    }
+
     say(`loss: resident ${refLoss.toFixed(6)} · streamed ${streamLoss.toFixed(6)} — ${lossAgree ? "agree" : "DIFFER"}`);
+    say(`with dropout(0.5) after every block: adapter grad max |Δ| ${worstDrop.toExponential(2)} — ${dropWithin ? "the recompute drew the forward's masks" : "OUT OF BAND — the recompute drew other masks"}`);
     say(`adapter grad max |Δ| vs resident: A ${worstA.toExponential(2)} · B ${worstB.toExponential(2)} — ${allWithin ? "within golden tolerance" : "OUT OF BAND"}`);
     say(`via streamTrainSequence adapter: max |Δ| ${worstAdapter.toExponential(2)} — ${adapterWithin ? "within golden tolerance" : "OUT OF BAND"}`);
     say(`lossParams (a head trained through the loss): head grad max |Δ| ${worstHead.toExponential(2)} — ${headWithin ? "within golden tolerance" : "OUT OF BAND"}`);
     say(`window ${(2 * slot / 1024) | 0} KB (~2 bases) · used ${(winUsed / 1024) | 0} KB · backbone base bytes ${(BLOCKS * baseBytes / 1024) | 0} KB`);
     say(`faults: ${device().faults.count}`);
 
-    const ok = allWithin && adapterWithin && headWithin && lossAgree && windowBounded && device().faults.count === 0;
+    const ok = allWithin && adapterWithin && headWithin && dropWithin && lossAgree && windowBounded && device().faults.count === 0;
     say(ok ? "\nstreamed training: the adapter gradients match the resident run (hand-built and via the adapter), weights bounded by the window"
           : "\n**streamed training: a check did not hold**");
     window.__streamTrain = {

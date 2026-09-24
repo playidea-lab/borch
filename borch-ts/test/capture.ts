@@ -336,6 +336,46 @@ const maxAbs = (a: Float32Array, b: Float32Array): number => {
  * generic pass — `Conv → BN → ReLU → Conv → BN` becomes `ConvReLU2d → Conv2d` — and gives
  * the unfused eval forward to a rounding in fewer dispatches.
  */
+/**
+ * **Tuning in idle time leaves the caller's scopes alone** (the 2026-09-24 review). The
+ * tuning pass awaited compiles and timings inside one `scope`, and a scope's close pops
+ * whatever frame is on top — so a scope the page opened while the tuning waited was the
+ * one closed, its tensors pooled under it. And a tuning that fails falls back to the
+ * rule's kernels: the step still answers.
+ */
+async function background(): Promise<void> {
+  const dv = device() as unknown as { scopes: Set<GPUBuffer>[] };
+  // Shapes nothing else on this page has tuned, so the pass has candidates to time.
+  nn.manualSeed(4);
+  const net = new nn.Sequential(new nn.Conv2d(3, 24, 3, 1, 1), new nn.ReLU(), new nn.Conv2d(24, 40, 3, 1, 1));
+  const xi = Tensor.from(array(4 * 3 * 20 * 20, 55, 2), [4, 3, 20, 20]);
+  const step = compiled(net);
+  await (await step.call(xi)).toArray();
+  const depth0 = dv.scopes.length;
+  const tuning = step.settle();
+  let heldAcross = false;
+  for (let t = 0; t < 400 && !heldAcross; t++) {
+    await new Promise((r) => setTimeout(r, 2));
+    if (dv.scopes.length > depth0) heldAcross = true;
+  }
+  let stillMine = false, intact = false, refused = "";
+  const data = array(1024, 66, 1);
+  await scope(async () => {
+    const mine = Tensor.from(data, [1024]);
+    await tuning;                                   // the tuning ends while this scope is open
+    try {
+      stillMine = dv.scopes[dv.scopes.length - 1]?.has(mine.buffer) ?? false;
+      intact = maxAbs(await mine.toArray(), data) === 0;
+    } catch (err) {
+      refused = String(err).split("\n")[0] ?? "";
+    }
+  });
+  want("compiled: tuning in idle time leaves a scope the page opened meanwhile its own",
+    stillMine && intact && dv.scopes.length === depth0,
+    `${heldAcross ? "the tuning held a scope across its awaits" : "no scope held across an await"} · the page's frame ${stillMine ? "kept" : "TAKEN"}${refused ? ` (${refused.slice(0, 90)})` : ""} · depth ${depth0} → ${dv.scopes.length}`);
+  step.dispose();
+}
+
 async function inference(lines: string[]): Promise<void> {
   const x = Tensor.from(array(16 * 3 * 32 * 32, 77, 2), [16, 3, 32, 32]);
   nn.manualSeed(3);
@@ -426,6 +466,7 @@ export async function report(): Promise<Report> {
   await resnet(lines);
   await streamed(lines);
   await inference(lines);
+  await background();
   const faults = device().faults.count;
   want("no WebGPU faults", faults === 0, `${faults}`);
   const failed = checks.filter((c) => !c.ok);

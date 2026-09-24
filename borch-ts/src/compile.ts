@@ -278,7 +278,7 @@ export class Compiled<A extends CompiledArg[], R> {
       if (this.check) this.checked.push(await this.verify(made.cap, made.inputs, made.out));
       if (tuning) {
         this.pending.set(key, { queue: null, args, datas, cost });
-        idle(() => { void this.tuneNow(key); });
+        idle(() => { this.tuneNow(key).catch((err: unknown) => { this.tuneFailed(err); }); });
       }
     }
     return made.out;
@@ -381,7 +381,14 @@ export class Compiled<A extends CompiledArg[], R> {
       if (this.disposed) return;
       p.cost.wait = performance.now() - t0;
       const queue = p.queue;
-      report = await scope(async () => d.runTuning(queue));
+      // A tuning that fails leaves the rule's kernels in place; the step goes on, and the
+      // passes below still run — the recording would otherwise stay unfused and unplanned.
+      try {
+        report = await d.runTuning(queue);
+      } catch (err) {
+        this.tuneFailed(err);
+        report = [];
+      }
       if (this.disposed) return;
       d.flush();
       outs.forEach((o, i) => d.writeWords(o.buffer, words(outBefore[i] as Float32Array)));
@@ -390,12 +397,27 @@ export class Compiled<A extends CompiledArg[], R> {
       if (this.check) this.checked.push(await this.verify(rec.cap, rec.inputs, rec.out));
       if (this.disposed) return;
     } else {
+      // **A capture the page has open is not ours to interrupt** — a streamed step or a
+      // `captureAsync` spans awaits, and an idle callback that recorded into the middle of
+      // it threw "a capture is already open". The pass waits for the next idle moment.
+      if (d.capturing) {
+        this.pending.set(key, p);
+        idle(() => { this.tuneNow(key).catch((err: unknown) => { this.tuneFailed(err); }); });
+        return;
+      }
       // In idle time the step may be disposed under this pass; every wait checks.
-      const scratch = await this.record(p.args, p.datas, true, false);
-      const queue = d.takeTuneQueue();
-      if (this.disposed) { scratch.cap.dispose(); return; }
-      report = await scope(async () => d.runTuning(queue));
-      scratch.cap.dispose();
+      let scratch: Recording<Awaited<R>> | undefined;
+      try {
+        scratch = await this.record(p.args, p.datas, true, false);
+        const queue = d.takeTuneQueue();
+        if (this.disposed) return;
+        report = await d.runTuning(queue);
+      } catch (err) {
+        this.tuneFailed(err);
+        return;
+      } finally {
+        scratch?.cap.dispose();
+      }
       if (this.disposed) return;
     }
     this.tuned.push(report);
@@ -421,10 +443,24 @@ export class Compiled<A extends CompiledArg[], R> {
   dispose(): void {
     this.disposed = true;
     this.pending.clear();
-    for (const r of this.replacement.values()) r.cap.dispose();
-    this.replacement.clear();
-    for (const r of this.records.values()) r.cap.dispose();
-    this.records.clear();
+    const release = (): void => {
+      for (const r of this.replacement.values()) r.cap.dispose();
+      this.replacement.clear();
+      for (const r of this.records.values()) r.cap.dispose();
+      this.records.clear();
+    };
+    // **A tuning in flight still runs candidates over a recording's buffers** — a
+    // state-writing step's candidates are closures over the live recording. Released under
+    // it, they wrote buffers the pool had handed on. The release waits for it; every
+    // wait in the pass checks `disposed` and stops.
+    if (this.inflight.size > 0) void Promise.allSettled([...this.inflight.values()]).then(release);
+    else release();
+  }
+
+  /** Said once, and the step goes on with the rule's kernels: tuning is an optimisation. */
+  private tuneFailed(err: unknown): void {
+    const why = err instanceof Error ? err.message.split("\n")[0] : String(err);
+    Device.advise("tune-failed", `compiled: choosing kernels by measurement failed (${why}) — the step runs on the rule's kernels, as it would with no tuner.`);
   }
 
   private async verify(cap: Capture, inputs: readonly CompiledArg[], out: Awaited<R>): Promise<CheckReport> {

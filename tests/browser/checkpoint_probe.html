@@ -19,7 +19,7 @@
   // equality and this is only the ceiling. `tests/export_json.py`.
   const ATOL = 1e-4, RTOL = 1e-4;
   try {
-    const { init, device, scope, checkpoint, nn, Tensor, keepAlive } = await import("borch-ts");
+    const { init, device, scope, checkpoint, nn, Tensor, keepAlive, manualSeed } = await import("borch-ts");
     await init();
     say(`adapter: ${device().constructor.name} · ${(await import("borch-ts")).Device.adapterInfo}`);
 
@@ -46,12 +46,18 @@
     // gradient too — the contract the stray-leaf guard enforces.
     const step = (h, W, b) => h.matmul(W).add(b).tanh();
 
-    const run = async (useCkpt) => scope(async () => {
+    // **With dropout in the block** (2026-09-24 review): the recompute draws its mask again,
+    // and without the seed put back it drew a different one — the loss came from mask A
+    // and the gradient from mask B, with nothing raised. torch's `preserve_rng_state`.
+    const dropStep = (h, W, b) => h.matmul(W).add(b).dropout(0.5, true).tanh();
+
+    const run = async (useCkpt, fn = step) => scope(async () => {
       x0.grad = null;
       for (const blk of blocks) { blk.W.grad = null; blk.b.grad = null; }
+      manualSeed(9);
       let y = x0;
       for (const blk of blocks) {
-        y = useCkpt ? checkpoint(step, y, blk.W, blk.b) : step(y, blk.W, blk.b);
+        y = useCkpt ? checkpoint(fn, y, blk.W, blk.b) : fn(y, blk.W, blk.b);
       }
       const loss = y.sum();
       const lossVal = (await loss.toArray())[0];
@@ -69,6 +75,8 @@
 
     const plain = await run(false);
     const ckpt = await run(true);
+    const plainDrop = await run(false, dropStep);
+    const ckptDrop = await run(true, dropStep);
 
     // A captured grad-requiring tensor must be refused, not silently given a zero gradient.
     let refusedCapture = false;
@@ -98,6 +106,10 @@
     const gradsAgree = Math.max(marginX, marginW0, marginWlast, marginB0) <= 0;
     const lossAgree = Math.abs(plain.loss - ckpt.loss) <= ATOL + RTOL * Math.abs(plain.loss);
     const heldFell = ckpt.held < plain.held;
+    const dropGrad = Math.max(worstAbs(ckptDrop.gx, plainDrop.gx), worstAbs(ckptDrop.gW0, plainDrop.gW0),
+      worstAbs(ckptDrop.gWlast, plainDrop.gWlast));
+    const dropAgree = Math.max(worst(ckptDrop.gx, plainDrop.gx), worst(ckptDrop.gW0, plainDrop.gW0),
+      worst(ckptDrop.gWlast, plainDrop.gWlast)) <= 0 && Math.abs(ckptDrop.loss - plainDrop.loss) <= ATOL + RTOL * Math.abs(plainDrop.loss);
 
     say(`loss: plain ${plain.loss.toFixed(6)} · checkpoint ${ckpt.loss.toFixed(6)} — ${lossAgree ? "agree" : "DIFFER"}`);
     say(`grad max |Δ|: x ${worstAbs(ckpt.gx, plain.gx).toExponential(2)} · `
@@ -107,12 +119,13 @@
     say(`grads within golden tolerance (margin ≤ 0): ${gradsAgree ? "yes" : "NO — " + Math.max(marginX, marginW0, marginWlast, marginB0).toExponential(2)}`);
     say(`held after forward: plain ${(plain.held / 1024).toFixed(1)} KB · checkpoint ${(ckpt.held / 1024).toFixed(1)} KB `
       + `— ${heldFell ? `fell to ${(100 * ckpt.held / plain.held).toFixed(0)}%` : "DID NOT FALL"}`);
+    say(`with dropout(0.5) in every block: loss plain ${plainDrop.loss.toFixed(6)} · checkpoint ${ckptDrop.loss.toFixed(6)} · grad max |Δ| ${dropGrad.toExponential(2)} — ${dropAgree ? "the recompute drew the same masks" : "DIFFER — the recompute drew other masks"}`);
     say(`faults: ${device().faults.count}`);
 
-    const ok = gradsAgree && lossAgree && heldFell && refusedCapture && device().faults.count === 0;
+    const ok = gradsAgree && lossAgree && heldFell && refusedCapture && dropAgree && device().faults.count === 0;
     say(ok ? "\ncheckpoint: recomputed backward matches, holds less, refuses a captured grad" : "\n**checkpoint: a check did not hold**");
     window.__checkpoint = {
-      text: lines.join("\n"), ok, gradsAgree, lossAgree, heldFell, refusedCapture,
+      text: lines.join("\n"), ok, gradsAgree, lossAgree, heldFell, refusedCapture, dropAgree,
       heldPlain: plain.held, heldCkpt: ckpt.held, faults: device().faults.count,
     };
   } catch (err) {
