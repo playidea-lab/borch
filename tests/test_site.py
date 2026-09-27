@@ -1977,3 +1977,17 @@ def test_no_page_puts_a_backtick_inside_its_python():
         "these lines put a backtick in Python that lives inside a JS template literal:\n  "
         + "\n  ".join(bad)
         + "\n\n  One of them ends the literal, the page fails to parse, and nothing runs.")
+
+
+def test_what_scrolls_into_view_lands_below_the_sticky_bars():
+    """The top bar is sticky and covers the top of the viewport; without a scroll padding an
+    anchor's heading and a scrolled-to run button landed under it. The browser checks'
+    clicks then found the button covered and, with smooth scrolling, scrolled up and down
+    until somebody moved the window (2026-09-27). And a reader who asked for less motion
+    gets no smooth scrolling."""
+    css = (SITE / "assets" / "style.css").read_text(encoding="utf-8")
+    html_rule = re.search(r"^html\s*\{([^}]*)\}", css, re.M)
+    assert html_rule and "scroll-padding-top" in html_rule.group(1), \
+        "style.css's html rule has no scroll-padding-top — scrolled-to elements go under the sticky bar"
+    assert re.search(r"prefers-reduced-motion:\s*reduce\)\s*\{\s*html\s*\{\s*scroll-behavior:\s*auto", css), \
+        "smooth scrolling is not turned off for prefers-reduced-motion"

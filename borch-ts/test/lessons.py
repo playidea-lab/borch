@@ -340,9 +340,9 @@ def run_page(page, url, rel=None, with_py=False):
             continue
         for lang in langs:
             tab = block.query_selector(f'button.tab[data-lang="{lang}"]')
-            if tab is not None:
-                tab.click()
             label = i if len(langs) == 1 else f"{i}/{lang}"
+            if tab is not None and not click(tab, f"{lang} tab", label, said):
+                continue
             press(page, block, go, label, rel, said)
             pressed += 1
             # A block that ships broken on purpose is pressed twice: as shipped, and with
@@ -353,6 +353,24 @@ def run_page(page, url, rel=None, with_py=False):
         # **Running 0 of them and seeing green is the worst outcome available.**
         said.append("there was not one JS block to press — the selector may be stale")
     return not said, pressed, fixed, said
+
+
+# How long a click may look for its button before the block is reported instead. A button
+# that can be clicked is clicked in milliseconds; this only bounds one that cannot.
+CLICK_MS = 30_000
+
+
+def click(el, what, i, said):
+    """Clicks `el`, or reports block `i` and returns False when it cannot be clicked."""
+    try:
+        el.click(timeout=CLICK_MS)
+        return True
+    except Exception as err:  # the reason Playwright gives — covered, hidden, detached
+        reason = str(err).splitlines()
+        covered = next((line.strip() for line in reason if "intercepts pointer events" in line), "")
+        said.append(f"block {i} — its {what} could not be clicked in {CLICK_MS // 1000} s: "
+                    f"{(covered or (reason[0] if reason else ''))[:140]}")
+        return False
 
 
 # `const lr = 0;   // <-- fix me (try 0.2)` — the line a learner reads, in either
@@ -383,7 +401,8 @@ def press_the_fix(page, block, go, i, said):
         return 0
     area.fill(code[:found.start()] + found.group("head") + found.group("fix")
               + found.group("tail") + code[found.end():])
-    go.click()
+    if not click(go, "run button (with the hint)", i, said):
+        return 1
     page.wait_for_function("el => !el.disabled", arg=go, timeout=TIMEOUT_MS)
     out = block.query_selector("pre.out, .out")
     if out is not None and out.query_selector(".verdict.good") is not None:
@@ -395,8 +414,7 @@ def press_the_fix(page, block, go, i, said):
 
 
 def press(page, block, go, i, rel, said):
-    if True:
-        go.click()
+    if click(go, "run button", i, said):
         # **It is finished when the button becomes pressable again**
         # (`runnable.js`'s `runBtn.disabled`).
         #
@@ -435,7 +453,12 @@ def main(argv):
 
         with sync_playwright() as p, \
                 browser_of(p, headed="--headed" in argv) as browser:
-            page = browser.new_page()
+            # **No smooth scrolling, and a click that cannot land says so.** With the page's
+            # `scroll-behavior: smooth` a click scrolled its button into view, found it still
+            # moving or covered by the sticky bar, and tried again from the other side — up
+            # and down, with no timeout, until somebody moved the window (2026-09-27). The
+            # page is opened with the reader's "reduce motion", and every click is bounded.
+            page = browser.new_page(reduced_motion="reduce")
             page.set_default_timeout(0)
             page.on("pageerror",
                     lambda e: rows.append(("(page)", False, 0, 0, [f"page exception: {e}"])))

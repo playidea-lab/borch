@@ -57,7 +57,14 @@
 
 * { box-sizing: border-box; }
 
-html { scroll-behavior: smooth; }
+/* **What scrolls into view lands below the sticky bars, not under them.** The top bar
+   (58px) and a page's section list under it cover the top of the viewport; an anchor or
+   a scrolled-to button ended up beneath them — the reader saw a heading cut off, and the
+   browser checks' clicks found the run button covered and scrolled up and down for as
+   long as nobody moved the window (2026-09-27). */
+html { scroll-behavior: smooth; scroll-padding-top: 6rem; }
+/* A reader who asked the system for less motion gets the jump, not the glide. */
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 
 body {
   margin: 0;
