@@ -4,7 +4,9 @@ Description=borch nightly browser checks, 04:30
 
 [Timer]
 OnCalendar=*-*-* 04:30:00
-Persistent=true
+# Not Persistent: a night the machine was off or asleep at 04:30 is skipped, not run at
+# the next boot (nightly.py refuses a late start from the scheduler as well).
+Persistent=false
 
 [Install]
 WantedBy=timers.target

@@ -331,7 +331,37 @@ def browsers_ready(log):
     return code == 0
 
 
+# **A night the machine was not awake for is a night without checks.** launchd runs a
+# missed calendar job at the next wake, and that wake was often a dark wake — a few
+# seconds of network upkeep before the Mac slept again — so the checks started at 04:40
+# or 04:44, the machine went back to sleep under them, and the same commit read 57 of 66
+# one night and 66 of 66 the next (2026-09-28 … 10-03). Decided 2026-10-03: a run the
+# scheduler starts late is skipped, not run half-asleep. A run started by hand is not
+# held to the hour.
+SCHEDULED_AT = (4, 30)
+ON_TIME = datetime.timedelta(minutes=10)
+LAUNCHD_LABEL = "co.pilab.borch-nightly"
+
+
+def started_by_scheduler():
+    """launchd sets XPC_SERVICE_NAME to the job's label; systemd sets INVOCATION_ID."""
+    return os.environ.get("XPC_SERVICE_NAME") == LAUNCHD_LABEL or "INVOCATION_ID" in os.environ
+
+
+def started_late(now):
+    """Whether `now` is outside the minutes after tonight's 04:30."""
+    due = now.replace(hour=SCHEDULED_AT[0], minute=SCHEDULED_AT[1], second=0, microsecond=0)
+    return not (due <= now < due + ON_TIME)
+
+
 def main():
+    now = datetime.datetime.now()
+    if started_by_scheduler() and started_late(now):
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with (LOGS / "skipped.log").open("a", encoding="utf-8") as note:
+            note.write(f"{now:%Y-%m-%d %H:%M} — not awake at {SCHEDULED_AT[0]:02d}:{SCHEDULED_AT[1]:02d}; "
+                       "tonight's checks skipped\n")
+        return 0
     if "--list" in sys.argv:
         print(f"repo      {REPO}\nworktree  {WORKTREE}\nlogs      {LOGS}\nchecks    {len(CHECKS)}")
         for label, argv in CHECKS:
